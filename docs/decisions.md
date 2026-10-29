@@ -41,7 +41,7 @@ Settled answers. Agents: don't reopen these without new evidence.
     MQTT, web UI or notifications until the miner works properly. Add things afterwards.
 16. **One test account will have connected game accounts**, so the full link → claim → in-game
     path is testable. The others stay unlinked.
-17. **Points: v1 = drops first, points only on the channel being watched.** Favourites, streaks and
+17. **Superseded by 28.** ~~Points: v1 = drops first, points only on the channel being watched.~~ Favourites, streaks and
     the second-slot queue are deferred and need evidence first (05 §Rethink). When they come, they're
     configurable with default "drops > channel points, watch streaks".
 18. **Distribution:** eventually Docker, a single binary and npx. For now development only.
@@ -68,3 +68,14 @@ Settled answers. Agents: don't reopen these without new evidence.
     `.env.schema`, default `./data` (gitignored). It maps to a Docker volume later.
 27. **Configuration is one JSON file with a generated JSON Schema, written for AI agents**
     (teyd, 2026-10-29). Design in research 07.
+28. **Goals in priority order** (teyd, 2026-10-29; replaces 17). `config.json` holds an ordered
+    `priorities` list of `drops` and `points` goals. The miner works on the first goal with
+    something to do now: a drops goal while one of its games has an earnable drop on a live
+    channel, a points goal while one of its channels is live (so drops below a points goal wait
+    until those channels are offline). Drops goals take `games` (a list or `"all"`), exclusions,
+    reward types, `linkedOnly` and `order` (`ending-soonest` or `least-slack`). Points goals take
+    channels in priority order, first live one wins. `streams.max` is 1 by default, 2 opt-in until
+    experiments E2/E3 measure the cost to drops. Bonus chests, watch streaks and raid following
+    (leave after `stayMinutes`) are on by default and configurable; predictions are not supported.
+    Chests are claimed on any watched channel. Lists hold objects only, no string shorthand. No
+    follow-list option. The file reloads while the miner runs.

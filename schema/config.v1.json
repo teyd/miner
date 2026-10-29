@@ -1,0 +1,436 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/teyd/miner/dev/schema/config.v1.json",
+  "$ref": "#/definitions/MinerConfig",
+  "definitions": {
+    "Reward": {
+      "type": "string",
+      "enum": ["item", "badge", "emote"],
+      "description": "\"item\": an in-game reward, delivered to the game account linked on twitch.tv/drops/campaigns. \"badge\" and \"emote\": Twitch-side rewards that need no linked account."
+    },
+    "Game": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The game as Twitch shows it, or its URL slug (twitch.tv/directory/category/<slug>). Case-insensitive.",
+          "examples": ["Rust", "The Cycle: Frontier", "overwatch-2"]
+        },
+        "rewards": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Reward types for this game. Omitted: the goal's `rewards`.",
+          "examples": [
+            ["item", "badge", "emote"],
+            ["badge", "emote"]
+          ],
+          "items": [
+            {
+              "$ref": "#/definitions/Reward"
+            }
+          ],
+          "additionalItems": {
+            "$ref": "#/definitions/Reward"
+          }
+        }
+      },
+      "required": ["name"],
+      "additionalProperties": false,
+      "description": "A game to mine. Earlier entries go first."
+    },
+    "DropsGoal": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["drops"]
+        },
+        "note": {
+          "type": "string",
+          "description": "Free text about this goal, for the people and agents reading the file.",
+          "examples": ["My games first"]
+        },
+        "games": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": ["all"],
+              "description": "Every game with an active drop campaign."
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "description": "These games, highest priority first.",
+              "items": [
+                {
+                  "$ref": "#/definitions/Game"
+                }
+              ],
+              "additionalItems": {
+                "$ref": "#/definitions/Game"
+              }
+            }
+          ],
+          "description": "The games to mine: \"all\", or a list in priority order.",
+          "examples": [
+            "all",
+            [
+              {
+                "name": "Rust"
+              },
+              {
+                "name": "The Cycle: Frontier",
+                "rewards": ["item"]
+              }
+            ]
+          ]
+        },
+        "exclude": {
+          "type": "object",
+          "properties": {
+            "games": {
+              "type": "array",
+              "description": "Games never mined.",
+              "default": [],
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The game as Twitch shows it, or its URL slug (twitch.tv/directory/category/<slug>). Case-insensitive.",
+                "examples": ["Rust", "The Cycle: Frontier", "overwatch-2"]
+              }
+            },
+            "channels": {
+              "type": "array",
+              "description": "Channels never watched.",
+              "default": [],
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_]{1,25}$",
+                "description": "A channel's login, as in twitch.tv/<login>. Case-insensitive.",
+                "examples": ["oilrats", "riqqeloff"]
+              }
+            }
+          },
+          "additionalProperties": false,
+          "description": "What to leave out of this goal.",
+          "default": {
+            "games": [],
+            "channels": []
+          }
+        },
+        "rewards": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Reward types for games without their own `rewards`.",
+          "default": ["item", "badge", "emote"],
+          "examples": [
+            ["item", "badge", "emote"],
+            ["badge", "emote"]
+          ],
+          "items": [
+            {
+              "$ref": "#/definitions/Reward"
+            }
+          ],
+          "additionalItems": {
+            "$ref": "#/definitions/Reward"
+          }
+        },
+        "linkedOnly": {
+          "type": "boolean",
+          "description": "Mine in-game items only for games whose account is linked on twitch.tv/drops/campaigns. Set false to collect items now and link the game later. Badges and emotes ignore this.",
+          "default": true
+        },
+        "order": {
+          "type": "string",
+          "enum": ["ending-soonest", "least-slack"],
+          "description": "How to rank campaigns of the same game, or all of them with games \"all\": \"ending-soonest\" by end time, \"least-slack\" by the least time to spare (time left minus minutes still needed), so fewer drops expire unfinished.",
+          "default": "ending-soonest"
+        },
+        "points": {
+          "type": "object",
+          "properties": {
+            "claimBonus": {
+              "type": "boolean",
+              "description": "Claim the bonus chest that appears about every 15 minutes of watching. Unset: the top-level value."
+            },
+            "watchStreaks": {
+              "type": "boolean",
+              "description": "Keep watch streaks: join a points channel early in each broadcast. Unset: the top-level value."
+            },
+            "raids": {
+              "type": "object",
+              "properties": {
+                "follow": {
+                  "type": "boolean",
+                  "description": "Follow a raid from the watched channel to collect the raid bonus. Unset: the top-level value."
+                },
+                "stayMinutes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 60,
+                  "description": "Minutes to stay on the raided channel before returning to the priorities. Whether the bonus needs any stay is not yet verified. Unset: the top-level value."
+                }
+              },
+              "additionalProperties": false,
+              "description": "Raid behaviour for this goal."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Channel-points behaviour while this goal is active. Unset fields inherit the top-level `points`."
+        }
+      },
+      "required": ["type", "games"],
+      "additionalProperties": false,
+      "description": "Mine drop campaigns. Active while one of its games has a drop to earn on a live channel."
+    },
+    "PointsGoal": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["points"]
+        },
+        "note": {
+          "type": "string",
+          "description": "Free text about this goal, for the people and agents reading the file.",
+          "examples": ["My games first"]
+        },
+        "channels": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Channels to watch for points, highest priority first. The first live one wins.",
+          "items": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]{1,25}$",
+              "description": "A channel's login, as in twitch.tv/<login>. Case-insensitive.",
+              "examples": ["oilrats", "riqqeloff"]
+            }
+          ],
+          "additionalItems": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_]{1,25}$",
+            "description": "A channel's login, as in twitch.tv/<login>. Case-insensitive.",
+            "examples": ["oilrats", "riqqeloff"]
+          }
+        },
+        "exclude": {
+          "type": "object",
+          "properties": {
+            "games": {
+              "type": "array",
+              "description": "Games never mined.",
+              "default": [],
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The game as Twitch shows it, or its URL slug (twitch.tv/directory/category/<slug>). Case-insensitive.",
+                "examples": ["Rust", "The Cycle: Frontier", "overwatch-2"]
+              }
+            },
+            "channels": {
+              "type": "array",
+              "description": "Channels never watched.",
+              "default": [],
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_]{1,25}$",
+                "description": "A channel's login, as in twitch.tv/<login>. Case-insensitive.",
+                "examples": ["oilrats", "riqqeloff"]
+              }
+            }
+          },
+          "additionalProperties": false,
+          "description": "What to leave out of this goal.",
+          "default": {
+            "games": [],
+            "channels": []
+          }
+        },
+        "points": {
+          "type": "object",
+          "properties": {
+            "claimBonus": {
+              "type": "boolean",
+              "description": "Claim the bonus chest that appears about every 15 minutes of watching. Unset: the top-level value."
+            },
+            "watchStreaks": {
+              "type": "boolean",
+              "description": "Keep watch streaks: join a points channel early in each broadcast. Unset: the top-level value."
+            },
+            "raids": {
+              "type": "object",
+              "properties": {
+                "follow": {
+                  "type": "boolean",
+                  "description": "Follow a raid from the watched channel to collect the raid bonus. Unset: the top-level value."
+                },
+                "stayMinutes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 60,
+                  "description": "Minutes to stay on the raided channel before returning to the priorities. Whether the bonus needs any stay is not yet verified. Unset: the top-level value."
+                }
+              },
+              "additionalProperties": false,
+              "description": "Raid behaviour for this goal."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Channel-points behaviour while this goal is active. Unset fields inherit the top-level `points`."
+        }
+      },
+      "required": ["type", "channels"],
+      "additionalProperties": false,
+      "description": "Collect channel points. Active while one of its channels is live."
+    },
+    "Goal": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DropsGoal"
+        },
+        {
+          "$ref": "#/definitions/PointsGoal"
+        }
+      ]
+    },
+    "MinerConfig": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "description": "The JSON Schema for this file, for editor and agent autocomplete.",
+          "examples": ["https://raw.githubusercontent.com/teyd/miner/dev/schema/config.v1.json"]
+        },
+        "version": {
+          "type": "number",
+          "enum": [1],
+          "description": "The config format version. A future format bumps it, and the miner migrates old files.",
+          "default": 1
+        },
+        "priorities": {
+          "type": "array",
+          "description": "What to do, highest priority first. The miner works on the first goal that has something to do right now and re-checks whenever a stream goes live or offline, a drop completes, or this file changes. Default: drops for every linked game, plus badges and emotes.",
+          "default": [
+            {
+              "type": "drops",
+              "games": "all",
+              "exclude": {
+                "games": [],
+                "channels": []
+              },
+              "rewards": ["item", "badge", "emote"],
+              "linkedOnly": true,
+              "order": "ending-soonest"
+            }
+          ],
+          "items": {
+            "$ref": "#/definitions/Goal"
+          }
+        },
+        "exclude": {
+          "type": "object",
+          "properties": {
+            "games": {
+              "type": "array",
+              "description": "Games never mined.",
+              "default": [],
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The game as Twitch shows it, or its URL slug (twitch.tv/directory/category/<slug>). Case-insensitive.",
+                "examples": ["Rust", "The Cycle: Frontier", "overwatch-2"]
+              }
+            },
+            "channels": {
+              "type": "array",
+              "description": "Channels never watched.",
+              "default": [],
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_]{1,25}$",
+                "description": "A channel's login, as in twitch.tv/<login>. Case-insensitive.",
+                "examples": ["oilrats", "riqqeloff"]
+              }
+            }
+          },
+          "additionalProperties": false,
+          "description": "Never mined or watched, in every goal.",
+          "default": {
+            "games": [],
+            "channels": []
+          }
+        },
+        "points": {
+          "type": "object",
+          "properties": {
+            "claimBonus": {
+              "type": "boolean",
+              "description": "Claim the bonus chest that appears about every 15 minutes of watching.",
+              "default": true
+            },
+            "watchStreaks": {
+              "type": "boolean",
+              "description": "Keep watch streaks: join a points channel early in each broadcast.",
+              "default": true
+            },
+            "raids": {
+              "type": "object",
+              "properties": {
+                "follow": {
+                  "type": "boolean",
+                  "description": "Follow a raid from the watched channel to collect the raid bonus.",
+                  "default": true
+                },
+                "stayMinutes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 60,
+                  "description": "Minutes to stay on the raided channel before returning to the priorities. Whether the bonus needs any stay is not yet verified.",
+                  "default": 1
+                }
+              },
+              "additionalProperties": false,
+              "description": "What to do when the watched channel raids another channel.",
+              "default": {
+                "follow": true,
+                "stayMinutes": 1
+              }
+            }
+          },
+          "additionalProperties": false,
+          "description": "Channel-points behaviour on whatever channel is watched. A goal can override it.",
+          "default": {
+            "claimBonus": true,
+            "watchStreaks": true,
+            "raids": {
+              "follow": true,
+              "stayMinutes": 1
+            }
+          }
+        },
+        "streams": {
+          "type": "object",
+          "properties": {
+            "max": {
+              "type": "number",
+              "enum": [1, 2],
+              "description": "Streams watched at once. With 2, the next active goal runs beside the first. Twitch credits drops on one stream and points on two; a second stream may slow drop progress (not yet measured), so 1 is the safe default.",
+              "default": 1
+            }
+          },
+          "additionalProperties": false,
+          "description": "Concurrent watching.",
+          "default": {
+            "max": 1
+          }
+        }
+      },
+      "additionalProperties": false,
+      "title": "miner config",
+      "description": "Configuration for miner, a headless Twitch drops and channel-points miner. Every field is optional. Check a change with `miner config validate`."
+    }
+  }
+}

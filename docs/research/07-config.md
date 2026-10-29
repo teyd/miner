@@ -56,72 +56,99 @@ What is worth taking (inference):
 What not to take: watch interval and stream quality (internal, changing them only breaks crediting),
 proxy (out of scope), TCPM's betting (decision 17 defers points beyond the watched channel).
 
-## 2. Design (inference)
+## 2. Design (decided 2026-10-29, decision 28)
 
-### The file
+The file is `$DATA_DIR/config.json`, strict JSON. The source of truth is `src/config/schema.ts`.
+`schema/config.v1.json` is generated from it (`pnpm schema`), and a test fails when the two
+differ. `schema/config.example.json` is the example below, and a test keeps it valid.
 
-`$DATA_DIR/config.json`, strict JSON, every field optional. A missing file means all defaults.
+### The priority list
+
+People run the miner 24/7 for drops, for channel points, or for both in an order they choose. The
+core of the file is `priorities`: an ordered list of goals. The miner works on the **first goal that
+has something to do right now** and re-checks whenever a stream goes live or offline, a drop
+completes, or the file changes.
+
+- A `drops` goal has something to do while one of its games has an earnable drop on a live channel.
+- A `points` goal has something to do while one of its channels is live. Points never run out, so
+  a drops goal below it waits until those channels are offline.
+- To farm points first and drops after, swap the entries.
 
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/teyd/miner/dev/schema/config.v1.json",
   "version": 1,
-  "games": [{ "name": "Rust" }, { "name": "Overwatch 2", "rewards": ["badge", "emote"] }],
-  "otherGames": "linked",
-  "rewards": ["item", "badge", "emote"],
-  "order": "ending-soonest",
-  "excludeChannels": ["somechannel"],
-  "channelPoints": { "claimBonus": true }
+  "priorities": [
+    {
+      "type": "drops",
+      "note": "My games first",
+      "games": [{ "name": "Rust" }, { "name": "The Cycle: Frontier", "rewards": ["item", "badge"] }]
+    },
+    { "type": "points", "note": "Favourite streamers", "channels": ["oilrats", "riqqeloff"] },
+    {
+      "type": "drops",
+      "note": "Everything else that pays out",
+      "games": "all",
+      "exclude": { "games": ["League of Legends"] },
+      "rewards": ["item", "badge", "emote"],
+      "linkedOnly": true,
+      "order": "least-slack"
+    }
+  ],
+  "exclude": { "channels": ["channelidontwanttosupport"] },
+  "points": {
+    "claimBonus": true,
+    "watchStreaks": true,
+    "raids": { "follow": true, "stayMinutes": 1 }
+  },
+  "streams": { "max": 1 }
 }
 ```
 
-| Field                      | Default            | Meaning                                                                                                                  |
-| -------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `version`                  | `1`                | Format version. A future change bumps it, and `miner config migrate` rewrites old files                                  |
-| `games`                    | `[]`               | Games to mine first, highest priority first. A name matches Twitch's display name or URL slug, case-insensitively        |
-| `games[].rewards`          | `rewards`          | Reward types to mine for this game                                                                                       |
-| `otherGames`               | `"linked"`         | After the list: `"none"` (only the list), `"linked"` (games linked to your account, plus badge/emote campaigns), `"all"` |
-| `rewards`                  | all three          | `item` (needs a linked game account), `badge`, `emote`                                                                   |
-| `order`                    | `"ending-soonest"` | How to rank campaigns of equal priority: `ending-soonest`, `least-slack` (least time to spare first)                     |
-| `excludeChannels`          | `[]`               | Channel logins never watched                                                                                             |
-| `channelPoints.claimBonus` | `true`             | Claim the bonus chest on the channel being watched                                                                       |
+### Fields
 
-Deliberately absent: anything about timing, quality or rate limits. Those are Twitch facts, not
-preferences (research 02).
+| Field                                      | Default                   | Meaning                                                                                             |
+| ------------------------------------------ | ------------------------- | --------------------------------------------------------------------------------------------------- |
+| `version`                                  | `1`                       | Format version; a future format bumps it and the miner migrates old files                           |
+| `priorities`                               | one drops goal on `"all"` | Goals, highest priority first                                                                       |
+| drops `games`                              | required                  | `"all"`, or `[{ "name", "rewards"? }]` in priority order. Names match Twitch's display name or slug |
+| drops `exclude.games` / `exclude.channels` | `[]`                      | Left out of this goal                                                                               |
+| drops `rewards`                            | all three                 | `item` (in-game, needs a linked account), `badge`, `emote`                                          |
+| drops `linkedOnly`                         | `true`                    | Items only for linked games. `false` collects items to claim after linking                          |
+| drops `order`                              | `ending-soonest`          | `least-slack`: least time to spare first (TDM's "lowest availability")                              |
+| points `channels`                          | required                  | Logins in priority order; the first live one wins                                                   |
+| goal `points`                              | top-level `points`        | Per-goal override of the points behaviour                                                           |
+| `exclude`                                  | `[]`                      | Never mined or watched, in any goal                                                                 |
+| `points.claimBonus`                        | `true`                    | Claim the chest every ~15 minutes, on whatever channel is watched                                   |
+| `points.watchStreaks`                      | `true`                    | Join points channels early in each broadcast                                                        |
+| `points.raids`                             | follow, stay 1 min        | Follow raids for the raid bonus, then return. Whether a stay is needed is unverified                |
+| `streams.max`                              | `1`                       | `2` lets the next active goal run beside the first; the cost to drops is unmeasured                 |
 
-### The schema, written for agents
+### Choices and why
 
-- Generated by `miner config schema` from the decoding `Schema`, so the two never drift. Committed
-  to `schema/config.v1.json` and checked in CI against the generated output.
-- Every field has a `description` that says what it does, what the default does, and when to change
-  it. `examples` on every non-trivial field. `markdownDescription` for VS Code hovers.
-- `additionalProperties: false` everywhere. Enums are closed lists.
-- The `$schema` URL contains the format version (`config.v1.json`). A file and a binary disagreeing
-  on the version is reported by `validate`.
+- **A `type` field on every goal**: a discriminated union, so the schema shows exactly which keys
+  each kind takes and an agent can't mix them.
+- **Objects only in lists** (teyd): agents write the file, so a uniform shape beats shorthand.
+  `"games": "all"` is the one either/or, because it means something different from a list.
+- **Unknown keys are errors**, reported with the key's name. **No comments**: a `note` field
+  replaces them and shows up in status output.
+- **Names, never IDs.** `miner config explain` (next) resolves them against Twitch.
+- **No timing, quality or rate settings**: those are Twitch facts, not preferences (research 02).
+- **No follow-list option** (teyd): not worth an extra read.
+- **Draft-07**: VS Code fully supports it; 2020-12 only partly. Fields that reuse a shared object
+  are inlined so each keeps its own description (draft-07 ignores siblings of `$ref`).
 
-### The commands an agent uses
+### Commands
 
-| Command                          | Does                                                                                                                                                                           | Output                                       |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
-| `miner config schema`            | Prints the JSON Schema                                                                                                                                                         | the schema                                   |
-| `miner config validate [--json]` | Decodes the file offline. Exit 2 lists every problem with its JSON pointer, the expected value, and a fix                                                                      | `{ ok, problems: [{ path, message, fix }] }` |
-| `miner config explain [--json]`  | The effective config with defaults filled in, and, with a token, each game name resolved against the live catalog: matched, unknown (with closest matches), or not running now | a resolved view                              |
-| `miner config init`              | Writes a default file with `$schema` and `version`. Refuses to overwrite                                                                                                       | the path                                     |
+| Command                          | Does                                                                                           |
+| -------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `miner config schema`            | Prints the JSON Schema                                                                         |
+| `miner config validate [--json]` | Offline check. Exit 2 lists every problem as a JSON pointer and a message                      |
+| `miner config init`              | Writes a starter file to `$DATA_DIR`, never overwrites                                         |
+| `miner config explain` (next)    | Effective config, game and channel names resolved against Twitch, which goal is active and why |
 
-`explain` is the deep part (inference). Agents can't see Twitch. `explain` lets them check their
-edit against reality ("Overwatch 2" → matched, 3 active campaigns; "Apex" → unknown, did you mean
-"Apex Legends"?) before restarting anything.
+## 3. Answered (teyd, 2026-10-29)
 
-### Where it plugs in
-
-`config.json` decodes into a `Config` value. At startup the runtime resolves game names against the
-catalog into the core's `Settings` (`games: GameId[]` and friends). The core grows the per-game
-reward filter, the `otherGames` policy and the `order` strategy. Unknown names become `problems` in
-`status --json`.
-
-## 3. Open questions for teyd
-
-1. **The `$schema` URL.** A raw GitHub URL on `dev` works now. A stable host later (GitHub Pages)?
-2. **`order: least-slack` in v1, or only `ending-soonest`?** It's TDM's "lowest availability first".
-3. **Hot reload?** just-mining and TDM read the file at startup only. Reloading on change is easy
-   with the core's design (a `SettingsChanged` event), and agents like immediate feedback.
+1. `$schema` points at the raw GitHub file on `dev`; a stable host later.
+2. `least-slack` ships in v1.
+3. The file reloads while the miner runs.

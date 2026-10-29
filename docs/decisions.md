@@ -61,3 +61,6 @@ Settled answers. Agents: don't reopen these without new evidence.
     `pnpm dev` runs the CLI through `varlock run`, and the bundle reads plain environment variables
     through Effect `Config`, so Docker users can pass the variable directly. Varlock's bundled agent
     skill is declined (decision 13).
+25. **Live tests run on teyd's normal account** (teyd, 2026-10-29), the token in `.env.local`.
+    Narrows decision 6: the test accounts stay available, but are no longer required. One live
+    miner at a time, browser-like request rates.

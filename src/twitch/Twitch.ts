@@ -87,8 +87,8 @@ export class Credentials extends Context.Service<
   static readonly layer = Layer.effect(
     Credentials,
     Effect.gen(function* () {
-      const token = yield* Config.Redacted("MINER_TWITCH_TOKEN").pipe(
-        Effect.mapError(() => new AuthRejected({ reason: "MINER_TWITCH_TOKEN is not set" })),
+      const token = yield* Config.Redacted("TOKEN").pipe(
+        Effect.mapError(() => new AuthRejected({ reason: "TOKEN is not set" })),
       );
       const deviceId = yield* deviceIdOf;
       return Credentials.of({ token, deviceId });

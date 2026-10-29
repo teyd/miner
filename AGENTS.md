@@ -28,7 +28,7 @@ pnpm 12, Vite+ (`vp`). Status: the pure core and the read-only Twitch client are
 - `pnpm exec vp check --fix` formats and applies lint fixes. `pnpm exec vp test <file>` runs one test file.
 - `pnpm build` bundles everything into `dist/bin.mjs` (`vp pack`). One file, no `node_modules` at runtime,
   because that halves idle RSS (research 03). `pnpm start --help` runs it.
-- `MINER_TWITCH_TOKEN=… pnpm start doctor [--json] [--record file.jsonl]` checks a token and reads the catalog
+- `TOKEN=… pnpm start doctor [--json] [--record file.jsonl]` checks a token and reads the catalog
   and inventory, writing nothing to Twitch. Exit 1 lists the problems. Test-account tokens only.
 - Use `pnpm exec`, not `npx`: `devEngines` refuses npm.
 

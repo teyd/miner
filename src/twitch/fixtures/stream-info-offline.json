@@ -1,0 +1,35 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "user": {
+          "id": "1243686068",
+          "profileURL": "https://www.twitch.tv/farchasir",
+          "displayName": "FarchaSir",
+          "login": "farchasir",
+          "profileImageURL": "https://static-cdn.jtvnw.net/jtv_user_pictures/6ec2e4da-3997-4558-8fb8-f2b05b6e39fc-profile_image-150x150.png",
+          "broadcastSettings": {
+            "id": "1243686068",
+            "title": "2x DROPS I OpenWorld - Avalon AXE FARM I TUR/ENG STREAM!",
+            "game": {
+              "id": "417528",
+              "displayName": "Albion Online",
+              "name": "Albion Online",
+              "slug": "albion-online",
+              "__typename": "Game"
+            },
+            "__typename": "BroadcastSettings"
+          },
+          "stream": null,
+          "__typename": "User"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 48,
+        "requestID": "redacted-request-id",
+        "operationName": "VideoPlayerStreamInfoOverlayChannel"
+      }
+    }
+  ]
+}

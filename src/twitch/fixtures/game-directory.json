@@ -1,0 +1,305 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "game": {
+          "id": "55453844",
+          "name": "Street Fighter 6",
+          "displayName": "Street Fighter 6",
+          "streams": {
+            "banners": null,
+            "edges": [
+              {
+                "cursor": "eyJzIjo0NjMuOTE4Mzc2NzUwNzU5NCwiZCI6ZmFsc2UsInQiOnRydWV9",
+                "node": {
+                  "id": "318153769828",
+                  "title": "Road to Derank | !holy",
+                  "viewersCount": 463,
+                  "previewImageURL": "https://static-cdn.jtvnw.net/previews-ttv/live_user_forsen-440x248.jpg",
+                  "broadcaster": {
+                    "id": "38822100",
+                    "login": "forsen",
+                    "displayName": "forsen",
+                    "roles": {
+                      "isPartner": true,
+                      "__typename": "UserRoles"
+                    },
+                    "profileImageURL": "https://static-cdn.jtvnw.net/jtv_user_pictures/e990b10a-2c51-4335-ae90-4bd1708a30f8-profile_image-50x50.png",
+                    "primaryColorHex": "52056F",
+                    "__typename": "User"
+                  },
+                  "freeformTags": [
+                    {
+                      "id": "fft:CHANNEL:38822100:0",
+                      "name": "Français",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:38822100:1",
+                      "name": "Vieux",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:38822100:2",
+                      "name": "streamoween",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:38822100:3",
+                      "name": "DropsActivés",
+                      "__typename": "FreeformTag"
+                    }
+                  ],
+                  "type": "live",
+                  "game": {
+                    "id": "55453844",
+                    "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/55453844_IGDB-40x56.jpg",
+                    "name": "Street Fighter 6",
+                    "displayName": "Street Fighter 6",
+                    "slug": "street-fighter-6",
+                    "__typename": "Game"
+                  },
+                  "previewThumbnailProperties": {
+                    "blurReason": "BLUR_NOT_REQUIRED",
+                    "__typename": "PreviewThumbnailProperties"
+                  },
+                  "__typename": "Stream"
+                },
+                "trackingID": null,
+                "__typename": "StreamEdge"
+              },
+              {
+                "cursor": "eyJzIjozMDEuODg5MTU4ODkzNTgzNiwiZCI6ZmFsc2UsInQiOnRydWV9",
+                "node": {
+                  "id": "321036899424",
+                  "title": "mister game to good",
+                  "viewersCount": 301,
+                  "previewImageURL": "https://static-cdn.jtvnw.net/previews-ttv/live_user_hcjustin-440x248.jpg",
+                  "broadcaster": {
+                    "id": "22186976",
+                    "login": "hcjustin",
+                    "displayName": "HCJustin",
+                    "roles": {
+                      "isPartner": true,
+                      "__typename": "UserRoles"
+                    },
+                    "profileImageURL": "https://static-cdn.jtvnw.net/jtv_user_pictures/14cee78f-8e02-4296-ba65-b096ad73c229-profile_image-50x50.png",
+                    "primaryColorHex": "FA1ED2",
+                    "__typename": "User"
+                  },
+                  "freeformTags": [
+                    {
+                      "id": "fft:CHANNEL:22186976:0",
+                      "name": "English",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:22186976:1",
+                      "name": "DropsEnabled",
+                      "__typename": "FreeformTag"
+                    }
+                  ],
+                  "type": "live",
+                  "game": {
+                    "id": "55453844",
+                    "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/55453844_IGDB-40x56.jpg",
+                    "name": "Street Fighter 6",
+                    "displayName": "Street Fighter 6",
+                    "slug": "street-fighter-6",
+                    "__typename": "Game"
+                  },
+                  "previewThumbnailProperties": {
+                    "blurReason": "BLUR_NOT_REQUIRED",
+                    "__typename": "PreviewThumbnailProperties"
+                  },
+                  "__typename": "Stream"
+                },
+                "trackingID": null,
+                "__typename": "StreamEdge"
+              },
+              {
+                "cursor": "eyJzIjoxNzMuNjIzMzcyNTkzMzQxMjYsImQiOmZhbHNlLCJ0Ijp0cnVlfQ==",
+                "node": {
+                  "id": "316636847601",
+                  "title": "【ｼﾞｪｲﾐｰ🍶】短期集中いのちだいじﾗﾝｸﾏ  ～こころを強く持ち太郎～  MR1628~ 【初見さん・コメント大歓迎!】",
+                  "viewersCount": 173,
+                  "previewImageURL": "https://static-cdn.jtvnw.net/previews-ttv/live_user_onti_bab-440x248.jpg",
+                  "broadcaster": {
+                    "id": "762687154",
+                    "login": "onti_bab",
+                    "displayName": "たたかえｯばぶ太郎",
+                    "roles": {
+                      "isPartner": true,
+                      "__typename": "UserRoles"
+                    },
+                    "profileImageURL": "https://static-cdn.jtvnw.net/jtv_user_pictures/4f12e441-617f-48b1-8d6a-7ed400ba04fe-profile_image-50x50.png",
+                    "primaryColorHex": "74D2D2",
+                    "__typename": "User"
+                  },
+                  "freeformTags": [
+                    {
+                      "id": "fft:CHANNEL:762687154:0",
+                      "name": "日本語",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:762687154:1",
+                      "name": "とてもよわい",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:762687154:2",
+                      "name": "スト6",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:762687154:3",
+                      "name": "ジェイミー",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:762687154:4",
+                      "name": "赤子",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:762687154:5",
+                      "name": "TrickOrTreat",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:762687154:6",
+                      "name": "Drops有効",
+                      "__typename": "FreeformTag"
+                    }
+                  ],
+                  "type": "live",
+                  "game": {
+                    "id": "55453844",
+                    "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/55453844_IGDB-40x56.jpg",
+                    "name": "Street Fighter 6",
+                    "displayName": "Street Fighter 6",
+                    "slug": "street-fighter-6",
+                    "__typename": "Game"
+                  },
+                  "previewThumbnailProperties": {
+                    "blurReason": "BLUR_NOT_REQUIRED",
+                    "__typename": "PreviewThumbnailProperties"
+                  },
+                  "__typename": "Stream"
+                },
+                "trackingID": null,
+                "__typename": "StreamEdge"
+              },
+              {
+                "cursor": "eyJzIjoxNjAuMzcxNDU0MTkzMzQzMjgsImQiOmZhbHNlLCJ0Ijp0cnVlfQ==",
+                "node": {
+                  "id": "320948576604",
+                  "title": "1v1 Me/iYap !Youtube !Discord",
+                  "viewersCount": 160,
+                  "previewImageURL": "https://static-cdn.jtvnw.net/previews-ttv/live_user_idom_ny-440x248.jpg",
+                  "broadcaster": {
+                    "id": "133722528",
+                    "login": "idom_ny",
+                    "displayName": "idom_ny",
+                    "roles": {
+                      "isPartner": true,
+                      "__typename": "UserRoles"
+                    },
+                    "profileImageURL": "https://static-cdn.jtvnw.net/jtv_user_pictures/d59c775d-8bec-48e3-8a52-dc0bdbe502a9-profile_image-50x50.png",
+                    "primaryColorHex": null,
+                    "__typename": "User"
+                  },
+                  "freeformTags": [
+                    {
+                      "id": "fft:CHANNEL:133722528:0",
+                      "name": "English",
+                      "__typename": "FreeformTag"
+                    },
+                    {
+                      "id": "fft:CHANNEL:133722528:1",
+                      "name": "DropsEnabled",
+                      "__typename": "FreeformTag"
+                    }
+                  ],
+                  "type": "live",
+                  "game": {
+                    "id": "55453844",
+                    "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/55453844_IGDB-40x56.jpg",
+                    "name": "Street Fighter 6",
+                    "displayName": "Street Fighter 6",
+                    "slug": "street-fighter-6",
+                    "__typename": "Game"
+                  },
+                  "previewThumbnailProperties": {
+                    "blurReason": "BLUR_NOT_REQUIRED",
+                    "__typename": "PreviewThumbnailProperties"
+                  },
+                  "__typename": "Stream"
+                },
+                "trackingID": null,
+                "__typename": "StreamEdge"
+              },
+              {
+                "cursor": "eyJzIjoxNTAuNDUzODkyNjI1NTA4MzMsImQiOmZhbHNlLCJ0Ijp0cnVlfQ==",
+                "node": {
+                  "id": "320947275100",
+                  "title": "More leverless practice + ??? !coaching",
+                  "viewersCount": 150,
+                  "previewImageURL": "https://static-cdn.jtvnw.net/previews-ttv/live_user_whatiskami-440x248.jpg",
+                  "broadcaster": {
+                    "id": "134759417",
+                    "login": "whatiskami",
+                    "displayName": "whatiskami",
+                    "roles": {
+                      "isPartner": true,
+                      "__typename": "UserRoles"
+                    },
+                    "profileImageURL": "https://static-cdn.jtvnw.net/jtv_user_pictures/0181de78-a3cf-44bd-bb93-8304a158e3d5-profile_image-50x50.png",
+                    "primaryColorHex": "00FA04",
+                    "__typename": "User"
+                  },
+                  "freeformTags": [
+                    {
+                      "id": "fft:CHANNEL:134759417:0",
+                      "name": "English",
+                      "__typename": "FreeformTag"
+                    }
+                  ],
+                  "type": "live",
+                  "game": {
+                    "id": "55453844",
+                    "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/55453844_IGDB-40x56.jpg",
+                    "name": "Street Fighter 6",
+                    "displayName": "Street Fighter 6",
+                    "slug": "street-fighter-6",
+                    "__typename": "Game"
+                  },
+                  "previewThumbnailProperties": {
+                    "blurReason": "BLUR_NOT_REQUIRED",
+                    "__typename": "PreviewThumbnailProperties"
+                  },
+                  "__typename": "Stream"
+                },
+                "trackingID": null,
+                "__typename": "StreamEdge"
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": true,
+              "__typename": "PageInfo"
+            },
+            "__typename": "StreamConnection"
+          },
+          "__typename": "Game"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 92,
+        "requestID": "redacted-request-id",
+        "operationName": "DirectoryPage_Game"
+      }
+    }
+  ]
+}

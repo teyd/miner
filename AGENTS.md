@@ -1,17 +1,21 @@
 # miner
 
 A headless Twitch drops miner for homelabs, built for other people too. TypeScript 7 on Node 26, Effect 4.1,
-pnpm 12, Vite+ (`vp`). Status: the pure core is built; nothing talks to Twitch yet.
+pnpm 12, Vite+ (`vp`). Status: the pure core and the read-only Twitch client are built; nothing watches or claims yet.
 
 - `src/bin.ts`: the entry point. It wires Node services into the CLI.
-- `src/cli/`: Effect CLI commands. `miner.ts` is the root command.
+- `src/cli/`: Effect CLI commands. `miner.ts` is the root command, `doctor.ts` the read-only probe.
 - `src/platform/` (not yet created): the IO shell, the only place besides `src/bin.ts` that may touch time,
   randomness, timers, network, env, console or Node built-ins.
 - `src/core/`: the pure decision logic. `step(state, event, now)` in `step.ts` returns the next state and the
   commands to run (`protocol.ts`). `rules.ts` holds Twitch's earn and claim rules with their sources, `plan.ts`
   picks a drop and a channel. Contract for the runtime: persist the returned state before executing its
   commands, and wake the core at `nextDeadline(state)`. `fixtures.ts` builds test data.
-- Planned (proposal v0): `twitch` (the one Twitch seam), `store`, `twin` (simulator).
+- `src/twitch/`: the one Twitch seam. `Twitch.ts` is the service (validate, catalog, inventory, directory,
+  streams, current drop), `wire.ts` decodes answers into core types, `identity.ts` holds every Twitch constant
+  with its source and date, `journal.ts` records answers (redacted) for replay. `fixtures/` are real answers
+  recorded on 2026-10-28 with identities replaced; `stub.ts` serves them to tests.
+- Planned (proposal v0): the runtime that executes core commands, `store`, `twin` (simulator).
 - `docs/decisions.md`: settled answers. Read it before proposing anything. Don't reopen a decision without new evidence.
 - `docs/research/`: dated research with sources. `docs/history/`: proposals and their critiques.
 
@@ -24,6 +28,8 @@ pnpm 12, Vite+ (`vp`). Status: the pure core is built; nothing talks to Twitch y
 - `pnpm exec vp check --fix` formats and applies lint fixes. `pnpm exec vp test <file>` runs one test file.
 - `pnpm build` bundles everything into `dist/bin.mjs` (`vp pack`). One file, no `node_modules` at runtime,
   because that halves idle RSS (research 03). `pnpm start --help` runs it.
+- `TOKEN=… pnpm start doctor [--json] [--record file.jsonl]` checks a token and reads the catalog
+  and inventory, writing nothing to Twitch. Exit 1 lists the problems. Test-account tokens only.
 - Use `pnpm exec`, not `npx`: `devEngines` refuses npm.
 
 ## Read before you change

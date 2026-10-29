@@ -8,6 +8,12 @@ import { miner } from "./cli/miner.ts";
 
 miner.pipe(
   Command.run({ version: pkg.version }),
+  // The command already printed its problems; only the exit code is left to set.
+  Effect.catchTag("DoctorFailed", () =>
+    Effect.sync(() => {
+      process.exitCode = 1;
+    }),
+  ),
   Effect.provide(NodeServices.layer),
   NodeRuntime.runMain,
 );

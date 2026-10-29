@@ -24,6 +24,8 @@ export interface Benefit {
 export interface Game {
   readonly id: GameId;
   readonly name: string;
+  /** The directory URL name, e.g. `dead-by-daylight`; the directory query needs it. */
+  readonly slug: string;
 }
 
 export interface Drop {

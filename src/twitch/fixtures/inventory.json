@@ -1,0 +1,512 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "currentUser": {
+          "id": "123456789",
+          "inventory": {
+            "dropCampaignsInProgress": [
+              {
+                "id": "1b22fe56-30f3-4326-869f-c6e8e59e7815",
+                "detailsURL": "https://account.bhvr.com/twitch/dbd",
+                "accountLinkURL": "https://account.bhvr.com/twitch/dbd",
+                "startAt": "2026-10-19T04:00:00Z",
+                "endAt": "2026-10-26T03:59:59.999Z",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/CAMPAIGN/2454dab9-bb69-4e42-bb81-426e07f6a0b2.png",
+                "name": "DbD October of Horror III",
+                "status": "EXPIRED",
+                "self": {
+                  "isAccountConnected": true,
+                  "__typename": "DropCampaignSelfEdge"
+                },
+                "game": {
+                  "id": "491487",
+                  "slug": "dead-by-daylight",
+                  "name": "Dead by Daylight",
+                  "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/491487-285x380.jpg",
+                  "__typename": "Game"
+                },
+                "allow": {
+                  "channels": null,
+                  "__typename": "DropCampaignACL"
+                },
+                "eventBasedDrops": [],
+                "timeBasedDrops": [
+                  {
+                    "id": "eb9e245e-c348-11f1-9348-0a58a9feac02",
+                    "name": "Fanged Flier Badge",
+                    "startAt": "2026-10-19T04:00:00Z",
+                    "endAt": "2026-10-26T03:59:59.999Z",
+                    "preconditionDrops": null,
+                    "requiredMinutesWatched": 60,
+                    "requiredSubs": 0,
+                    "benefitEdges": [
+                      {
+                        "benefit": {
+                          "id": "6da09649-1fda-4446-a061-cacd8e21b886_CUSTOM_ID_UDO_BDG_11",
+                          "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/1be5086a-618d-478d-89f4-b134102ec12a.png",
+                          "name": "Fanged Flier Badge",
+                          "distributionType": "DIRECT_ENTITLEMENT",
+                          "__typename": "DropBenefit"
+                        },
+                        "entitlementLimit": 1,
+                        "claimCount": 0,
+                        "__typename": "DropBenefitEdge"
+                      }
+                    ],
+                    "self": {
+                      "hasPreconditionsMet": true,
+                      "currentMinutesWatched": 4,
+                      "currentSubs": 0,
+                      "isClaimed": false,
+                      "dropInstanceID": null,
+                      "__typename": "TimeBasedDropSelfEdge"
+                    },
+                    "campaign": {
+                      "id": "1b22fe56-30f3-4326-869f-c6e8e59e7815",
+                      "detailsURL": "https://account.bhvr.com/twitch/dbd",
+                      "accountLinkURL": "https://account.bhvr.com/twitch/dbd",
+                      "self": {
+                        "isAccountConnected": true,
+                        "__typename": "DropCampaignSelfEdge"
+                      },
+                      "__typename": "DropCampaign"
+                    },
+                    "__typename": "TimeBasedDrop"
+                  }
+                ],
+                "__typename": "DropCampaign"
+              },
+              {
+                "id": "4c37cc62-b880-40c6-99ae-fc8219dac1aa",
+                "detailsURL": "https://www.twitch.tv/drops/campaigns",
+                "accountLinkURL": "https://www.twitch.tv",
+                "startAt": "2026-10-15T08:00:00Z",
+                "endAt": "2026-10-29T22:58:59.999Z",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/CAMPAIGN/9d9b278e-9772-46d7-a567-a7e80913f4ad.png",
+                "name": "Enshrouded v1.0 Launch",
+                "status": "ACTIVE",
+                "self": {
+                  "isAccountConnected": false,
+                  "__typename": "DropCampaignSelfEdge"
+                },
+                "game": {
+                  "id": "737987407",
+                  "slug": "enshrouded",
+                  "name": "Enshrouded",
+                  "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/737987407_IGDB-285x380.jpg",
+                  "__typename": "Game"
+                },
+                "allow": {
+                  "channels": null,
+                  "__typename": "DropCampaignACL"
+                },
+                "eventBasedDrops": [],
+                "timeBasedDrops": [
+                  {
+                    "id": "e9ff8256-c7e9-11f1-bb68-0a58a9feac02",
+                    "name": "Flameborn Sigil",
+                    "startAt": "2026-10-15T08:00:00Z",
+                    "endAt": "2026-10-29T22:58:59.999Z",
+                    "preconditionDrops": null,
+                    "requiredMinutesWatched": 15,
+                    "requiredSubs": 0,
+                    "benefitEdges": [
+                      {
+                        "benefit": {
+                          "id": "e2a7e686-c7ea-11f1-9e24-0a58a9feac02",
+                          "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/9f2968a1-ea62-47a8-9f0d-ebb4e682568e.png",
+                          "name": "Flameborn Sigil",
+                          "distributionType": "BADGE",
+                          "__typename": "DropBenefit"
+                        },
+                        "entitlementLimit": 1,
+                        "claimCount": 0,
+                        "__typename": "DropBenefitEdge"
+                      }
+                    ],
+                    "self": {
+                      "hasPreconditionsMet": true,
+                      "currentMinutesWatched": 1,
+                      "currentSubs": 0,
+                      "isClaimed": false,
+                      "dropInstanceID": null,
+                      "__typename": "TimeBasedDropSelfEdge"
+                    },
+                    "campaign": {
+                      "id": "4c37cc62-b880-40c6-99ae-fc8219dac1aa",
+                      "detailsURL": "https://www.twitch.tv/drops/campaigns",
+                      "accountLinkURL": "https://www.twitch.tv",
+                      "self": {
+                        "isAccountConnected": false,
+                        "__typename": "DropCampaignSelfEdge"
+                      },
+                      "__typename": "DropCampaign"
+                    },
+                    "__typename": "TimeBasedDrop"
+                  }
+                ],
+                "__typename": "DropCampaign"
+              },
+              {
+                "id": "5365884f-b4d3-4184-a270-b8fd8bed5dae",
+                "detailsURL": "https://www.oncehuman.game/twitch/",
+                "accountLinkURL": "https://www.oncehuman.game/twitch/",
+                "startAt": "2026-10-22T12:00:00Z",
+                "endAt": "2026-11-01T11:59:59.999Z",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/CAMPAIGN/89c22295-9ed7-45a9-94bf-f99e93c205df.png",
+                "name": "Fish Wishmonmon Together!",
+                "status": "ACTIVE",
+                "self": {
+                  "isAccountConnected": false,
+                  "__typename": "DropCampaignSelfEdge"
+                },
+                "game": {
+                  "id": "1441208453",
+                  "slug": "once-human",
+                  "name": "Once Human",
+                  "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/1441208453_IGDB-285x380.jpg",
+                  "__typename": "Game"
+                },
+                "allow": {
+                  "channels": [
+                    {
+                      "id": "552120296",
+                      "name": "zackrawrr",
+                      "url": "https://www.twitch.tv/zackrawrr",
+                      "__typename": "Channel"
+                    },
+                    {
+                      "id": "226142411",
+                      "name": "kaise",
+                      "url": "https://www.twitch.tv/kaise",
+                      "__typename": "Channel"
+                    }
+                  ],
+                  "__typename": "DropCampaignACL"
+                },
+                "eventBasedDrops": [],
+                "timeBasedDrops": [
+                  {
+                    "id": "8126eacd-cdf3-11f1-915c-0a58a9feac02",
+                    "name": "Mr. Wishmonmon",
+                    "startAt": "2026-10-22T12:00:00Z",
+                    "endAt": "2026-11-01T11:59:59.999Z",
+                    "preconditionDrops": null,
+                    "requiredMinutesWatched": 240,
+                    "requiredSubs": 0,
+                    "benefitEdges": [
+                      {
+                        "benefit": {
+                          "id": "342881d8-de19-427a-b1b8-2c0ebbcbe258_CUSTOM_ID_51001116",
+                          "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/97fd19e5-bb01-494a-9e36-b924554cbb10.png",
+                          "name": "Mr. Wishmonmon",
+                          "distributionType": "DIRECT_ENTITLEMENT",
+                          "__typename": "DropBenefit"
+                        },
+                        "entitlementLimit": 1,
+                        "claimCount": 0,
+                        "__typename": "DropBenefitEdge"
+                      }
+                    ],
+                    "self": {
+                      "hasPreconditionsMet": true,
+                      "currentMinutesWatched": 6,
+                      "currentSubs": 0,
+                      "isClaimed": false,
+                      "dropInstanceID": null,
+                      "__typename": "TimeBasedDropSelfEdge"
+                    },
+                    "campaign": {
+                      "id": "5365884f-b4d3-4184-a270-b8fd8bed5dae",
+                      "detailsURL": "https://www.oncehuman.game/twitch/",
+                      "accountLinkURL": "https://www.oncehuman.game/twitch/",
+                      "self": {
+                        "isAccountConnected": false,
+                        "__typename": "DropCampaignSelfEdge"
+                      },
+                      "__typename": "DropCampaign"
+                    },
+                    "__typename": "TimeBasedDrop"
+                  }
+                ],
+                "__typename": "DropCampaign"
+              },
+              {
+                "id": "233a7dcd-1c1f-4876-9529-2071a7f0d30d",
+                "detailsURL": "https://twitch.facepunch.com/",
+                "accountLinkURL": "https://twitch.facepunch.com/connect",
+                "startAt": "2026-10-23T17:45:00Z",
+                "endAt": "2026-11-01T23:58:59.999Z",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/CAMPAIGN/eb9cc8ab-0583-4b86-b902-bdd5771aae0f.png",
+                "name": "Twitch Rivals BI Generals",
+                "status": "ACTIVE",
+                "self": {
+                  "isAccountConnected": true,
+                  "__typename": "DropCampaignSelfEdge"
+                },
+                "game": {
+                  "id": "263490",
+                  "slug": "rust",
+                  "name": "Rust",
+                  "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/263490_IGDB-285x380.jpg",
+                  "__typename": "Game"
+                },
+                "allow": {
+                  "channels": null,
+                  "__typename": "DropCampaignACL"
+                },
+                "eventBasedDrops": [],
+                "timeBasedDrops": [
+                  {
+                    "id": "0b26fa32-cc9a-11f1-83bb-0a58a9feac02",
+                    "name": "Twitch Rivals Spooky Bed",
+                    "startAt": "2026-10-23T17:45:00Z",
+                    "endAt": "2026-11-01T23:58:59.999Z",
+                    "preconditionDrops": null,
+                    "requiredMinutesWatched": 120,
+                    "requiredSubs": 0,
+                    "benefitEdges": [
+                      {
+                        "benefit": {
+                          "id": "0c95681b-95ad-4be7-a2ba-07dcace74891_CUSTOM_ID_11599",
+                          "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/a41d865c-ca0f-4426-82ca-e688d702ecf0.jpeg",
+                          "name": "Twitch Rivals Spooky Bed",
+                          "distributionType": "DIRECT_ENTITLEMENT",
+                          "__typename": "DropBenefit"
+                        },
+                        "entitlementLimit": 1,
+                        "claimCount": 1,
+                        "__typename": "DropBenefitEdge"
+                      }
+                    ],
+                    "self": {
+                      "hasPreconditionsMet": true,
+                      "currentMinutesWatched": 120,
+                      "currentSubs": 0,
+                      "isClaimed": true,
+                      "dropInstanceID": "123456789#233a7dcd-1c1f-4876-9529-2071a7f0d30d#0b26fa32-cc9a-11f1-83bb-0a58a9feac02",
+                      "__typename": "TimeBasedDropSelfEdge"
+                    },
+                    "campaign": {
+                      "id": "233a7dcd-1c1f-4876-9529-2071a7f0d30d",
+                      "detailsURL": "https://twitch.facepunch.com/",
+                      "accountLinkURL": "https://twitch.facepunch.com/connect",
+                      "self": {
+                        "isAccountConnected": true,
+                        "__typename": "DropCampaignSelfEdge"
+                      },
+                      "__typename": "DropCampaign"
+                    },
+                    "__typename": "TimeBasedDrop"
+                  },
+                  {
+                    "id": "1766518f-cc9a-11f1-8068-0a58a9feac02",
+                    "name": "Twitch Rivals Spooky Door",
+                    "startAt": "2026-10-23T17:45:00Z",
+                    "endAt": "2026-11-01T23:58:59.999Z",
+                    "preconditionDrops": null,
+                    "requiredMinutesWatched": 180,
+                    "requiredSubs": 0,
+                    "benefitEdges": [
+                      {
+                        "benefit": {
+                          "id": "0c95681b-95ad-4be7-a2ba-07dcace74891_CUSTOM_ID_11600",
+                          "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/087e5932-dc2d-4953-8ea5-db8854035dfd.jpeg",
+                          "name": "Twitch Rivals Spooky Door",
+                          "distributionType": "DIRECT_ENTITLEMENT",
+                          "__typename": "DropBenefit"
+                        },
+                        "entitlementLimit": 1,
+                        "claimCount": 0,
+                        "__typename": "DropBenefitEdge"
+                      }
+                    ],
+                    "self": {
+                      "hasPreconditionsMet": true,
+                      "currentMinutesWatched": 153,
+                      "currentSubs": 0,
+                      "isClaimed": false,
+                      "dropInstanceID": null,
+                      "__typename": "TimeBasedDropSelfEdge"
+                    },
+                    "campaign": {
+                      "id": "233a7dcd-1c1f-4876-9529-2071a7f0d30d",
+                      "detailsURL": "https://twitch.facepunch.com/",
+                      "accountLinkURL": "https://twitch.facepunch.com/connect",
+                      "self": {
+                        "isAccountConnected": true,
+                        "__typename": "DropCampaignSelfEdge"
+                      },
+                      "__typename": "DropCampaign"
+                    },
+                    "__typename": "TimeBasedDrop"
+                  },
+                  {
+                    "id": "251235f6-cc9a-11f1-b114-0a58a9feac02",
+                    "name": "Twitch Rivals Spooky Thompson",
+                    "startAt": "2026-10-23T17:45:00Z",
+                    "endAt": "2026-11-01T23:58:59.999Z",
+                    "preconditionDrops": null,
+                    "requiredMinutesWatched": 240,
+                    "requiredSubs": 0,
+                    "benefitEdges": [
+                      {
+                        "benefit": {
+                          "id": "0c95681b-95ad-4be7-a2ba-07dcace74891_CUSTOM_ID_11601",
+                          "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/7dc66b51-0a04-49e0-a5d7-2939d9e9b9b7.jpeg",
+                          "name": "Twitch Rivals Spooky Thom",
+                          "distributionType": "DIRECT_ENTITLEMENT",
+                          "__typename": "DropBenefit"
+                        },
+                        "entitlementLimit": 1,
+                        "claimCount": 0,
+                        "__typename": "DropBenefitEdge"
+                      }
+                    ],
+                    "self": {
+                      "hasPreconditionsMet": true,
+                      "currentMinutesWatched": 153,
+                      "currentSubs": 0,
+                      "isClaimed": false,
+                      "dropInstanceID": null,
+                      "__typename": "TimeBasedDropSelfEdge"
+                    },
+                    "campaign": {
+                      "id": "233a7dcd-1c1f-4876-9529-2071a7f0d30d",
+                      "detailsURL": "https://twitch.facepunch.com/",
+                      "accountLinkURL": "https://twitch.facepunch.com/connect",
+                      "self": {
+                        "isAccountConnected": true,
+                        "__typename": "DropCampaignSelfEdge"
+                      },
+                      "__typename": "DropCampaign"
+                    },
+                    "__typename": "TimeBasedDrop"
+                  },
+                  {
+                    "id": "34d81340-cc9a-11f1-9731-0a58a9feac02",
+                    "name": "Rustoria Clones Box",
+                    "startAt": "2026-10-23T17:45:00Z",
+                    "endAt": "2026-11-01T23:58:59.999Z",
+                    "preconditionDrops": null,
+                    "requiredMinutesWatched": 300,
+                    "requiredSubs": 0,
+                    "benefitEdges": [
+                      {
+                        "benefit": {
+                          "id": "0c95681b-95ad-4be7-a2ba-07dcace74891_CUSTOM_ID_11602",
+                          "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/9ff50c85-35aa-4fc6-8092-4fba3491f676.jpeg",
+                          "name": "Rustoria Clones Box",
+                          "distributionType": "DIRECT_ENTITLEMENT",
+                          "__typename": "DropBenefit"
+                        },
+                        "entitlementLimit": 1,
+                        "claimCount": 0,
+                        "__typename": "DropBenefitEdge"
+                      }
+                    ],
+                    "self": {
+                      "hasPreconditionsMet": true,
+                      "currentMinutesWatched": 153,
+                      "currentSubs": 0,
+                      "isClaimed": false,
+                      "dropInstanceID": null,
+                      "__typename": "TimeBasedDropSelfEdge"
+                    },
+                    "campaign": {
+                      "id": "233a7dcd-1c1f-4876-9529-2071a7f0d30d",
+                      "detailsURL": "https://twitch.facepunch.com/",
+                      "accountLinkURL": "https://twitch.facepunch.com/connect",
+                      "self": {
+                        "isAccountConnected": true,
+                        "__typename": "DropCampaignSelfEdge"
+                      },
+                      "__typename": "DropCampaign"
+                    },
+                    "__typename": "TimeBasedDrop"
+                  },
+                  {
+                    "id": "f89d3b5e-cc99-11f1-bb38-0a58a9feac02",
+                    "name": "Twitch Rivals Spooky Rug",
+                    "startAt": "2026-10-23T17:45:00Z",
+                    "endAt": "2026-11-01T23:58:59.999Z",
+                    "preconditionDrops": null,
+                    "requiredMinutesWatched": 60,
+                    "requiredSubs": 0,
+                    "benefitEdges": [
+                      {
+                        "benefit": {
+                          "id": "0c95681b-95ad-4be7-a2ba-07dcace74891_CUSTOM_ID_11598",
+                          "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/9d9db1dc-a2ac-4f3c-aae8-057dbc7d57d3.jpeg",
+                          "name": "Twitch Rivals Spooky Rug",
+                          "distributionType": "DIRECT_ENTITLEMENT",
+                          "__typename": "DropBenefit"
+                        },
+                        "entitlementLimit": 1,
+                        "claimCount": 1,
+                        "__typename": "DropBenefitEdge"
+                      }
+                    ],
+                    "self": {
+                      "hasPreconditionsMet": true,
+                      "currentMinutesWatched": 60,
+                      "currentSubs": 0,
+                      "isClaimed": true,
+                      "dropInstanceID": "123456789#233a7dcd-1c1f-4876-9529-2071a7f0d30d#f89d3b5e-cc99-11f1-bb38-0a58a9feac02",
+                      "__typename": "TimeBasedDropSelfEdge"
+                    },
+                    "campaign": {
+                      "id": "233a7dcd-1c1f-4876-9529-2071a7f0d30d",
+                      "detailsURL": "https://twitch.facepunch.com/",
+                      "accountLinkURL": "https://twitch.facepunch.com/connect",
+                      "self": {
+                        "isAccountConnected": true,
+                        "__typename": "DropCampaignSelfEdge"
+                      },
+                      "__typename": "DropCampaign"
+                    },
+                    "__typename": "TimeBasedDrop"
+                  }
+                ],
+                "__typename": "DropCampaign"
+              }
+            ],
+            "gameEventDrops": [
+              {
+                "game": null,
+                "id": "9620a89d-b07c-4160-a851-ae832fa6985e_CUSTOM_ID_1850682",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/07ada2d6-9965-43f4-b913-51d1d17f9c49.png",
+                "isConnected": true,
+                "lastAwardedAt": "2026-07-03T08:14:08.624Z",
+                "name": "At the Top Spray",
+                "requiredAccountLink": "https://account.battle.net/connections",
+                "totalCount": 1,
+                "__typename": "UserDropReward"
+              },
+              {
+                "game": null,
+                "id": "e2a2aacb-acce-4761-8960-3c7f814a3f55_CUSTOM_ID_BackpackAttachmentCeramicVase",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/65dc9400-a3bf-47bb-a14d-2d6bc5d6602a.png",
+                "isConnected": true,
+                "lastAwardedAt": "2026-09-11T17:44:33.711Z",
+                "name": "Ceramic Vase",
+                "requiredAccountLink": "https://embark-games.embark.net/",
+                "totalCount": 1,
+                "__typename": "UserDropReward"
+              }
+            ],
+            "__typename": "Inventory"
+          },
+          "__typename": "User"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 186,
+        "requestID": "redacted-request-id",
+        "operationName": "Inventory"
+      }
+    }
+  ]
+}

@@ -55,3 +55,9 @@ Settled answers. Agents: don't reopen these without new evidence.
     automation, image publishing, badges or nightly jobs until there is something to ship.
 23. **Stop planning, start building** (2026-10-29). Proposal v0 + critique 08 are the design input.
     Open design questions get answered with code and the simulator, not more documents.
+24. **Environment through Varlock** (teyd, 2026-10-29). `.env.schema` is committed and declares every
+    variable (`TOKEN`: required, sensitive, format-checked). Values live in gitignored
+    `.env.local`, optionally encrypted with `varlock encrypt`. Varlock is a dev dependency only:
+    `pnpm dev` runs the CLI through `varlock run`, and the bundle reads plain environment variables
+    through Effect `Config`, so Docker users can pass the variable directly. Varlock's bundled agent
+    skill is declined (decision 13).

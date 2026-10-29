@@ -1,0 +1,42 @@
+{
+  "name": "miner",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A headless Twitch drops miner for homelabs.",
+  "bin": {
+    "miner": "./dist/bin.mjs"
+  },
+  "type": "module",
+  "scripts": {
+    "prepare": "effect-tsgo patch --no-typescript --oxlint",
+    "check": "vp check && vp test",
+    "build": "vp pack",
+    "start": "node dist/bin.mjs"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.1.0",
+    "effect": "4.1.0"
+  },
+  "devDependencies": {
+    "@effect/tsgo": "0.63.0",
+    "@effect/vitest": "4.1.0",
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2",
+    "vite-plus": "1.4.0"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.16.1",
+      "onFail": "download"
+    },
+    "runtime": {
+      "name": "node",
+      "version": "26.13.0",
+      "onFail": "download"
+    }
+  },
+  "engines": {
+    "node": ">=26.13.0"
+  }
+}

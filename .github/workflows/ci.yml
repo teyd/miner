@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # Reads Node and pnpm from devEngines in package.json, then runs the install.
+      - uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          cache: true
+      - run: vp run check
+      - run: vp run build

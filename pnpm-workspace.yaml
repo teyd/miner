@@ -1,0 +1,22 @@
+saveExact: true
+# pnpm adds an entry when a pinned version is under a day old (minimumReleaseAge); drop it once it ages.
+minimumReleaseAgeExcludePrune: true
+
+overrides:
+  # Vite+ requires every copy of vite and vitest to be its own (viteplus.dev/guide/local-cli).
+  vite@*: npm:@voidzero-dev/vite-plus-core@1.4.0
+  vitest@*: 5.0.5
+  # An optional peer of @effect/platform-node that the miner never uses.
+  redis: "-"
+
+minimumReleaseAgeExclude:
+  - "@effect/platform-node-shared@4.1.0"
+  - "@effect/platform-node@4.1.0"
+  - "@effect/vitest@4.1.0"
+  - "@types/node@26.6.6"
+  - effect@4.1.0
+
+# vite is aliased to Vite+ core, which no vite peer range names.
+peerDependencyRules:
+  allowAny:
+    - vite

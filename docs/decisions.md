@@ -64,3 +64,7 @@ Settled answers. Agents: don't reopen these without new evidence.
 25. **Live tests run on teyd's normal account** (teyd, 2026-10-29), the token in `.env.local`.
     Narrows decision 6: the test accounts stay available, but are no longer required. One live
     miner at a time, browser-like request rates.
+26. **State, recordings and config live in `DATA_DIR`** (teyd, 2026-10-29), declared in
+    `.env.schema`, default `./data` (gitignored). It maps to a Docker volume later.
+27. **Configuration is one JSON file with a generated JSON Schema, written for AI agents**
+    (teyd, 2026-10-29). Design in research 07.

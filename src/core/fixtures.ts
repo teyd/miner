@@ -16,7 +16,11 @@ import { HOUR } from "./model.ts";
 /** Test data builders. Times are relative to `T0`, a fixed instant. */
 export const T0 = 1_793_275_200_000; // 2026-10-29T12:00:00Z
 
-export const game = (id = "game-1") => ({ id: id as GameId, name: `Game ${id}` });
+export const game = (id = "game-1") => ({
+  id: id as GameId,
+  name: `Game ${id}`,
+  slug: `game-${id}`,
+});
 export const cid = (id: string) => id as CampaignId;
 export const did = (id: string) => id as DropId;
 export const chid = (id: string) => id as ChannelId;

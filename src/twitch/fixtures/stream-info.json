@@ -1,0 +1,40 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "user": {
+          "id": "38822100",
+          "profileURL": "https://www.twitch.tv/forsen",
+          "displayName": "forsen",
+          "login": "forsen",
+          "profileImageURL": "https://static-cdn.jtvnw.net/jtv_user_pictures/e990b10a-2c51-4335-ae90-4bd1708a30f8-profile_image-150x150.png",
+          "broadcastSettings": {
+            "id": "38822100",
+            "title": "Road to Derank | !holy",
+            "game": {
+              "id": "55453844",
+              "displayName": "Street Fighter 6",
+              "name": "Street Fighter 6",
+              "slug": "street-fighter-6",
+              "__typename": "Game"
+            },
+            "__typename": "BroadcastSettings"
+          },
+          "stream": {
+            "id": "318153769828",
+            "viewersCount": 463,
+            "tags": [],
+            "__typename": "Stream"
+          },
+          "__typename": "User"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 46,
+        "requestID": "redacted-request-id",
+        "operationName": "VideoPlayerStreamInfoOverlayChannel"
+      }
+    }
+  ]
+}

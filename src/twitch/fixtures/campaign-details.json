@@ -1,0 +1,325 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "user": {
+          "id": "123456789",
+          "dropCampaign": {
+            "id": "6b9a386c-8193-463e-bed3-5ddbb7a9da89",
+            "self": {
+              "isAccountConnected": false,
+              "__typename": "DropCampaignSelfEdge"
+            },
+            "allow": {
+              "channels": [
+                {
+                  "id": "117023453",
+                  "displayName": "TankiSport_RU",
+                  "name": "tankisport_ru",
+                  "__typename": "Channel"
+                },
+                {
+                  "id": "64274116",
+                  "displayName": "TankiSport_EN",
+                  "name": "tankisport_en",
+                  "__typename": "Channel"
+                },
+                {
+                  "id": "806896138",
+                  "displayName": "TankiSport_RU_2",
+                  "name": "tankisport_ru_2",
+                  "__typename": "Channel"
+                },
+                {
+                  "id": "806894175",
+                  "displayName": "TankiSport_EN_2",
+                  "name": "tankisport_en_2",
+                  "__typename": "Channel"
+                }
+              ],
+              "isEnabled": true,
+              "__typename": "DropCampaignACL"
+            },
+            "accountLinkURL": "https://tankionline.com/play/",
+            "description": "Watch Tanki Online eSports match livestreams and get Epic Keys in Tanki Online",
+            "detailsURL": "https://tankionline.com/",
+            "endAt": "2026-10-28T19:29:59.999Z",
+            "eventBasedDrops": [],
+            "game": {
+              "id": "417810",
+              "slug": "tanki-online",
+              "displayName": "Tanki Online",
+              "__typename": "Game"
+            },
+            "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/CAMPAIGN/654b24b0-6cba-4e60-81b0-4ae183fc0605.jpeg",
+            "name": "WMR3 2026 R3",
+            "owner": {
+              "id": "81aa7ca2-3eca-435b-849b-f23fe1b45a9d",
+              "name": "APL Publishing Ltd",
+              "__typename": "Organization"
+            },
+            "startAt": "2026-10-28T17:00:00Z",
+            "status": "ACTIVE",
+            "timeBasedDrops": [
+              {
+                "id": "399b9d4e-d259-11f1-9a35-0a58a9feac02",
+                "requiredSubs": 0,
+                "benefitEdges": [
+                  {
+                    "benefit": {
+                      "id": "81aa7ca2-3eca-435b-849b-f23fe1b45a9d_CUSTOM_ID_01e203c8-9582-4c7d-94e6-920e59d5fa40",
+                      "createdAt": "2023-10-18T14:21:12.821Z",
+                      "entitlementLimit": 1,
+                      "game": {
+                        "id": "417810",
+                        "name": "Tanki Online",
+                        "__typename": "Game"
+                      },
+                      "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/e7e439fb-4418-4b0e-8d06-2f0390149f18.png",
+                      "isIosAvailable": false,
+                      "name": "Epic Key",
+                      "ownerOrganization": {
+                        "id": "81aa7ca2-3eca-435b-849b-f23fe1b45a9d",
+                        "name": "APL Publishing Ltd",
+                        "__typename": "Organization"
+                      },
+                      "distributionType": "DIRECT_ENTITLEMENT",
+                      "__typename": "DropBenefit"
+                    },
+                    "entitlementLimit": 1,
+                    "__typename": "DropBenefitEdge"
+                  }
+                ],
+                "endAt": "2026-10-28T19:29:59.999Z",
+                "name": "Drop 1",
+                "preconditionDrops": null,
+                "requiredMinutesWatched": 30,
+                "startAt": "2026-10-28T17:00:00Z",
+                "__typename": "TimeBasedDrop"
+              },
+              {
+                "id": "3bc4bab0-d259-11f1-956f-0a58a9feac02",
+                "requiredSubs": 0,
+                "benefitEdges": [
+                  {
+                    "benefit": {
+                      "id": "81aa7ca2-3eca-435b-849b-f23fe1b45a9d_CUSTOM_ID_01e203c8-9582-4c7d-94e6-920e59d5fa40",
+                      "createdAt": "2023-10-18T14:21:12.821Z",
+                      "entitlementLimit": 1,
+                      "game": {
+                        "id": "417810",
+                        "name": "Tanki Online",
+                        "__typename": "Game"
+                      },
+                      "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/e7e439fb-4418-4b0e-8d06-2f0390149f18.png",
+                      "isIosAvailable": false,
+                      "name": "Epic Key",
+                      "ownerOrganization": {
+                        "id": "81aa7ca2-3eca-435b-849b-f23fe1b45a9d",
+                        "name": "APL Publishing Ltd",
+                        "__typename": "Organization"
+                      },
+                      "distributionType": "DIRECT_ENTITLEMENT",
+                      "__typename": "DropBenefit"
+                    },
+                    "entitlementLimit": 1,
+                    "__typename": "DropBenefitEdge"
+                  }
+                ],
+                "endAt": "2026-10-28T19:29:59.999Z",
+                "name": "Drop 2",
+                "preconditionDrops": null,
+                "requiredMinutesWatched": 60,
+                "startAt": "2026-10-28T17:00:00Z",
+                "__typename": "TimeBasedDrop"
+              }
+            ],
+            "__typename": "DropCampaign"
+          },
+          "__typename": "User"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 45,
+        "requestID": "redacted-request-id",
+        "operationName": "DropCampaignDetails"
+      }
+    },
+    {
+      "data": {
+        "user": {
+          "id": "123456789",
+          "dropCampaign": {
+            "id": "c76cbf48-db6a-4e2c-97c8-8d68b0bee3c7",
+            "self": {
+              "isAccountConnected": false,
+              "__typename": "DropCampaignSelfEdge"
+            },
+            "allow": {
+              "channels": [
+                {
+                  "id": "151873951",
+                  "displayName": "ElnoraEleo",
+                  "name": "elnoraeleo",
+                  "__typename": "Channel"
+                }
+              ],
+              "isEnabled": true,
+              "__typename": "DropCampaignACL"
+            },
+            "accountLinkURL": "https://www.warframe.com/user",
+            "description": "Support our Princess Margaret Cancer Foundation Quest campaign through the month of October! Watch elnoraeleo's fundraising stream for 30 minutes to receive a random Domestik Drone.",
+            "detailsURL": "https://forums.warframe.com/topic/1530491-pmcfq-community-fundraising-stream-schedule-october-26-31-2026/",
+            "endAt": "2026-10-28T19:59:59.999Z",
+            "eventBasedDrops": [],
+            "game": {
+              "id": "66170",
+              "slug": "warframe",
+              "displayName": "Warframe",
+              "__typename": "Game"
+            },
+            "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/CAMPAIGN/a8338774-0297-49cd-b20b-2ab806f1219b.jpeg",
+            "name": "PMCFQ - elnoraeleo",
+            "owner": {
+              "id": "ede84f2f-2e8e-47bf-b260-43d2185bb458",
+              "name": "Digital Extremes",
+              "__typename": "Organization"
+            },
+            "startAt": "2026-10-28T18:00:00Z",
+            "status": "ACTIVE",
+            "timeBasedDrops": [
+              {
+                "id": "137fc80f-d2f2-11f1-b5dd-0a58a9feac02",
+                "requiredSubs": 0,
+                "benefitEdges": [
+                  {
+                    "benefit": {
+                      "id": "58d61bb7-9538-11ef-b4ef-0a58a9feac02",
+                      "createdAt": "2024-10-28T14:24:31.29Z",
+                      "entitlementLimit": 1,
+                      "game": {
+                        "id": "66170",
+                        "name": "Warframe",
+                        "__typename": "Game"
+                      },
+                      "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/ebe26a26-0f95-4e57-a0d7-fac522b4e3c6.jpeg",
+                      "isIosAvailable": true,
+                      "name": "Domestik Drone (PMCFQ)",
+                      "ownerOrganization": {
+                        "id": "ede84f2f-2e8e-47bf-b260-43d2185bb458",
+                        "name": "Digital Extremes",
+                        "__typename": "Organization"
+                      },
+                      "distributionType": "DIRECT_ENTITLEMENT",
+                      "__typename": "DropBenefit"
+                    },
+                    "entitlementLimit": 1,
+                    "__typename": "DropBenefitEdge"
+                  }
+                ],
+                "endAt": "2026-10-28T19:59:59.999Z",
+                "name": "Random Domestik Drone",
+                "preconditionDrops": null,
+                "requiredMinutesWatched": 30,
+                "startAt": "2026-10-28T18:00:00Z",
+                "__typename": "TimeBasedDrop"
+              }
+            ],
+            "__typename": "DropCampaign"
+          },
+          "__typename": "User"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 44,
+        "requestID": "redacted-request-id",
+        "operationName": "DropCampaignDetails"
+      }
+    },
+    {
+      "data": {
+        "user": {
+          "id": "123456789",
+          "dropCampaign": {
+            "id": "711b6068-c16e-4d0f-bcb1-6be54eb91c3f",
+            "self": {
+              "isAccountConnected": false,
+              "__typename": "DropCampaignSelfEdge"
+            },
+            "allow": {
+              "channels": null,
+              "isEnabled": false,
+              "__typename": "DropCampaignACL"
+            },
+            "accountLinkURL": "https://help.twitch.tv/s/article/how-to-use-emotes",
+            "description": "Subscribe to any streamer streaming Street Fighter 6 to unlock the SFGuile emote for 1 year.",
+            "detailsURL": "https://help.twitch.tv/s/article/how-to-use-emotes",
+            "endAt": "2026-10-28T19:59:59.999Z",
+            "eventBasedDrops": [],
+            "game": {
+              "id": "55453844",
+              "slug": "street-fighter-6",
+              "displayName": "Street Fighter 6",
+              "__typename": "Game"
+            },
+            "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/CAMPAIGN/30bc36c1-6988-4aec-a1ea-fc7c16f3e26b.png",
+            "name": "Street Fighter 6",
+            "owner": {
+              "id": "d32de13d-937e-4196-8198-1a7f875f295a",
+              "name": "Twitch Gaming",
+              "__typename": "Organization"
+            },
+            "startAt": "2026-10-01T20:00:00Z",
+            "status": "ACTIVE",
+            "timeBasedDrops": [
+              {
+                "id": "2c1bc1d1-bd1c-11f1-b165-0a58a9feac02",
+                "requiredSubs": 1,
+                "benefitEdges": [
+                  {
+                    "benefit": {
+                      "id": "67823d4d-bd1c-11f1-8609-0a58a9feac02",
+                      "createdAt": "2026-09-30T22:15:11.851Z",
+                      "entitlementLimit": 1,
+                      "game": {
+                        "id": "55453844",
+                        "name": "Street Fighter 6",
+                        "__typename": "Game"
+                      },
+                      "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/8ba7479e-2515-488f-afb7-79ab201b0fbe.png",
+                      "isIosAvailable": false,
+                      "name": "SFGuile Emote",
+                      "ownerOrganization": {
+                        "id": "d32de13d-937e-4196-8198-1a7f875f295a",
+                        "name": "Twitch Gaming",
+                        "__typename": "Organization"
+                      },
+                      "distributionType": "EMOTE",
+                      "__typename": "DropBenefit"
+                    },
+                    "entitlementLimit": 1,
+                    "__typename": "DropBenefitEdge"
+                  }
+                ],
+                "endAt": "2026-10-28T19:59:59.999Z",
+                "name": "SFGuile Emote",
+                "preconditionDrops": null,
+                "requiredMinutesWatched": 0,
+                "startAt": "2026-10-01T20:00:00Z",
+                "__typename": "TimeBasedDrop"
+              }
+            ],
+            "__typename": "DropCampaign"
+          },
+          "__typename": "User"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 41,
+        "requestID": "redacted-request-id",
+        "operationName": "DropCampaignDetails"
+      }
+    }
+  ]
+}

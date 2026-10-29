@@ -1,0 +1,52 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "errors": [
+        {
+          "message": "service error",
+          "path": ["currentUser", "inventory", "dropCampaignsInProgress"]
+        }
+      ],
+      "data": {
+        "currentUser": {
+          "id": "123456789",
+          "inventory": {
+            "dropCampaignsInProgress": null,
+            "gameEventDrops": [
+              {
+                "game": null,
+                "id": "9620a89d-b07c-4160-a851-ae832fa6985e_CUSTOM_ID_1707795",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/8b9a5887-81c8-473b-9527-9844cdbc3914.png",
+                "isConnected": true,
+                "lastAwardedAt": "2026-07-03T10:45:01.988Z",
+                "name": "OWCS Home Mauga Skin",
+                "requiredAccountLink": "https://account.battle.net/connections",
+                "totalCount": 1,
+                "__typename": "UserDropReward"
+              },
+              {
+                "game": null,
+                "id": "9620a89d-b07c-4160-a851-ae832fa6985e_CUSTOM_ID_2095215",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/8038f302-15fe-48c6-8e00-6f6dd984a1a3.png",
+                "isConnected": true,
+                "lastAwardedAt": "2026-07-02T20:12:44.079Z",
+                "name": "BP Tier Skip S2.C3.C",
+                "requiredAccountLink": "https://account.battle.net/connections",
+                "totalCount": 1,
+                "__typename": "UserDropReward"
+              }
+            ],
+            "__typename": "Inventory"
+          },
+          "__typename": "User"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 1334,
+        "requestID": "01M620TYGFME9PJ65EG4KG46M2",
+        "operationName": "Inventory"
+      }
+    }
+  ]
+}

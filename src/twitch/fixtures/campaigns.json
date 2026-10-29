@@ -1,0 +1,221 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "currentUser": {
+          "id": "123456789",
+          "login": "testuser",
+          "dropCampaigns": [
+            {
+              "id": "6b9a386c-8193-463e-bed3-5ddbb7a9da89",
+              "name": "WMR3 2026 R3",
+              "owner": {
+                "id": "81aa7ca2-3eca-435b-849b-f23fe1b45a9d",
+                "name": "APL Publishing Ltd",
+                "__typename": "Organization"
+              },
+              "game": {
+                "id": "417810",
+                "displayName": "Tanki Online",
+                "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/417810_IGDB-120x160.jpg",
+                "__typename": "Game"
+              },
+              "status": "ACTIVE",
+              "startAt": "2026-10-28T17:00:00Z",
+              "endAt": "2026-10-28T19:29:59.999Z",
+              "detailsURL": "https://tankionline.com/",
+              "accountLinkURL": "https://tankionline.com/play/",
+              "self": {
+                "isAccountConnected": false,
+                "__typename": "DropCampaignSelfEdge"
+              },
+              "__typename": "DropCampaign"
+            },
+            {
+              "id": "c76cbf48-db6a-4e2c-97c8-8d68b0bee3c7",
+              "name": "PMCFQ - elnoraeleo",
+              "owner": {
+                "id": "ede84f2f-2e8e-47bf-b260-43d2185bb458",
+                "name": "Digital Extremes",
+                "__typename": "Organization"
+              },
+              "game": {
+                "id": "66170",
+                "displayName": "Warframe",
+                "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/66170_IGDB-120x160.jpg",
+                "__typename": "Game"
+              },
+              "status": "ACTIVE",
+              "startAt": "2026-10-28T18:00:00Z",
+              "endAt": "2026-10-28T19:59:59.999Z",
+              "detailsURL": "https://forums.warframe.com/topic/1530491-pmcfq-community-fundraising-stream-schedule-october-26-31-2026/",
+              "accountLinkURL": "https://www.warframe.com/user",
+              "self": {
+                "isAccountConnected": false,
+                "__typename": "DropCampaignSelfEdge"
+              },
+              "__typename": "DropCampaign"
+            },
+            {
+              "id": "711b6068-c16e-4d0f-bcb1-6be54eb91c3f",
+              "name": "Street Fighter 6",
+              "owner": {
+                "id": "d32de13d-937e-4196-8198-1a7f875f295a",
+                "name": "Twitch Gaming",
+                "__typename": "Organization"
+              },
+              "game": {
+                "id": "55453844",
+                "displayName": "Street Fighter 6",
+                "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/55453844_IGDB-120x160.jpg",
+                "__typename": "Game"
+              },
+              "status": "ACTIVE",
+              "startAt": "2026-10-01T20:00:00Z",
+              "endAt": "2026-10-28T19:59:59.999Z",
+              "detailsURL": "https://help.twitch.tv/s/article/how-to-use-emotes",
+              "accountLinkURL": "https://help.twitch.tv/s/article/how-to-use-emotes",
+              "self": {
+                "isAccountConnected": false,
+                "__typename": "DropCampaignSelfEdge"
+              },
+              "__typename": "DropCampaign"
+            },
+            {
+              "id": "01c50678-d65a-4286-b229-35ad458af3d8",
+              "name": "Haunted Drops",
+              "owner": {
+                "id": "1b03f48f-2625-412b-8d14-028282008a11",
+                "name": "Second Dinner",
+                "__typename": "Organization"
+              },
+              "game": {
+                "id": "1743359147",
+                "displayName": "MARVEL SNAP",
+                "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/1743359147_IGDB-120x160.jpg",
+                "__typename": "Game"
+              },
+              "status": "EXPIRED",
+              "startAt": "2026-10-19T19:05:00Z",
+              "endAt": "2026-10-27T18:59:59.999Z",
+              "detailsURL": "https://www.marvelsnap.com/twitchdrops",
+              "accountLinkURL": "https://www.marvelsnap.com/twitchdrops",
+              "self": {
+                "isAccountConnected": false,
+                "__typename": "DropCampaignSelfEdge"
+              },
+              "__typename": "DropCampaign"
+            },
+            {
+              "id": "c1bdcb09-981d-4b99-9ea3-054f898d9f7b",
+              "name": "15.9 Czechoslovak Drop",
+              "owner": {
+                "id": "6948a129-2c6d-4d88-9444-6b96918a19f8",
+                "name": "Wargaming",
+                "__typename": "Organization"
+              },
+              "game": {
+                "id": "32502",
+                "displayName": "World of Warships",
+                "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/32502_IGDB-120x160.jpg",
+                "__typename": "Game"
+              },
+              "status": "EXPIRED",
+              "startAt": "2026-10-27T17:00:00Z",
+              "endAt": "2026-10-27T19:59:59.999Z",
+              "detailsURL": "https://worldofwarships.com/en/news/community/community-drops-october-26/",
+              "accountLinkURL": "https://wargaming.net/personal/",
+              "self": {
+                "isAccountConnected": false,
+                "__typename": "DropCampaignSelfEdge"
+              },
+              "__typename": "DropCampaign"
+            },
+            {
+              "id": "3b2d577a-fc2a-49eb-a07a-a5866937bef5",
+              "name": "RSI Discovery",
+              "owner": {
+                "id": "2d611aa2-d029-4239-882d-4c1d03775bfe",
+                "name": "Cloud Imperium Games",
+                "__typename": "Organization"
+              },
+              "game": {
+                "id": "71375",
+                "displayName": "Star Citizen",
+                "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/71375_IGDB-120x160.jpg",
+                "__typename": "Game"
+              },
+              "status": "EXPIRED",
+              "startAt": "2026-10-16T16:30:00Z",
+              "endAt": "2026-10-27T19:59:59.999Z",
+              "detailsURL": "https://robertsspaceindustries.com/comm-link/transmission/21341-Twitch-Drops-RSI-Discovery-Month",
+              "accountLinkURL": "https://robertsspaceindustries.com/sign-in",
+              "self": {
+                "isAccountConnected": false,
+                "__typename": "DropCampaignSelfEdge"
+              },
+              "__typename": "DropCampaign"
+            },
+            {
+              "id": "889b346e-b4e9-4a1a-93e9-5539c04d0d70",
+              "name": "PMCFQ - kirarahime",
+              "owner": {
+                "id": "ede84f2f-2e8e-47bf-b260-43d2185bb458",
+                "name": "Digital Extremes",
+                "__typename": "Organization"
+              },
+              "game": {
+                "id": "66170",
+                "displayName": "Warframe",
+                "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/66170_IGDB-120x160.jpg",
+                "__typename": "Game"
+              },
+              "status": "EXPIRED",
+              "startAt": "2026-10-27T21:00:00Z",
+              "endAt": "2026-10-27T22:59:59.999Z",
+              "detailsURL": "https://forums.warframe.com/topic/1530491-pmcfq-community-fundraising-stream-schedule-october-26-31-2026/",
+              "accountLinkURL": "https://www.warframe.com/user",
+              "self": {
+                "isAccountConnected": false,
+                "__typename": "DropCampaignSelfEdge"
+              },
+              "__typename": "DropCampaign"
+            },
+            {
+              "id": "d7095399-62d2-4ff7-bb73-dcbf1f513ec8",
+              "name": "Twitch Drops",
+              "owner": {
+                "id": "c29ff9c6-6048-4e09-b996-e8136be568cc",
+                "name": "IGG",
+                "__typename": "Organization"
+              },
+              "game": {
+                "id": "1102857083",
+                "displayName": "Doomsday: Last Survivors",
+                "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/1102857083_IGDB-120x160.jpg",
+                "__typename": "Game"
+              },
+              "status": "EXPIRED",
+              "startAt": "2026-09-30T09:05:57Z",
+              "endAt": "2026-10-27T22:59:59.999Z",
+              "detailsURL": "https://event.igg.com/twitch/drops?code=dls_drops",
+              "accountLinkURL": "https://event.igg.com/twitch/drops?code=dls_drops",
+              "self": {
+                "isAccountConnected": false,
+                "__typename": "DropCampaignSelfEdge"
+              },
+              "__typename": "DropCampaign"
+            }
+          ],
+          "__typename": "User"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 151,
+        "requestID": "redacted-request-id",
+        "operationName": "ViewerDropsDashboard"
+      }
+    }
+  ]
+}

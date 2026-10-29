@@ -1,0 +1,10 @@
+{
+  "status": 200,
+  "body": {
+    "client_id": "uo6dggojyb8d6soh92zknwmi5ej1q2",
+    "login": "testuser",
+    "scopes": ["chat:read"],
+    "user_id": "123456789",
+    "expires_in": 0
+  }
+}

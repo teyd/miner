@@ -61,7 +61,9 @@ pnpm 12, Vite+ (`vp`). Status: the pure core and the read-only Twitch client are
 
 - The API is private and undocumented. Hashes, client IDs and headers break about monthly. Re-verify before relying on one, and update the date in research 02.
 - Twitch sometimes answers `null` with no error. Treat it as a failure.
-- Limits are per IP (about 10 websockets, 5 GQL requests per second). Live runs use test accounts only, at most 2 at once.
+- Limits are per IP (about 10 websockets, 5 GQL requests per second). Live runs use the account in `.env.local`,
+  which is teyd's normal account (approved 2026-10-29): one live miner at a time, and keep request rates at what a
+  person in a browser would cause.
 - Never log out or revoke a token. Getting a new one needs a human in a browser.
 - Never auto-retry a claim. A lost answer may still have succeeded, so read state first.
 - Tokens, signed playlist URLs (`sig`, `token`, `hdnts`) and `Authorization` headers never reach logs, fixtures or commits.

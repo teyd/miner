@@ -15,8 +15,18 @@ minimumReleaseAgeExclude:
   - "@effect/vitest@4.1.0"
   - "@types/node@26.6.6"
   - effect@4.1.0
+  - "@varlock/native-helper-darwin@1.24.0"
+  - "@varlock/native-helper-linux-arm64@1.24.0"
+  - "@varlock/native-helper-linux-x64@1.24.0"
+  - "@varlock/native-helper-win32-x64@1.24.0"
+  - varlock@1.24.0
 
 # vite is aliased to Vite+ core, which no vite peer range names.
 peerDependencyRules:
   allowAny:
     - vite
+
+# Packages may ship agent skills; this repo keeps its own (docs/decisions.md 13).
+permissions:
+  varlock:
+    skills: false

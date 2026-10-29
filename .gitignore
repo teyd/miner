@@ -3,4 +3,7 @@ dist/
 coverage/
 .worktrees/
 *.log
+# Varlock: commit the schema, never the values.
 .env
+.env.*
+!.env.schema

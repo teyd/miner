@@ -80,7 +80,11 @@ pnpm 12, Vite+ (`vp`). Status: the pure core, the read-only Twitch client and th
 
 ## Shipping
 
-- The default branch is `dev`. One worktree per task: `scripts/worktree.sh <type>/<task>` creates `.worktrees/<task>`
-  from `dev`, symlinks the main checkout's `.env.local` into it and installs. Remove it after merge.
+- The default branch is `dev`. One worktree per task, never one inside another task's worktree. If you are
+  already in a linked worktree (`git rev-parse --git-dir` differs from `--git-common-dir`, as when T3 Code
+  made it), use it and run `scripts/worktree-setup.sh` once: it symlinks the main checkout's `.env.local`
+  and installs. Otherwise `scripts/worktree.sh <type>/<task>` creates `.worktrees/<task>` from `dev` and
+  runs the setup. Branch names are free-form (squash merge). Remove the worktree with whatever made it
+  (`git worktree remove`, or the tool's delete) after merge.
 - PRs target `dev`. Squash merge. The PR title becomes the commit: `feat(scope): …`, `fix(scope): …`, `docs: …`.
 - The PR body gives the user-visible change first, then design notes with file paths, then the commands you ran and their output.

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/teyd/miner/dev/schema/config.v1.json",
+  "version": 1,
+  "priorities": [
+    {
+      "type": "drops",
+      "note": "My games first",
+      "games": [{ "name": "Rust" }, { "name": "The Cycle: Frontier", "rewards": ["item", "badge"] }]
+    },
+    {
+      "type": "points",
+      "note": "Favourite streamers",
+      "channels": ["oilrats", "riqqeloff"],
+      "claimBonus": true,
+      "watchStreaks": true,
+      "raids": { "follow": true, "stayMinutes": 1 }
+    },
+    {
+      "type": "drops",
+      "note": "Everything else that pays out",
+      "games": "all",
+      "exclude": { "games": ["League of Legends"] },
+      "rewards": ["item", "badge", "emote"],
+      "linkedOnly": true,
+      "order": "least-slack"
+    }
+  ],
+  "exclude": { "channels": ["xqc"] },
+  "streams": { "max": 1 }
+}

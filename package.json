@@ -12,7 +12,8 @@
     "check": "vp check && vp test",
     "build": "vp pack",
     "start": "node dist/bin.mjs",
-    "dev": "vp pack && varlock run -- node dist/bin.mjs"
+    "dev": "vp pack && varlock run -- node dist/bin.mjs",
+    "schema": "vp pack && node dist/bin.mjs config schema > schema/config.v1.json && vp fmt schema"
   },
   "dependencies": {
     "@effect/platform-node": "4.1.0",

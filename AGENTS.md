@@ -28,8 +28,10 @@ pnpm 12, Vite+ (`vp`). Status: the pure core and the read-only Twitch client are
 - `pnpm exec vp check --fix` formats and applies lint fixes. `pnpm exec vp test <file>` runs one test file.
 - `pnpm build` bundles everything into `dist/bin.mjs` (`vp pack`). One file, no `node_modules` at runtime,
   because that halves idle RSS (research 03). `pnpm start --help` runs it.
-- `TOKEN=… pnpm start doctor [--json] [--record file.jsonl]` checks a token and reads the catalog
-  and inventory, writing nothing to Twitch. Exit 1 lists the problems. Test-account tokens only.
+- Environment comes from Varlock: `.env.schema` (committed) declares every variable, values go in `.env.local`
+  (gitignored). `pnpm dev <command>` builds and runs the CLI with that environment (`varlock run`), e.g.
+  `pnpm dev doctor [--json] [--record file.jsonl]`, which checks the token and reads the catalog and inventory,
+  writing nothing to Twitch. `pnpm exec varlock load` validates the environment and masks secrets.
 - Use `pnpm exec`, not `npx`: `devEngines` refuses npm.
 
 ## Read before you change
@@ -63,9 +65,13 @@ pnpm 12, Vite+ (`vp`). Status: the pure core and the read-only Twitch client are
 - Never log out or revoke a token. Getting a new one needs a human in a browser.
 - Never auto-retry a claim. A lost answer may still have succeeded, so read state first.
 - Tokens, signed playlist URLs (`sig`, `token`, `hdnts`) and `Authorization` headers never reach logs, fixtures or commits.
+- Never read, print or copy `.env.local` or any `.env.*` file. To check the token is set, run
+  `pnpm exec varlock load`, which masks it. A new variable goes into `.env.schema` first, marked `@sensitive`
+  if it's a secret.
 
 ## Shipping
 
-- The default branch is `dev`. One worktree per task: `git worktree add .worktrees/<task> -b <type>/<task> dev`. Remove it after merge.
+- The default branch is `dev`. One worktree per task: `scripts/worktree.sh <type>/<task>` creates `.worktrees/<task>`
+  from `dev`, symlinks the main checkout's `.env.local` into it and installs. Remove it after merge.
 - PRs target `dev`. Squash merge. The PR title becomes the commit: `feat(scope): …`, `fix(scope): …`, `docs: …`.
 - The PR body gives the user-visible change first, then design notes with file paths, then the commands you ran and their output.

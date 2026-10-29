@@ -1,13 +1,17 @@
 # miner
 
 A headless Twitch drops miner for homelabs, built for other people too. TypeScript 7 on Node 26, Effect 4.1,
-pnpm 12, Vite+ (`vp`). Status: scaffold only. The CLI prints help and its version.
+pnpm 12, Vite+ (`vp`). Status: the pure core is built; nothing talks to Twitch yet.
 
 - `src/bin.ts`: the entry point. It wires Node services into the CLI.
 - `src/cli/`: Effect CLI commands. `miner.ts` is the root command.
 - `src/platform/` (not yet created): the IO shell, the only place besides `src/bin.ts` that may touch time,
   randomness, timers, network, env, console or Node built-ins.
-- Planned (proposal v0): `core` (pure state machine), `twitch` (the one Twitch seam), `store`, `twin` (simulator).
+- `src/core/`: the pure decision logic. `step(state, event, now)` in `step.ts` returns the next state and the
+  commands to run (`protocol.ts`). `rules.ts` holds Twitch's earn and claim rules with their sources, `plan.ts`
+  picks a drop and a channel. Contract for the runtime: persist the returned state before executing its
+  commands, and wake the core at `nextDeadline(state)`. `fixtures.ts` builds test data.
+- Planned (proposal v0): `twitch` (the one Twitch seam), `store`, `twin` (simulator).
 - `docs/decisions.md`: settled answers. Read it before proposing anything. Don't reopen a decision without new evidence.
 - `docs/research/`: dated research with sources. `docs/history/`: proposals and their critiques.
 

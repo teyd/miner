@@ -51,6 +51,8 @@ pnpm 12, Vite+ (`vp`). Status: the pure core and the read-only Twitch client are
   Use `Clock`, `Random`, `Effect.sleep`, `HttpClient`, `Config` and `Effect.log`. Simulator seeds must
   replay exactly. Don't widen the override list to make a file pass.
 - Core logic is pure: `(state, event, now)` in, `(state, commands)` out.
+- Comment only what the code can't say: a Twitch quirk, a source, a non-obvious invariant. No doc comment
+  that restates the name or type.
 - Decode Twitch JSON at the boundary with Schema. A `null` where data belongs is an error, never a default.
 - Import platform modules by path (`@effect/platform-node/NodeRuntime`), not from the package index.
 - Tests sit next to the code as `*.test.ts` and use `@effect/vitest` (`it.effect`, `TestClock`, `TestConsole`).

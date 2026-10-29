@@ -148,37 +148,10 @@
           "description": "How to rank campaigns of the same game, or all of them with games \"all\": \"ending-soonest\" by end time, \"least-slack\" by the least time to spare (time left minus minutes still needed), so fewer drops expire unfinished.",
           "default": "ending-soonest"
         },
-        "points": {
-          "type": "object",
-          "properties": {
-            "claimBonus": {
-              "type": "boolean",
-              "description": "Claim the bonus chest that appears about every 15 minutes of watching. Unset: the top-level value."
-            },
-            "watchStreaks": {
-              "type": "boolean",
-              "description": "Keep watch streaks: join a points channel early in each broadcast. Unset: the top-level value."
-            },
-            "raids": {
-              "type": "object",
-              "properties": {
-                "follow": {
-                  "type": "boolean",
-                  "description": "Follow a raid from the watched channel to collect the raid bonus. Unset: the top-level value."
-                },
-                "stayMinutes": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 60,
-                  "description": "Minutes to stay on the raided channel before returning to the priorities. Whether the bonus needs any stay is not yet verified. Unset: the top-level value."
-                }
-              },
-              "additionalProperties": false,
-              "description": "Raid behaviour for this goal."
-            }
-          },
-          "additionalProperties": false,
-          "description": "Channel-points behaviour while this goal is active. Unset fields inherit the top-level `points`."
+        "claimBonus": {
+          "type": "boolean",
+          "description": "Claim the bonus chest that appears about every 15 minutes of watching.",
+          "default": true
         }
       },
       "required": ["type", "games"],
@@ -249,37 +222,38 @@
             "channels": []
           }
         },
-        "points": {
+        "claimBonus": {
+          "type": "boolean",
+          "description": "Claim the bonus chest that appears about every 15 minutes of watching.",
+          "default": true
+        },
+        "watchStreaks": {
+          "type": "boolean",
+          "description": "Keep watch streaks: join a points channel early in each broadcast.",
+          "default": true
+        },
+        "raids": {
           "type": "object",
           "properties": {
-            "claimBonus": {
+            "follow": {
               "type": "boolean",
-              "description": "Claim the bonus chest that appears about every 15 minutes of watching. Unset: the top-level value."
+              "description": "Follow a raid to the raided channel to collect the raid bonus.",
+              "default": true
             },
-            "watchStreaks": {
-              "type": "boolean",
-              "description": "Keep watch streaks: join a points channel early in each broadcast. Unset: the top-level value."
-            },
-            "raids": {
-              "type": "object",
-              "properties": {
-                "follow": {
-                  "type": "boolean",
-                  "description": "Follow a raid from the watched channel to collect the raid bonus. Unset: the top-level value."
-                },
-                "stayMinutes": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 60,
-                  "description": "Minutes to stay on the raided channel before returning to the priorities. Whether the bonus needs any stay is not yet verified. Unset: the top-level value."
-                }
-              },
-              "additionalProperties": false,
-              "description": "Raid behaviour for this goal."
+            "stayMinutes": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 60,
+              "description": "Minutes to stay on the raided channel before returning to the priorities. Whether the bonus needs any stay is not yet verified.",
+              "default": 1
             }
           },
           "additionalProperties": false,
-          "description": "Channel-points behaviour while this goal is active. Unset fields inherit the top-level `points`."
+          "description": "What to do when a channel of this goal raids another channel.",
+          "default": {
+            "follow": true,
+            "stayMinutes": 1
+          }
         }
       },
       "required": ["type", "channels"],
@@ -323,7 +297,8 @@
               },
               "rewards": ["item", "badge", "emote"],
               "linkedOnly": true,
-              "order": "ending-soonest"
+              "order": "ending-soonest",
+              "claimBonus": true
             }
           ],
           "items": {
@@ -361,54 +336,6 @@
           "default": {
             "games": [],
             "channels": []
-          }
-        },
-        "points": {
-          "type": "object",
-          "properties": {
-            "claimBonus": {
-              "type": "boolean",
-              "description": "Claim the bonus chest that appears about every 15 minutes of watching.",
-              "default": true
-            },
-            "watchStreaks": {
-              "type": "boolean",
-              "description": "Keep watch streaks: join a points channel early in each broadcast.",
-              "default": true
-            },
-            "raids": {
-              "type": "object",
-              "properties": {
-                "follow": {
-                  "type": "boolean",
-                  "description": "Follow a raid from the watched channel to collect the raid bonus.",
-                  "default": true
-                },
-                "stayMinutes": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 60,
-                  "description": "Minutes to stay on the raided channel before returning to the priorities. Whether the bonus needs any stay is not yet verified.",
-                  "default": 1
-                }
-              },
-              "additionalProperties": false,
-              "description": "What to do when the watched channel raids another channel.",
-              "default": {
-                "follow": true,
-                "stayMinutes": 1
-              }
-            }
-          },
-          "additionalProperties": false,
-          "description": "Channel-points behaviour on whatever channel is watched. A goal can override it.",
-          "default": {
-            "claimBonus": true,
-            "watchStreaks": true,
-            "raids": {
-              "follow": true,
-              "stayMinutes": 1
-            }
           }
         },
         "streams": {

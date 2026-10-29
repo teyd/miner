@@ -84,7 +84,14 @@ completes, or the file changes.
       "note": "My games first",
       "games": [{ "name": "Rust" }, { "name": "The Cycle: Frontier", "rewards": ["item", "badge"] }]
     },
-    { "type": "points", "note": "Favourite streamers", "channels": ["oilrats", "riqqeloff"] },
+    {
+      "type": "points",
+      "note": "Favourite streamers",
+      "channels": ["oilrats", "riqqeloff"],
+      "claimBonus": true,
+      "watchStreaks": true,
+      "raids": { "follow": true, "stayMinutes": 1 }
+    },
     {
       "type": "drops",
       "note": "Everything else that pays out",
@@ -96,33 +103,28 @@ completes, or the file changes.
     }
   ],
   "exclude": { "channels": ["xqc"] },
-  "points": {
-    "claimBonus": true,
-    "watchStreaks": true,
-    "raids": { "follow": true, "stayMinutes": 1 }
-  },
   "streams": { "max": 1 }
 }
 ```
 
 ### Fields
 
-| Field                                      | Default                   | Meaning                                                                                             |
-| ------------------------------------------ | ------------------------- | --------------------------------------------------------------------------------------------------- |
-| `version`                                  | `1`                       | Format version; a future format bumps it and the miner migrates old files                           |
-| `priorities`                               | one drops goal on `"all"` | Goals, highest priority first                                                                       |
-| drops `games`                              | required                  | `"all"`, or `[{ "name", "rewards"? }]` in priority order. Names match Twitch's display name or slug |
-| drops `exclude.games` / `exclude.channels` | `[]`                      | Left out of this goal                                                                               |
-| drops `rewards`                            | all three                 | `item` (in-game, needs a linked account), `badge`, `emote`                                          |
-| drops `linkedOnly`                         | `true`                    | Items only for linked games. `false` collects items to claim after linking                          |
-| drops `order`                              | `ending-soonest`          | `least-slack`: least time to spare first (TDM's "lowest availability")                              |
-| points `channels`                          | required                  | Logins in priority order; the first live one wins                                                   |
-| goal `points`                              | top-level `points`        | Per-goal override of the points behaviour                                                           |
-| `exclude`                                  | `[]`                      | Never mined or watched, in any goal                                                                 |
-| `points.claimBonus`                        | `true`                    | Claim the chest every ~15 minutes, on whatever channel is watched                                   |
-| `points.watchStreaks`                      | `true`                    | Join points channels early in each broadcast                                                        |
-| `points.raids`                             | follow, stay 1 min        | Follow raids for the raid bonus, then return. Whether a stay is needed is unverified                |
-| `streams.max`                              | `1`                       | `2` lets the next active goal run beside the first; the cost to drops is unmeasured                 |
+| Field                 | Default                           | Meaning                                                                                             |
+| --------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `version`             | `1`                               | Format version; a future format bumps it and the miner migrates old files                           |
+| `priorities`          | one drops goal on `"all"`         | Goals, highest priority first                                                                       |
+| drops `games`         | required                          | `"all"`, or `[{ "name", "rewards"? }]` in priority order. Names match Twitch's display name or slug |
+| drops `rewards`       | all three                         | `item` (in-game, needs a linked account), `badge`, `emote`                                          |
+| drops `linkedOnly`    | `true`                            | Items only for linked games. `false` collects items to claim after linking                          |
+| drops `order`         | `ending-soonest`                  | `least-slack`: least time to spare first (TDM's "lowest availability")                              |
+| drops `claimBonus`    | `true`                            | Claim the points chest on the channel watched for drops                                             |
+| points `channels`     | required                          | Logins in priority order; the first live one wins                                                   |
+| points `claimBonus`   | `true`                            | Claim the chest every ~15 minutes                                                                   |
+| points `watchStreaks` | `true`                            | Join the channel early in each broadcast to keep its streak                                         |
+| points `raids`        | follow, stay 1 min                | Follow raids for the raid bonus, then return. Whether a stay is needed is unverified                |
+| goal `exclude`        | `{ "games": [], "channels": [] }` | Left out of this goal                                                                               |
+| `exclude`             | `{ "games": [], "channels": [] }` | Never mined or watched, in any goal                                                                 |
+| `streams.max`         | `1`                               | `2` lets the next active goal run beside the first; the cost to drops is unmeasured                 |
 
 ### Choices and why
 
@@ -135,6 +137,10 @@ completes, or the file changes.
 - **Names, never IDs.** `miner config explain` (next) resolves them against Twitch.
 - **No timing, quality or rate settings**: those are Twitch facts, not preferences (research 02).
 - **No follow-list option** (teyd): not worth an extra read.
+- **Points options live in the goal they affect** (teyd, 2026-10-29). No top-level block and no
+  inheritance: a reader sees every setting next to its goal, and each goal type offers only the
+  options that do something there. Raids and streaks only exist on points goals; on a drops goal
+  a raid follows a stream that just ended, which does nothing for the drop.
 - **Draft-07**: VS Code fully supports it; 2020-12 only partly. Fields that reuse a shared object
   are inlined so each keeps its own description (draft-07 ignores siblings of `$ref`).
 

@@ -75,7 +75,8 @@ Settled answers. Agents: don't reopen these without new evidence.
     until those channels are offline). Drops goals take `games` (a list or `"all"`), exclusions,
     reward types, `linkedOnly` and `order` (`ending-soonest` or `least-slack`). Points goals take
     channels in priority order, first live one wins. `streams.max` is 1 by default, 2 opt-in until
-    experiments E2/E3 measure the cost to drops. Bonus chests, watch streaks and raid following
-    (leave after `stayMinutes`) are on by default and configurable; predictions are not supported.
-    Chests are claimed on any watched channel. Lists hold objects only, no string shorthand. No
+    experiments E2/E3 measure the cost to drops. Points options sit in the goal they affect, with
+    no top-level block: drops goals take `claimBonus`; points goals take `claimBonus`,
+    `watchStreaks` and `raids` (follow, leave after `stayMinutes`). All on by default.
+    Predictions are not supported. Lists hold objects only, no string shorthand. No
     follow-list option. The file reloads while the miner runs.

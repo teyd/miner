@@ -67,62 +67,16 @@ const excludeField = Exclude.pipe(
 
 const CLAIM_BONUS = "Claim the bonus chest that appears about every 15 minutes of watching.";
 const WATCH_STREAKS = "Keep watch streaks: join a points channel early in each broadcast.";
-const FOLLOW = "Follow a raid from the watched channel to collect the raid bonus.";
+const FOLLOW = "Follow a raid to the raided channel to collect the raid bonus.";
 const STAY =
   "Minutes to stay on the raided channel before returning to the priorities. " +
   "Whether the bonus needs any stay is not yet verified.";
 const StayMinutes = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 60 }));
 
-/** A goal's override: every field unset inherits the top-level `points`. */
-const PointsOverride = Schema.Struct({
-  claimBonus: Schema.optionalKey(Schema.Boolean).annotate({
-    description: `${CLAIM_BONUS} Unset: the top-level value.`,
-  }),
-  watchStreaks: Schema.optionalKey(Schema.Boolean).annotate({
-    description: `${WATCH_STREAKS} Unset: the top-level value.`,
-  }),
-  raids: Schema.optionalKey(
-    Schema.Struct({
-      follow: Schema.optionalKey(Schema.Boolean).annotate({
-        description: `${FOLLOW} Unset: the top-level value.`,
-      }),
-      stayMinutes: Schema.optionalKey(StayMinutes).annotate({
-        description: `${STAY} Unset: the top-level value.`,
-      }),
-    }),
-  ).annotate({ description: "Raid behaviour for this goal." }),
-}).annotate({
-  description:
-    "Channel-points behaviour while this goal is active. Unset fields inherit the top-level `points`.",
-});
-
-/** The top-level points behaviour, with its defaults. */
-const Points = Schema.Struct({
-  claimBonus: Schema.Boolean.pipe(
-    Schema.annotate({ description: CLAIM_BONUS, default: true }),
-    Schema.withDecodingDefaultKey(Effect.succeed(true)),
-  ),
-  watchStreaks: Schema.Boolean.pipe(
-    Schema.annotate({ description: WATCH_STREAKS, default: true }),
-    Schema.withDecodingDefaultKey(Effect.succeed(true)),
-  ),
-  raids: Schema.Struct({
-    follow: Schema.Boolean.pipe(
-      Schema.annotate({ description: FOLLOW, default: true }),
-      Schema.withDecodingDefaultKey(Effect.succeed(true)),
-    ),
-    stayMinutes: StayMinutes.pipe(
-      Schema.annotate({ description: STAY, default: 1 }),
-      Schema.withDecodingDefaultKey(Effect.succeed(1)),
-    ),
-  }).pipe(
-    Schema.annotate({
-      description: "What to do when the watched channel raids another channel.",
-      default: { follow: true, stayMinutes: 1 },
-    }),
-    Schema.withDecodingDefaultKey(Effect.succeed({})),
-  ),
-});
+const claimBonus = Schema.Boolean.pipe(
+  Schema.annotate({ description: CLAIM_BONUS, default: true }),
+  Schema.withDecodingDefaultKey(Effect.succeed(true)),
+);
 
 const note = Schema.optionalKey(Schema.String).annotate({
   description: "Free text about this goal, for the people and agents reading the file.",
@@ -166,7 +120,7 @@ export const DropsGoal = Schema.Struct({
     }),
     Schema.withDecodingDefaultKey(Effect.succeed("ending-soonest" as const)),
   ),
-  points: Schema.optionalKey(PointsOverride),
+  claimBonus,
 }).annotate({
   identifier: "DropsGoal",
   description:
@@ -180,7 +134,27 @@ export const PointsGoal = Schema.Struct({
     description: "Channels to watch for points, highest priority first. The first live one wins.",
   }),
   exclude: excludeField,
-  points: Schema.optionalKey(PointsOverride),
+  claimBonus,
+  watchStreaks: Schema.Boolean.pipe(
+    Schema.annotate({ description: WATCH_STREAKS, default: true }),
+    Schema.withDecodingDefaultKey(Effect.succeed(true)),
+  ),
+  raids: Schema.Struct({
+    follow: Schema.Boolean.pipe(
+      Schema.annotate({ description: FOLLOW, default: true }),
+      Schema.withDecodingDefaultKey(Effect.succeed(true)),
+    ),
+    stayMinutes: StayMinutes.pipe(
+      Schema.annotate({ description: STAY, default: 1 }),
+      Schema.withDecodingDefaultKey(Effect.succeed(1)),
+    ),
+  }).pipe(
+    Schema.annotate({
+      description: "What to do when a channel of this goal raids another channel.",
+      default: { follow: true, stayMinutes: 1 },
+    }),
+    Schema.withDecodingDefaultKey(Effect.succeed({})),
+  ),
 }).annotate({
   identifier: "PointsGoal",
   description: "Collect channel points. Active while one of its channels is live.",
@@ -194,6 +168,7 @@ const DEFAULT_GOAL = {
   rewards: ["item", "badge", "emote"],
   linkedOnly: true,
   order: "ending-soonest",
+  claimBonus: true,
 } as const;
 
 export const Goal = Schema.Union([DropsGoal, PointsGoal]).annotate({ identifier: "Goal" });
@@ -225,14 +200,6 @@ export const Config = Schema.Struct({
     Schema.annotate({
       description: "Never mined or watched, in every goal.",
       default: { games: [], channels: [] },
-    }),
-    Schema.withDecodingDefaultKey(Effect.succeed({})),
-  ),
-  points: Points.pipe(
-    Schema.annotate({
-      description:
-        "Channel-points behaviour on whatever channel is watched. A goal can override it.",
-      default: { claimBonus: true, watchStreaks: true, raids: { follow: true, stayMinutes: 1 } },
     }),
     Schema.withDecodingDefaultKey(Effect.succeed({})),
   ),

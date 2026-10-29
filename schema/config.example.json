@@ -10,7 +10,10 @@
     {
       "type": "points",
       "note": "Favourite streamers",
-      "channels": ["oilrats", "riqqeloff"]
+      "channels": ["oilrats", "riqqeloff"],
+      "claimBonus": true,
+      "watchStreaks": true,
+      "raids": { "follow": true, "stayMinutes": 1 }
     },
     {
       "type": "drops",
@@ -23,10 +26,5 @@
     }
   ],
   "exclude": { "channels": ["xqc"] },
-  "points": {
-    "claimBonus": true,
-    "watchStreaks": true,
-    "raids": { "follow": true, "stayMinutes": 1 }
-  },
   "streams": { "max": 1 }
 }

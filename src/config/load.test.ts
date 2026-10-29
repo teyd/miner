@@ -163,22 +163,32 @@ describe("load", () => {
     ),
   );
 
-  it.effect("defaults the points behaviour at the top level only", () =>
+  it.effect("keeps points behaviour inside each goal, with defaults", () =>
     Effect.sync(() => {
       const exit = decode({
         priorities: [
-          { type: "points", channels: ["oilrats"], points: { raids: { follow: false } } },
+          { type: "points", channels: ["oilrats"], raids: { follow: false } },
+          { type: "drops", games: "all", claimBonus: false },
         ],
       });
       assert.isTrue(Exit.isSuccess(exit));
       if (Exit.isFailure(exit)) return;
-      assert.deepStrictEqual(exit.value.points, {
-        claimBonus: true,
-        watchStreaks: true,
-        raids: { follow: true, stayMinutes: 1 },
-      });
-      const goal = exit.value.priorities[0];
-      assert.deepStrictEqual(goal?.points, { raids: { follow: false } });
+      const [points, drops] = exit.value.priorities;
+      assert.deepStrictEqual(
+        points?.type === "points" ? [points.claimBonus, points.watchStreaks, points.raids] : [],
+        [true, true, { follow: false, stayMinutes: 1 }],
+      );
+      assert.isFalse(drops?.type === "drops" ? drops.claimBonus : true);
     }),
   );
+
+  it("refuses points-only options on a drops goal and the old top-level block", () => {
+    assert.deepStrictEqual(
+      problems({
+        priorities: [{ type: "drops", games: "all", raids: { follow: true } }],
+        points: { claimBonus: true },
+      }).map((p) => p.message),
+      ['unknown key "points"', 'unknown key "raids"'],
+    );
+  });
 });

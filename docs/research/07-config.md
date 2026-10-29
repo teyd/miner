@@ -95,7 +95,7 @@ completes, or the file changes.
       "order": "least-slack"
     }
   ],
-  "exclude": { "channels": ["channelidontwanttosupport"] },
+  "exclude": { "channels": ["xqc"] },
   "points": {
     "claimBonus": true,
     "watchStreaks": true,

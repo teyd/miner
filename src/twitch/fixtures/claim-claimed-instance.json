@@ -1,0 +1,28 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "claimDropRewards": {
+          "status": "ELIGIBLE_FOR_ALL",
+          "isUserAccountConnected": true,
+          "dropType": {
+            "id": "88481443-aced-11f1-8c11-0a58a9feac02",
+            "campaign": {
+              "id": "b2432aa9-50be-41e6-b61b-691ae0b44c89",
+              "detailsURL": "https://www.huntshowdown.com/twitchdrops",
+              "__typename": "DropCampaign"
+            },
+            "__typename": "TimeBasedDrop"
+          },
+          "__typename": "ClaimDropRewardsPayload"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 10,
+        "requestID": "redacted-request-id",
+        "operationName": "DropsPage_ClaimDropRewards"
+      }
+    }
+  ]
+}

@@ -65,7 +65,61 @@ export const Queries = {
     operationName: "DropCurrentSessionContext",
     sha256Hash: "4d06b702d25d652afb9ef835d2a550031f1cf762b193523a92166f40ea3d142b",
   },
+  /**
+   * The signed token usher wants before it serves a channel's playlists. just-mining's hash;
+   * TDM's `ed230aa1…` answers the same shape. Both verified live 2026-10-30 (research 02 §8).
+   */
+  PlaybackAccessToken: {
+    operationName: "PlaybackAccessToken",
+    sha256Hash: "3093517e37e4f4cb48906155bcd894150aef92617939236d2508f3375ab732ce",
+  },
 } as const satisfies Record<string, PersistedQuery>;
+
+/**
+ * Mutations. TDM calls this one `ClaimDrop`; its operation name is `DropsPage_ClaimDropRewards`,
+ * the same hash in TDM `constants.py:328-336` (2026-10-28) and in just-mining, which sent it live
+ * on 2026-10-28 (its fixtures `claim-*.json`). Never sent by a test or a probe of this repo.
+ */
+export const Mutations = {
+  ClaimDrop: {
+    operationName: "DropsPage_ClaimDropRewards",
+    sha256Hash: "a455deea71bdc9015b78eb49f4acfbce8baa7ccbedd28e549bb025bd0f751930",
+  },
+} as const satisfies Record<string, PersistedQuery>;
+
+/**
+ * `claimDropRewards.status` values. Twitch answered `ELIGIBLE_FOR_ALL` live both for a fresh
+ * claim and for an instance claimed already (just-mining fixtures, 2026-10-28); TDM also accepts
+ * `DROP_INSTANCE_ALREADY_CLAIMED` as done (`inventory.py:207-213`). Anything else is unknown.
+ */
+export const CLAIM_GRANTED = "ELIGIBLE_FOR_ALL";
+export const CLAIM_ALREADY = "DROP_INSTANCE_ALREADY_CLAIMED";
+
+/** Variables for a live stream's token, as TDM (`constants.py:388-399`) and just-mining send. */
+export const livePlayback = (login: string) => ({
+  isLive: true,
+  login,
+  isVod: false,
+  vodID: "",
+  playerType: "site",
+  platform: "web",
+});
+
+/** Usher serves a live channel's master playlist at `<USHER_URL>/<login>.m3u8?sig=…&token=…`. */
+export const USHER_URL = "https://usher.ttvnw.net/api/channel/hls";
+
+/**
+ * Headers of every playlist and segment request, so the CDN sees the client the API saw. The CDN
+ * answers 403 to an `Origin` with a path (just-mining `clients.ts`, verified live 2026-10-28). With
+ * these, usher, the media playlist and segment `HEAD`s answered 200 live on 2026-10-30.
+ */
+export const playbackHeaders = (deviceId: string): Record<string, string> => ({
+  "User-Agent": USER_AGENT,
+  "Client-Id": CLIENT_ID,
+  "X-Device-Id": deviceId,
+  Referer: "https://www.twitch.tv/",
+  Origin: "https://www.twitch.tv",
+});
 
 export type QueryName = keyof typeof Queries;
 

@@ -1,0 +1,24 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "streamPlaybackAccessToken": {
+          "value": "{\"adblock\":false,\"authorization\":{\"forbidden\":false,\"reason\":\"\"},\"blackout_enabled\":false,\"channel\":\"oilrats\",\"channel_id\":129405323,\"device_id\":\"redacted-device-id\",\"expires\":1793371904,\"platform\":\"web\",\"player_type\":\"site\",\"subscriber\":false,\"user_id\":123456789,\"user_ip\":\"192.0.2.1\",\"version\":3}",
+          "signature": "0000000000000000000000000000000000000000",
+          "authorization": {
+            "isForbidden": false,
+            "forbiddenReasonCode": "NONE",
+            "__typename": "PlaybackAccessTokenAuthorization"
+          },
+          "__typename": "PlaybackAccessToken"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 37,
+        "requestID": "redacted-request-id",
+        "operationName": "PlaybackAccessToken"
+      }
+    }
+  ]
+}

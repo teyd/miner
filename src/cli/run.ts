@@ -7,18 +7,17 @@ import { load } from "../config/load.ts";
 import { Gzip } from "../platform/Gzip.ts";
 import { run as runtime } from "../runtime/run.ts";
 import { unmapped } from "../runtime/settings.ts";
+import { LIVE_STATE, liveLayer } from "../runtime/live.ts";
 import { SHADOW_STATE, shadowLayer } from "../runtime/shadow.ts";
+import { lockDataDir } from "../platform/lock.ts";
 import { Connector } from "../twitch/PubSub.ts";
 import { Credentials } from "../twitch/Twitch.ts";
 import { ConfigInvalid } from "./config.ts";
 
-/** `run` without `--shadow`: nothing can watch or claim yet. Exit code 2, like a usage error. */
-export class RunRefused extends Schema.TaggedError<RunRefused, { readonly brand: unique symbol }>()(
-  "RunRefused",
-  {},
-) {}
-
-/** The run stopped: no token, or the state file can't be read or written. Exit code 1. */
+/**
+ * The run stopped: no token, another miner on the data directory, or the state file can't be
+ * read or written. Exit code 1.
+ */
 export class RunFailed extends Schema.TaggedError<RunFailed, { readonly brand: unique symbol }>()(
   "RunFailed",
   { reason: Schema.String },
@@ -35,13 +34,6 @@ export const run = Command.make(
     ),
   },
   Effect.fn(function* ({ shadow }) {
-    if (!shadow) {
-      yield* Console.log(
-        "miner run needs --shadow for now: watching and claiming are not built yet, so a run " +
-          "can only read Twitch and record what it would do.",
-      );
-      return yield* new RunRefused();
-    }
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const dir = path.resolve(yield* dataDir);
@@ -53,10 +45,11 @@ export const run = Command.make(
     }
     for (const note of unmapped(loaded.config)) yield* Effect.logWarning(`config: ${note}`);
     yield* fs.makeDirectory(dir, { recursive: true });
+    const state = path.join(dir, shadow ? SHADOW_STATE : LIVE_STATE);
     yield* Effect.logInfo(
-      `shadow run: state in ${path.join(dir, SHADOW_STATE)}, recordings in ${path.join(dir, "recordings")}`,
+      `${shadow ? "shadow" : "live"} run: state in ${state}, recordings in ${path.join(dir, "recordings")}`,
     );
-    const services = shadowLayer(dir).pipe(
+    const services = (shadow ? shadowLayer(dir) : liveLayer(dir)).pipe(
       Layer.provide(
         Layer.mergeAll(
           FetchHttpClient.layer,
@@ -68,7 +61,16 @@ export const run = Command.make(
     );
     return yield* runtime(loaded.config).pipe(
       Effect.provide(services),
+      // Shadow runs count as the one live miner too (AGENTS.md), so both modes take the lock.
+      (effect) => Effect.andThen(lockDataDir(dir), effect),
+      Effect.scoped,
       Effect.catchTags({
+        DataDirLocked: (e) =>
+          Effect.fail(
+            new RunFailed({
+              reason: `another miner (pid ${e.pid}) runs on ${dir}; stop it first (lock: ${e.path})`,
+            }),
+          ),
         AuthRejected: (e) => Effect.fail(new RunFailed({ reason: e.reason })),
         StateUnreadable: (e) =>
           Effect.fail(
@@ -89,10 +91,12 @@ export const run = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Run the miner. Only --shadow exists yet: real token, real reads, real planning; watch and " +
-      "claim are recorded to $DATA_DIR/recordings, never sent.",
+    "Run the miner: watch and claim drops for the account of $TOKEN, with state in " +
+      "$DATA_DIR/state.json. With --shadow, real reads and real planning, but watch and claim " +
+      "are recorded to $DATA_DIR/recordings, never sent. One miner per data directory.",
   ),
   Command.withExamples([
+    { command: "miner run", description: "Mine drops" },
     { command: "miner run --shadow", description: "A read-only run that records what it would do" },
   ]),
 );

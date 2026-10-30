@@ -1,26 +1,24 @@
-import { Config, Context, Effect, Layer, Random, Redacted, Schedule, Schema } from "effect";
+import { Config, Context, Effect, Layer, Random, Redacted, Schedule } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
-import type { Campaign, Channel, ChannelId, DropId, Millis, Progress } from "../core/model.ts";
-import { AuthRejected, TwitchDrift, TwitchUnavailable, type TwitchError } from "./errors.ts";
+import type { Campaign, Channel, ChannelId, DropId, Progress } from "../core/model.ts";
+import { AuthRejected, TwitchDrift, type TwitchError } from "./errors.ts";
+import { decode, makeGql, single, type Decodable } from "./gql.ts";
+
+export { REQUEST_TIMEOUT } from "./gql.ts";
 import {
   CLIENT_ID,
   GQL_BATCH_LIMIT,
-  GQL_URL,
   Queries,
-  TRANSIENT_GQL_ERRORS,
-  USER_AGENT,
   VALIDATE_URL,
   dropsDirectory,
   type PersistedQuery,
 } from "./identity.ts";
 import { Journal } from "./journal.ts";
-import { redact } from "./redact.ts";
 import {
   CampaignDetails,
   CurrentDrop,
   Dashboard,
   Directory,
-  Envelope,
   Inventory,
   StreamInfo,
   Validation,
@@ -104,16 +102,8 @@ export const deviceIdOf = Effect.gen(function* () {
   return id;
 });
 
-/**
- * A request with no answer this long fails as `TwitchUnavailable`, so a hung connection can't hang
- * the runtime. With its three retries one request (a batch of up to 35 reads) gives up within
- * 4 × 30 s + 14 s = 134 s, inside the simulator's 5 min bound on a command (plan 09 §4 s3). The
- * wait for a pacing turn counts too.
- */
-export const REQUEST_TIMEOUT: Millis = 30_000;
-
 /** Reads retry three times, 2, 4 and 8 s apart, and only when the failure may pass. */
-const retryReads = <A, E extends TwitchError>(effect: Effect.Effect<A, E>) =>
+export const retryReads = <A, E extends TwitchError>(effect: Effect.Effect<A, E>) =>
   effect.pipe(
     Effect.retry({
       schedule: Schedule.exponential("2 seconds"),
@@ -127,129 +117,26 @@ const make = (
   credentials: Credentials["Service"],
   journal: Journal["Service"],
 ): Twitch["Service"] => {
-  const oauth = () => `OAuth ${Redacted.value(credentials.token)}`;
-
-  const send = (
-    operation: string,
-    request: HttpClientRequest.HttpClientRequest,
-    variables: unknown,
-  ) =>
-    Effect.gen(function* () {
-      const [response, text] = yield* http.execute(request).pipe(
-        // Keep the raw text when it isn't JSON (an HTML error page): that is the answer to record.
-        Effect.flatMap((r) =>
-          Effect.map(r.text.pipe(Effect.orElseSucceed(() => "")), (t) => [r, t] as const),
-        ),
-        Effect.mapError((e) => new TwitchUnavailable({ operation, detail: e.message })),
-        Effect.timeoutOrElse({
-          duration: REQUEST_TIMEOUT,
-          orElse: () =>
-            Effect.fail(
-              new TwitchUnavailable({ operation, detail: `no answer in ${REQUEST_TIMEOUT} ms` }),
-            ),
-        }),
-      );
-      const body: unknown = yield* Effect.try(() => JSON.parse(text) as unknown).pipe(
-        Effect.orElseSucceed(() => text),
-      );
-      yield* journal.record({ operation, variables, status: response.status, body });
-      if (response.status === 401)
-        return yield* new AuthRejected({ reason: `${operation} answered 401` });
-      if (response.status === 429 || response.status >= 500) {
-        return yield* new TwitchUnavailable({ operation, detail: `HTTP ${response.status}` });
-      }
-      if (response.status !== 200) {
-        return yield* new TwitchDrift({ operation, detail: `unexpected HTTP ${response.status}` });
-      }
-      return body;
-    });
-
-  const decode =
-    <S extends Schema.Top & { readonly DecodingServices: never }>(operation: string, schema: S) =>
-    (input: unknown) =>
-      Schema.decodeUnknownEffect(schema)(input).pipe(
-        // Schema messages quote the input they rejected, so they pass through `redact` too.
-        Effect.mapError((e) => new TwitchDrift({ operation, detail: String(redact(e.message)) })),
-      );
+  const { oauth, send, request } = makeGql(http, credentials, journal);
 
   /** One persisted query, sent in batches of up to 35 variable sets; results keep their order. */
-  const gql = <S extends Schema.Top & { readonly DecodingServices: never }>(
+  const gql = <S extends Decodable>(
     query: PersistedQuery,
     variables: ReadonlyArray<unknown>,
     schema: S,
   ): Effect.Effect<ReadonlyArray<S["Type"]>, TwitchError> => {
-    const operation = query.operationName;
-    const chunk = (batch: ReadonlyArray<unknown>) =>
-      Effect.gen(function* () {
-        const request = HttpClientRequest.post(GQL_URL).pipe(
-          HttpClientRequest.setHeaders({
-            "Client-Id": CLIENT_ID,
-            "User-Agent": USER_AGENT,
-            "X-Device-Id": credentials.deviceId,
-            Authorization: oauth(),
-          }),
-          HttpClientRequest.bodyJsonUnsafe(
-            batch.map((v) => ({
-              operationName: operation,
-              variables: v,
-              extensions: { persistedQuery: { version: 1, sha256Hash: query.sha256Hash } },
-            })),
-          ),
-        );
-        const body = yield* send(operation, request, batch);
-        const envelopes = yield* decode(operation, Schema.Array(Envelope))(body);
-        if (envelopes.length !== batch.length) {
-          const detail = `${batch.length} requests got ${envelopes.length} answers`;
-          return yield* new TwitchDrift({ operation, detail });
-        }
-        return yield* Effect.forEach(envelopes, (envelope) =>
-          Effect.gen(function* () {
-            const errors = envelope.errors ?? [];
-            const transient = errors.find((e) => TRANSIENT_GQL_ERRORS.includes(e.message));
-            if (transient !== undefined) {
-              return yield* new TwitchUnavailable({ operation, detail: transient.message });
-            }
-            if (envelope.data === undefined || envelope.data === null) {
-              const detail = errors.map((e) => e.message).join("; ") || "no data";
-              return yield* new TwitchDrift({ operation, detail });
-            }
-            // Twitch may null one field and say why in `errors`: keep that reason with the drift.
-            return yield* decode(
-              operation,
-              schema,
-            )(envelope.data).pipe(
-              Effect.mapError((e) =>
-                errors.length === 0
-                  ? e
-                  : new TwitchDrift({
-                      operation,
-                      detail: `${e.detail} (Twitch: ${errors.map((x) => x.message).join("; ")})`,
-                    }),
-              ),
-            );
-          }),
-        );
-      }).pipe(retryReads);
     const batches: Array<ReadonlyArray<unknown>> = [];
     for (let i = 0; i < variables.length; i += GQL_BATCH_LIMIT) {
       batches.push(variables.slice(i, i + GQL_BATCH_LIMIT));
     }
-    return Effect.forEach(batches, chunk).pipe(Effect.map((results) => results.flat()));
+    return Effect.forEach(batches, (batch) => request(query, batch, schema).pipe(retryReads)).pipe(
+      Effect.map((results) => results.flat()),
+    );
   };
 
-  const one = <S extends Schema.Top & { readonly DecodingServices: never }>(
-    query: PersistedQuery,
-    variables: unknown,
-    schema: S,
-  ) =>
+  const one = <S extends Decodable>(query: PersistedQuery, variables: unknown, schema: S) =>
     gql(query, [variables], schema).pipe(
-      Effect.flatMap((results) =>
-        results[0] === undefined
-          ? Effect.fail(
-              new TwitchDrift({ operation: query.operationName, detail: "empty response" }),
-            )
-          : Effect.succeed(results[0]),
-      ),
+      Effect.flatMap((results) => single(query.operationName, results)),
     );
 
   const validate = Effect.gen(function* () {

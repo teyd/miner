@@ -113,8 +113,16 @@ export const execute = (
       case "Subscribe":
         return yield* Effect.as(actuator.subscribe(command.channelIds), none);
 
-      case "Watch":
-        return yield* Effect.as(actuator.watch(command.channelId), none);
+      case "Watch": {
+        const channelId = command.channelId;
+        const login = (yield* Ref.get(memory)).logins.get(channelId);
+        // The core plans only channels a read returned, and every read leaves its logins here.
+        if (login === undefined) {
+          yield* Effect.logError(`runtime: no login known for channel ${channelId}, not watching`);
+          return [Event.WatchFailed({ channelId, reason: "refused" })];
+        }
+        return yield* Effect.as(actuator.watch(channelId, login), none);
+      }
 
       case "StopWatching":
         return yield* Effect.as(actuator.stopWatching, none);

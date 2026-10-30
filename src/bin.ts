@@ -23,10 +23,6 @@ miner.pipe(
       Effect.sync(() => {
         process.exitCode = 1;
       }),
-    RunRefused: () =>
-      Effect.sync(() => {
-        process.exitCode = 2;
-      }),
     RunFailed: () =>
       Effect.sync(() => {
         process.exitCode = 1;

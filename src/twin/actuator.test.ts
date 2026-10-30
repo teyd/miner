@@ -55,7 +55,7 @@ const errorOf = (exit: Exit.Exit<unknown, { readonly _tag: string }>) =>
 /** Watches channel 0 for three ticks, a minute of credit, completing the 1-minute drop. */
 const completeDrop = (a: Actuator["Service"]) =>
   Effect.gen(function* () {
-    yield* a.watch(ch(0));
+    yield* a.watch(ch(0), "chan0");
     for (let i = 0; i < 3; i++) {
       yield* Effect.sleep("20 seconds");
       yield* a.watchTick(ch(0));
@@ -69,8 +69,8 @@ describe("twin actuator", () => {
       const twin = makeTwin(buildWorld(scenario()));
       const exit = yield* act(twin, (a) =>
         Effect.gen(function* () {
-          yield* a.watch(ch(0));
-          yield* a.watch(ch(1));
+          yield* a.watch(ch(0), "chan0");
+          yield* a.watch(ch(1), "chan1");
           return yield* Effect.exit(a.watchTick(ch(0)));
         }),
       );
@@ -92,7 +92,7 @@ describe("twin actuator", () => {
       const twin = makeTwin(buildWorld(scenario()));
       const exit = yield* act(twin, (a) =>
         Effect.gen(function* () {
-          yield* a.watch(ch(0));
+          yield* a.watch(ch(0), "chan0");
           for (let i = 0; i < 2; i++) {
             yield* Effect.sleep("20 seconds");
             yield* a.watchTick(ch(0));
@@ -101,7 +101,7 @@ describe("twin actuator", () => {
           // The third tick leaves, then the switch lands while it is in flight.
           const third = yield* Effect.forkChild(a.watchTick(ch(0)));
           yield* Effect.yieldNow;
-          yield* a.watch(ch(1));
+          yield* a.watch(ch(1), "chan1");
           return yield* Fiber.await(third);
         }),
       );
@@ -116,9 +116,13 @@ describe("twin actuator", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(SIM_EPOCH);
       const twin = makeTwin(buildWorld(scenario([], true)));
-      const refused = yield* act(twin, (a) => Effect.andThen(a.watch(ch(0)), a.watchTick(ch(0))));
+      const refused = yield* act(twin, (a) =>
+        Effect.andThen(a.watch(ch(0), "chan0"), a.watchTick(ch(0))),
+      );
       assert.deepStrictEqual(errorOf(refused), ["WatchFailure:refused"]);
-      const offline = yield* act(twin, (a) => Effect.andThen(a.watch(ch(1)), a.watchTick(ch(1))));
+      const offline = yield* act(twin, (a) =>
+        Effect.andThen(a.watch(ch(1), "chan1"), a.watchTick(ch(1))),
+      );
       assert.deepStrictEqual(errorOf(offline), ["WatchFailure:offline"]);
     }),
   );

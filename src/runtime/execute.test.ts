@@ -33,6 +33,8 @@ const scenario = (faults: ReadonlyArray<Fault> = []): Scenario => ({
 });
 
 const ch0 = "ch0" as ChannelId;
+/** What a directory read leaves behind: playback goes by login. */
+const knowsCh0: Memory = { ...emptyMemory, logins: new Map([[ch0, "chan0"]]) };
 const dropId = "c0-d0" as DropId;
 const claimCommand = Command.Claim({
   campaignId: "c0" as CampaignId,
@@ -160,13 +162,17 @@ describe("execute", () => {
   it.effect("opens, ticks and stops the watch, and subscribes, through the actuator", () =>
     Effect.gen(function* () {
       const twin = makeTwin(buildWorld(scenario()));
-      const { events } = yield* run(twin, [
-        Command.Subscribe({ channelIds: [ch0] }),
-        Command.WatchTick({ channelId: ch0 }),
-        Command.Watch({ channelId: ch0 }),
-        Command.WatchTick({ channelId: ch0 }),
-        Command.StopWatching(),
-      ]);
+      const { events } = yield* run(
+        twin,
+        [
+          Command.Subscribe({ channelIds: [ch0] }),
+          Command.WatchTick({ channelId: ch0 }),
+          Command.Watch({ channelId: ch0 }),
+          Command.WatchTick({ channelId: ch0 }),
+          Command.StopWatching(),
+        ],
+        knowsCh0,
+      );
       assert.deepStrictEqual(tags(events), [[], ["WatchFailed"], [], ["WatchTicked"], []]);
       assert.deepStrictEqual([...twin.world.subscriptions], [ch0]);
       assert.isUndefined(twin.world.session);
@@ -176,11 +182,23 @@ describe("execute", () => {
   it.effect("reports a tick after a revoked token as AuthFailed", () =>
     Effect.gen(function* () {
       const twin = makeTwin(buildWorld(scenario([{ kind: "revoke-token", atMinute: 0 }])));
-      const { events } = yield* run(twin, [
-        Command.Watch({ channelId: ch0 }),
-        Command.WatchTick({ channelId: ch0 }),
-      ]);
+      const { events } = yield* run(
+        twin,
+        [Command.Watch({ channelId: ch0 }), Command.WatchTick({ channelId: ch0 })],
+        knowsCh0,
+      );
       assert.deepStrictEqual(tags(events), [[], ["AuthFailed"]]);
+    }),
+  );
+
+  it.effect("refuses to watch a channel whose login no read returned", () =>
+    Effect.gen(function* () {
+      const twin = makeTwin(buildWorld(scenario()));
+      const { events } = yield* run(twin, [Command.Watch({ channelId: ch0 })]);
+      assert.deepStrictEqual(tags(events), [["WatchFailed"]]);
+      const [failed] = events[0]!;
+      assert.strictEqual(failed?._tag === "WatchFailed" ? failed.reason : "", "refused");
+      assert.isUndefined(twin.world.session);
     }),
   );
 

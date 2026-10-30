@@ -15,11 +15,13 @@ import {
   T0,
 } from "./fixtures.ts";
 import { HOUR, MINUTE, type Campaign, type Channel, type Millis } from "./model.ts";
-import { Event, readKey, type Command } from "./protocol.ts";
+import { Command, Event, readKey } from "./protocol.ts";
 import {
   CATALOG_RETRY,
   CLAIM_RECHECK,
-  DISCOVERY_SETTLE,
+  READ_GAP,
+  READ_WORST_CASE,
+  discoverySettle,
   initial,
   nextDeadline,
   ONLINE_DELAY,
@@ -106,7 +108,7 @@ describe("start-up", () => {
     d.send(Event.TokenValid());
     const issued = reads(d.send(Event.CatalogRead({ campaigns: [low, top] })));
     assert.deepStrictEqual(issued.map(readKey), ["directory:top", "directory:low"]);
-    assert.strictEqual(nextDeadline(d.state), T0 + DISCOVERY_SETTLE);
+    assert.strictEqual(nextDeadline(d.state), T0 + discoverySettle(issued));
     // The lower-ranked game answers first: nothing starts on half the picture.
     assert.deepStrictEqual(
       tags(d.send(read([channel("b", { gameId: "low" })], "directory:low"))),
@@ -119,7 +121,27 @@ describe("start-up", () => {
     assert.isUndefined(d.state.discovery);
   });
 
-  it("stops waiting for a read that never answers after DISCOVERY_SETTLE", () => {
+  it("reads the catalog again when a wanted drop opens its window, to find its channels", () => {
+    const later = campaign("later", {
+      drops: [
+        drop("soon", { startsAt: T0 + 20 * MINUTE }),
+        drop("much-later", { startsAt: T0 + 2 * HOUR }),
+      ],
+    });
+    const d = driver();
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    // Nothing earns yet, so no channel is read for it.
+    assert.deepStrictEqual(reads(d.send(Event.CatalogRead({ campaigns: [later] }))), []);
+    assert.strictEqual(d.state.deadlines.catalog, T0 + 20 * MINUTE);
+    assert.include(tags(d.send(Event.Tick(), T0 + 20 * MINUTE)), "ReadCatalog");
+    const issued = reads(d.send(Event.CatalogRead({ campaigns: [later] })));
+    assert.deepStrictEqual(issued.map(readKey), ["directory:game-1"]);
+    // The next opening is past the regular interval: the regular read finds it.
+    assert.strictEqual(d.state.deadlines.catalog, T0 + 20 * MINUTE + HOUR);
+  });
+
+  it("stops waiting for a read that failed", () => {
     const top = campaign("top", { game: game("top") });
     const low = campaign("low", { game: game("low") });
     const d = driver();
@@ -127,12 +149,44 @@ describe("start-up", () => {
     d.send(Event.TokenValid());
     d.send(Event.CatalogRead({ campaigns: [low, top] }));
     d.send(read([channel("b", { gameId: "low" })], "directory:low"), T0 + 1_000);
-    // A failed read sends no answer at all; the bound ends the wait.
+    assert.strictEqual(watchedChannel(d.state), "discovering");
+    const commands = d.send(Event.ChannelsReadFailed({ read: "directory:top" }), T0 + 135_000);
+    assert.include(tags(commands), "Watch");
+    assert.strictEqual(watchedChannel(d.state), "b");
+    assert.isUndefined(d.state.discovery);
+  });
+
+  it("stops waiting for a read that never answers once no read can still be running", () => {
+    const top = campaign("top", { game: game("top") });
+    const low = campaign("low", { game: game("low") });
+    const d = driver();
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    const issued = reads(d.send(Event.CatalogRead({ campaigns: [low, top] })));
+    d.send(read([channel("b", { gameId: "low" })], "directory:low"), T0 + 1_000);
+    const settle = discoverySettle(issued);
+    // A read that fails every attempt answers only after its worst case: still waiting then.
+    assert.isAbove(settle, READ_WORST_CASE);
     const watches = (commands: ReadonlyArray<Command>) =>
       tags(commands).filter((t) => t === "Watch");
-    assert.deepStrictEqual(watches(d.send(Event.Tick(), T0 + DISCOVERY_SETTLE - 1)), []);
-    assert.deepStrictEqual(watches(d.send(Event.Tick(), T0 + DISCOVERY_SETTLE)), ["Watch"]);
+    assert.deepStrictEqual(watches(d.send(Event.Tick(), T0 + READ_WORST_CASE)), []);
+    assert.deepStrictEqual(watches(d.send(Event.Tick(), T0 + settle - 1)), []);
+    assert.deepStrictEqual(watches(d.send(Event.Tick(), T0 + settle)), ["Watch"]);
     assert.strictEqual(watchedChannel(d.state), "b");
+  });
+
+  it("waits longer for more reads: every attempt queues at the pacer", () => {
+    const directories = (n: number) =>
+      Array.from({ length: n }, (_, i) => Command.ReadDirectory({ gameId: game(`g${i}`).id }));
+    assert.strictEqual(
+      discoverySettle(directories(50)) - discoverySettle(directories(10)),
+      40 * 4 * READ_GAP,
+    );
+    const many = Command.ReadChannels({
+      channelIds: Array.from({ length: 100 }, (_, i) => chid(`c${i}`)),
+    });
+    // 100 channels are three stream-info requests, one after the other.
+    assert.isAbove(discoverySettle([many]), 3 * READ_WORST_CASE);
   });
 
   it("keeps a working watch through a catalog reread, and switches once it has every answer", () => {
@@ -234,6 +288,22 @@ describe("progress", () => {
     settle(d);
     assert.strictEqual(nextDeadline(d.state), T0 + WATCH_INTERVAL);
     assert.deepStrictEqual(tags(d.send(Event.Tick(), T0 + WATCH_INTERVAL)), ["WatchTick"]);
+  });
+
+  it("never ticks a watch the same step stops (a drop's window closing at a tick)", () => {
+    const c = campaign("c", { drops: [drop("short", { endsAt: T0 + 10 * MINUTE })] });
+    const d = startedWatching([c], [channel("a")]);
+    settle(d);
+    const due = d.state.deadlines.tick!;
+    assert.isAtMost(due, T0 + 10 * MINUTE);
+    let at = due;
+    while (at < T0 + 10 * MINUTE) {
+      assert.include(tags(d.send(Event.Tick(), at)), "WatchTick");
+      at = d.state.deadlines.tick!;
+    }
+    const commands = tags(d.send(Event.Tick(), at));
+    assert.include(commands, "StopWatching");
+    assert.notInclude(commands, "WatchTick");
   });
 
   it("asks which drop is credited once its estimate runs 15 minutes ahead of Twitch", () => {

@@ -31,6 +31,7 @@ const BOUNDS = {
   atMinute: [0, 1440],
   faults: [0, 8],
   durationSeconds: [1, 1800],
+  windowStart: [0, 600],
 } as const;
 
 type Bound = keyof typeof BOUNDS;
@@ -101,6 +102,13 @@ const DropSpec = Schema.Struct({
   /** Index of an earlier drop in the same campaign that must be claimed first. */
   after: Schema.NullOr(int("game")),
   benefit: Schema.Literals(BENEFITS),
+  /**
+   * The drop's own window, from minutes after its campaign starts, cut to the campaign's.
+   * Omitted: the campaign's window. Twitch gives each drop its own `startAt`/`endAt`.
+   */
+  window: Schema.optionalKey(
+    Schema.Struct({ startMinute: int("windowStart"), durationMinutes: int("durationMinutes") }),
+  ),
 });
 
 const CampaignSpec = Schema.Struct({
@@ -220,6 +228,17 @@ const dropArbitrary = (requiredMinutes: fc.Arbitrary<number>) =>
     benefit: fc.constantFrom(...BENEFITS),
   });
 
+/** A random drop, one in three with a window of its own. */
+const windowedDropArbitrary = fc
+  .tuple(
+    dropArbitrary(intArb("requiredMinutes")),
+    fc.option(
+      fc.record({ startMinute: intArb("windowStart"), durationMinutes: intArb("durationMinutes") }),
+      { nil: null, freq: 2 },
+    ),
+  )
+  .map(([drop, window]) => (window === null ? drop : { ...drop, window }));
+
 const changeArbitrary = (atMinute: fc.Arbitrary<number>) =>
   fc.record({ atMinute, to: fc.constantFrom(...CHANGES) });
 
@@ -256,7 +275,7 @@ const randomScenario: fc.Arbitrary<Scenario> = fc.record({
       linked: fc.boolean(),
       creditsUnlinked: fc.boolean(),
       allowList: listArb(intArb("index"), "short"),
-      drops: listArb(dropArbitrary(intArb("requiredMinutes")), "drops"),
+      drops: listArb(windowedDropArbitrary, "drops"),
     }),
     "campaigns",
   ),
@@ -292,49 +311,132 @@ const opportunityArbitrary = fc.record({
   goal: intArb("short"),
 });
 
+/**
+ * A second campaign that competes with campaign 0, on game 0 or 1 (never the one campaign 0 is
+ * on, unless that is the special game) with its own live channel, channel 1. Its drops are
+ * random, so it may have more or less slack than campaign 0, or be unable to finish; half the
+ * time it ends within 4 hours of campaign 0, where `ending-soonest` and `least-slack` disagree
+ * most. As `wanted`, a goal (campaign 0's, or another) is bent to want it; as a decoy, the goal
+ * excludes its game, or it is an unlinked item campaign for a goal with `linkedOnly`. Without a
+ * rival, random worlds almost never make the planner choose, and planted ranking bugs went
+ * uncaught (review of decision 28, P2-3).
+ */
+const rivalArbitrary = fc.option(
+  fc.record({
+    game: fc.integer({ min: 0, max: 1 }),
+    startMinute: fc.integer({ min: BOUNDS.startMinute[0], max: 0 }),
+    durationMinutes: fc.integer({ min: 180, max: BOUNDS.durationMinutes[1] }),
+    /** Minutes between its end and campaign 0's, or `null` for its own duration. */
+    endsNear: fc.option(fc.integer({ min: -240, max: 240 }), { nil: null }),
+    // The first drop earns from the start; later ones may open later.
+    drops: fc
+      .tuple(
+        dropArbitrary(intArb("requiredMinutes")),
+        fc.array(windowedDropArbitrary, { maxLength: BOUNDS.drops[1] - 1 }),
+      )
+      .map(([first, rest]) => [first, ...rest]),
+    viewers: intArb("viewers"),
+    changes: listArb(changeArbitrary(fc.integer({ min: 60, max: BOUNDS.atMinute[1] })), "changes"),
+    /** The goal it is for, modulo the number of goals; `null`: campaign 0's goal. */
+    goal: fc.option(intArb("short"), { nil: null }),
+    role: fc.constantFrom("wanted", "wanted", "excluded", "unlinked"),
+  }),
+  { nil: null, freq: 3 },
+);
+
 const REWARD_OF = { BADGE: "badge", EMOTE: "emote", DIRECT_ENTITLEMENT: "item" } as const;
 
 /**
  * Generates scenarios within the Schema's bounds; fast-check shrinks them towards fewer things.
- * Campaign 0 on channel 0 is always an opportunity one of the goals wants. The rest is random,
+ * Campaign 0 on channel 0 is always an opportunity one of the goals wants; three times in four
+ * campaign 1 on channel 1 is a rival (`rivalArbitrary`). The rest is random,
  * so faults, newer campaigns, other goals and schedule changes may still stand in its way.
  */
 export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
-  .tuple(randomScenario, opportunityArbitrary)
-  .map(([s, o]): Scenario => {
+  .tuple(randomScenario, opportunityArbitrary, rivalArbitrary)
+  .map(([s, o, r]): Scenario => {
     const { game, startMinute, durationMinutes, drops, viewers, changes } = o;
     const campaign = { game, startMinute, durationMinutes, linked: true, allowList: [], drops };
-    const channel = {
-      game,
-      viewers,
+    const live = (g: number, v: number, c: typeof changes) => ({
+      game: g,
+      viewers: v,
       dropsEnabled: true,
       refuses: false,
       liveAtStart: true,
-      changes,
+      changes: c,
+    });
+    const rivalGame = r === null ? 0 : r.game === game ? 1 - r.game : r.game;
+    const rivalEnd =
+      r === null || r.endsNear === null ? undefined : startMinute + durationMinutes + r.endsNear;
+    const rivals =
+      r === null
+        ? []
+        : [
+            {
+              campaign: {
+                game: rivalGame,
+                startMinute: r.startMinute,
+                durationMinutes:
+                  rivalEnd === undefined
+                    ? r.durationMinutes
+                    : Math.min(BOUNDS.durationMinutes[1], Math.max(180, rivalEnd - r.startMinute)),
+                linked: r.role !== "unlinked",
+                allowList: [],
+                drops:
+                  r.role === "unlinked"
+                    ? r.drops.map((d) => ({ ...d, benefit: "DIRECT_ENTITLEMENT" as const }))
+                    : r.drops,
+              },
+              channel: live(rivalGame, r.viewers, r.changes),
+            },
+          ];
+    const fixed = 1 + rivals.length;
+    const channels = [
+      live(game, viewers, changes),
+      ...rivals.map((x) => x.channel),
+      ...s.channels.slice(0, BOUNDS.channels[1] - fixed),
+    ];
+    const n = s.settings.goals.length;
+    const forRival = (g: GoalSpec): GoalSpec => {
+      if (r === null) return g;
+      switch (r.role) {
+        case "wanted":
+          return wanting(g, rivalGame, r.drops, channels.length, 1);
+        case "excluded":
+          return g.games === null
+            ? { ...g, excludeGames: [...new Set([rivalGame, ...g.excludeGames])].slice(0, 2) }
+            : { ...g, games: g.games.filter((x) => x.game !== rivalGame) };
+        case "unlinked":
+          return { ...g, linkedOnly: true };
+      }
     };
-    const channels = [channel, ...s.channels.slice(0, BOUNDS.channels[1] - 1)];
-    const index = o.goal % s.settings.goals.length;
-    const goals = s.settings.goals.map((g, i) =>
-      i === index ? wanting(g, game, drops, channels.length) : g,
-    );
+    // The rival first: campaign 0's goal is bent last, so it always wants campaign 0.
+    const goals = s.settings.goals
+      .map((g, i) => (r !== null && i === (r.goal ?? o.goal) % n ? forRival(g) : g))
+      .map((g, i) => (i === o.goal % n ? wanting(g, game, drops, channels.length, 0) : g));
     return {
       ...s,
       settings: { goals },
-      campaigns: [campaign, ...s.campaigns.slice(0, BOUNDS.campaigns[1] - 1)],
+      campaigns: [
+        campaign,
+        ...rivals.map((x) => x.campaign),
+        ...s.campaigns.slice(0, BOUNDS.campaigns[1] - fixed),
+      ],
       channels,
     };
   });
 
 /**
- * Bends a goal just enough to want the first drop of a linked campaign of `game` on channel 0:
- * the game listed (last, so the list keeps its order) and not excluded, the drop's reward wanted,
- * channel 0 not excluded.
+ * Bends a goal just enough to want the first drop of a linked campaign of `game` on channel
+ * `channel`: the game listed (last, so the list keeps its order) and not excluded, the drop's
+ * reward wanted, the channel not excluded.
  */
 const wanting = (
   goal: GoalSpec,
   game: number,
   drops: ReadonlyArray<{ readonly benefit: (typeof BENEFITS)[number] }>,
   channels: number,
+  channel: number,
 ): GoalSpec => {
   const reward = REWARD_OF[drops[0]!.benefit];
   const withReward = (rewards: ReadonlyArray<(typeof REWARDS)[number]>) =>
@@ -354,6 +456,6 @@ const wanting = (
     games,
     rewards: own === null ? withReward(goal.rewards) : goal.rewards,
     excludeGames: goal.excludeGames.filter((g) => g !== game),
-    exclude: goal.exclude.filter((k) => k % channels !== 0),
+    exclude: goal.exclude.filter((k) => k % channels !== channel),
   };
 };

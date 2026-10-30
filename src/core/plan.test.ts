@@ -15,7 +15,7 @@ import {
   settings,
   T0,
 } from "./fixtures.ts";
-import { plan, SLACK_HYSTERESIS, type PlanInput } from "./plan.ts";
+import { compareNumbers, minable, plan, SLACK_HYSTERESIS, type PlanInput } from "./plan.ts";
 
 const input = (
   campaigns: ReadonlyArray<Campaign>,
@@ -177,5 +177,93 @@ describe("order", () => {
       targetOf(input([a, b], ch, { settings: slack, watching: cid("b"), progress: earned })),
       "a/a1@x",
     );
+  });
+});
+
+describe("feasibility and actionable drops", () => {
+  const slack = settings({ order: "least-slack" });
+
+  it("ranks least-slack by drops that earn now, not by one whose window opens later", () => {
+    // Only a0 earns now, with hours to spare; a1's tight window opens in 2 h. b1 can't wait.
+    const a = campaign("a", {
+      drops: [
+        drop("a0", { requiredMinutes: 60 }),
+        drop("a1", { startsAt: T0 + 2 * HOUR, endsAt: T0 + 3 * HOUR, requiredMinutes: 55 }),
+      ],
+    });
+    const b = campaign("b", {
+      endsAt: T0 + 2 * HOUR,
+      drops: [drop("b1", { endsAt: T0 + 2 * HOUR, requiredMinutes: 100 })],
+    });
+    const ch = [channel("x")];
+    assert.strictEqual(targetOf(input([a, b], ch, { settings: slack })), "b/b1@x");
+    // Once a1 earns, it is the emergency.
+    const later = T0 + 2 * HOUR + 5 * MINUTE;
+    const c = campaign("c", { drops: [drop("c1", { requiredMinutes: 60 })] });
+    assert.strictEqual(targetOf(input([a, c], ch, { settings: slack, now: later })), "a/a1@x");
+  });
+
+  it("works on a lower goal that can finish before a higher goal that can't", () => {
+    // Goal 1's campaign ends in 6 h and needs 12; goal 2's needs 30 minutes of the same 6 h.
+    const doomed = campaign("doomed", {
+      game: game("ga"),
+      endsAt: T0 + 6 * HOUR,
+      drops: [drop("d", { endsAt: T0 + 6 * HOUR, requiredMinutes: 720 })],
+    });
+    const fine = campaign("fine", {
+      game: game("gb"),
+      endsAt: T0 + 6 * HOUR,
+      drops: [drop("f", { endsAt: T0 + 6 * HOUR, requiredMinutes: 30 })],
+    });
+    const goals = [goal({ games: games(["ga"]) }), goal({ games: games(["gb"]) })];
+    const channels = [channel("x", { gameId: "ga" }), channel("y", { gameId: "gb" })];
+    for (const order of ["ending-soonest", "least-slack"] as const) {
+      const ordered = { goals: goals.map((g) => ({ ...g, order })) };
+      assert.strictEqual(
+        targetOf(input([doomed, fine], channels, { settings: ordered })),
+        "fine/f@y",
+        order,
+      );
+      // With nothing that can finish on a live channel, the doomed one still beats idling.
+      const offline = [channels[0]!, channel("y", "offline")];
+      assert.strictEqual(
+        targetOf(input([doomed, fine], offline, { settings: ordered })),
+        "doomed/d@x",
+        order,
+      );
+    }
+  });
+
+  it("prefers a drop of the campaign that can still finish", () => {
+    const c = campaign("c", {
+      drops: [
+        drop("short-window", { endsAt: T0 + 10 * MINUTE, requiredMinutes: 20 }),
+        drop("long", { requiredMinutes: 90 }),
+      ],
+    });
+    assert.strictEqual(targetOf(input([c], [channel("x")])), "c/long@x");
+  });
+
+  it("orders every pick totally, whatever order the catalog lists them in", () => {
+    const hopeless = (id: string, endsAt: number) =>
+      campaign(id, { endsAt, drops: [drop(`${id}-d`, { endsAt, requiredMinutes: 600 })] });
+    const campaigns = [
+      hopeless("h1", T0 + HOUR),
+      hopeless("h2", T0 + HOUR),
+      hopeless("h3", T0 + 2 * HOUR),
+      campaign("ok"),
+    ];
+    for (const order of ["ending-soonest", "least-slack"] as const) {
+      const orders = [
+        campaigns,
+        campaigns.toReversed(),
+        [campaigns[2]!, campaigns[0]!, campaigns[3]!, campaigns[1]!],
+      ]
+        .map((cs) => minable(input(cs, [], { settings: settings({ order }) })))
+        .map((picks) => picks.map((p) => p.campaign.id).join(","));
+      assert.deepStrictEqual(orders, Array(3).fill("ok,h1,h2,h3"), order);
+    }
+    assert.strictEqual(compareNumbers(Infinity, Infinity), 0);
+    assert.strictEqual(compareNumbers(1, Infinity), -1);
   });
 });

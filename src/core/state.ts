@@ -11,6 +11,7 @@ import {
   type Settings,
 } from "./model.ts";
 import type { NoTarget } from "./plan.ts";
+import type { ChannelRead } from "./protocol.ts";
 
 /** Twitch's minute-watched cadence; TDM and just-mining both tick every 20 s. */
 export const WATCH_INTERVAL: Millis = 20_000;
@@ -39,15 +40,36 @@ export const WATCHLIST_LIMIT = 100;
  */
 export const SUBSCRIBE_SETTLE: Millis = 10_000;
 /**
+ * One request's worst case: four attempts of 30 s (`REQUEST_TIMEOUT`) and 2 + 4 + 8 s between
+ * them (`retryReads`). `Twitch.test.ts` checks the constants here against the client's.
+ */
+export const READ_WORST_CASE: Millis = 4 * 30_000 + 14_000;
+/** Request starts are paced this far apart (`REQUEST_GAP`, `pace.ts`), retries included. */
+export const READ_GAP: Millis = 300;
+/** Channels per stream-info request (`GQL_BATCH_LIMIT`); a longer read sends several in turn. */
+export const READ_BATCH = 35;
+/** Slack for the answer to reach the core after the read gives up. */
+const SETTLE_MARGIN: Millis = 5_000;
+
+/** Requests one channel read sends, one after the other. */
+export const requestsOf = (read: ChannelRead): number =>
+  read._tag === "ReadDirectory" ? 1 : Math.max(1, Math.ceil(read.channelIds.length / READ_BATCH));
+
+/**
  * A catalog read starts one directory read per game and one read of allow-listed channels, and
  * their answers arrive one by one. Planning on the first answer watched a channel of a
  * lower-ranked game and switched 5 s later when a better game's answer came in (live run,
- * 2026-10-30). So no watch starts or switches until every read has answered, or this long after
- * the catalog read: a read that fails for good sends no answer at all (`execute.ts`). It covers
- * a read's retries (2 + 4 + 8 s, `retryReads`) and 40 games' reads started 300 ms apart; it
- * only runs out when a read fails.
+ * 2026-10-30). So no watch starts or switches until every read has answered or failed
+ * (`ChannelsRead`, `ChannelsReadFailed`), or this long after the catalog read: each read's
+ * requests one after the other at their worst, while every attempt of every request waits its
+ * turn at the pacer. It is a backstop for an answer lost to a bug, never the normal way out, and
+ * the runtime logs it when it runs out (`narrate.ts`).
  */
-export const DISCOVERY_SETTLE: Millis = 60_000;
+export const discoverySettle = (reads: ReadonlyArray<ChannelRead>): Millis => {
+  const requests = reads.map(requestsOf);
+  const attempts = 4 * requests.reduce((a, b) => a + b, 0);
+  return attempts * READ_GAP + Math.max(0, ...requests) * READ_WORST_CASE + SETTLE_MARGIN;
+};
 
 export interface Watching {
   readonly _tag: "Watching";
@@ -67,7 +89,7 @@ export interface Watching {
 export type Idle =
   | NoTarget
   | "starting"
-  /** A catalog read's channel reads are still out: see `DISCOVERY_SETTLE`. */
+  /** A catalog read's channel reads are still out: see `discoverySettle`. */
   | "discovering"
   | "needs-login"
   /** The catalog is `null` or unreachable: discovery is broken, which is not "nothing to mine". */

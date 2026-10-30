@@ -59,19 +59,27 @@ export const CatalogStatus = Schema.Literals(["unknown", "ok", "unavailable"]).a
     "Twitch answered `null` or the read failed after retries. Not the same as nothing to mine.",
 });
 
-export const IdleReason = Schema.Literals([
+/** The idle reasons this miner writes. */
+export const IDLE_REASONS = [
   "starting",
   "discovering",
   "needs-login",
   "catalog-unavailable",
   "nothing-to-mine",
   "no-live-channel",
-]).annotate({
+] as const;
+
+/**
+ * Any string decodes: a newer miner may add a reason without a new format version, and a reader
+ * that refused the file would report a healthy miner as not running.
+ */
+export const IdleReason = Schema.Union([Schema.Literals(IDLE_REASONS), Schema.String]).annotate({
   description:
     '"starting": no catalog yet. "discovering": waiting for the channel reads of a new catalog ' +
-    'read, at most a minute. "needs-login": parked on a rejected token. "catalog-unavailable": ' +
+    'read to answer or fail. "needs-login": parked on a rejected token. "catalog-unavailable": ' +
     'discovery is broken. "nothing-to-mine": no campaign the config asks for has a drop left to ' +
-    'earn. "no-live-channel": there is one, but no eligible channel streams it now.',
+    'earn. "no-live-channel": there is one, but no eligible channel streams it now. A newer ' +
+    "miner may add reasons within version 1: read any other string as idle for that reason.",
 });
 
 const Watching = Schema.Struct({

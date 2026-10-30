@@ -4,7 +4,7 @@ import { Config } from "../config/schema.ts";
 import { campaign, channel, chid } from "../core/fixtures.ts";
 import { DEFAULT_GOAL, type Campaign, type GameId } from "../core/model.ts";
 import { isEligible } from "../core/rules.ts";
-import { toSettings, unmapped } from "./settings.ts";
+import { toSettings, unmapped, unresolvedGames } from "./settings.ts";
 
 const config = (input: unknown) => Schema.decodeUnknownSync(Config)(input);
 const c = campaign("c");
@@ -16,7 +16,10 @@ const rust: Campaign = {
 describe("toSettings", () => {
   it("maps the default config to the default goal", () => {
     assert.deepStrictEqual(toSettings(config({}), [c], []), { goals: [DEFAULT_GOAL] });
-    assert.deepStrictEqual(unmapped(config({})), []);
+    assert.deepStrictEqual(
+      unmapped(config({ priorities: [{ type: "drops", games: "all", claimBonus: false }] })),
+      [],
+    );
   });
 
   it("resolves games by name or slug, case-insensitively, in priority order", () => {
@@ -107,7 +110,35 @@ describe("toSettings", () => {
     });
     assert.deepStrictEqual(unmapped(file), [
       "points goals are not supported yet and are skipped",
+      "claimBonus is not supported yet: channel point bonuses are not claimed",
       "streams.max 2 is not supported yet: one stream is watched",
     ]);
+  });
+
+  it("names claimBonus, on by default, as not followed yet", () => {
+    assert.deepStrictEqual(unmapped(config({})), [
+      "claimBonus is not supported yet: channel point bonuses are not claimed",
+    ]);
+  });
+});
+
+describe("unresolvedGames", () => {
+  it("names a listed game the catalog doesn't hold, with the closest match when it looks like a typo", () => {
+    const file = config({
+      priorities: [
+        {
+          type: "drops",
+          games: [{ name: "Rsut" }, { name: "rust" }, { name: "Not On Twitch" }],
+          exclude: { games: ["Rusty"] },
+        },
+      ],
+      exclude: { games: ["Elden Ring"] },
+    });
+    assert.deepStrictEqual(unresolvedGames(file, [c, rust]), [
+      'game "Rsut" matches no game with an active campaign; did you mean "Rust"?',
+      'game "Not On Twitch" matches no game with an active campaign',
+      'excluded game "Rusty" matches no game; did you mean "Rust"?',
+    ]);
+    assert.deepStrictEqual(unresolvedGames(config({}), [c, rust]), []);
   });
 });

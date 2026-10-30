@@ -42,6 +42,11 @@ export type Event = Data.TaggedEnum<{
     /** `readKey` of the `ReadDirectory` or `ReadChannels` this answers. */
     readonly read: string;
   };
+  /**
+   * A `ReadDirectory` or `ReadChannels` gave up after its retries, or had nothing to ask for (no
+   * slug or login known). Its channels stay as they were; discovery stops waiting for it.
+   */
+  ChannelsReadFailed: { readonly read: string };
   /** PubSub `stream-up`. Stream data lags, so the core re-reads the channel later. */
   StreamUp: { readonly channelId: ChannelId };
   StreamDown: { readonly channelId: ChannelId };

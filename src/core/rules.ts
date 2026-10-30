@@ -124,7 +124,8 @@ export const isClaimable = (p: Progress, now: Millis): boolean =>
  * Time a drop has to spare: until it ends, minus the minutes it (and its unclaimed precondition
  * chain) still needs. Research 07's "least slack"; TDM's `availability` is the ratio of the two
  * (`inventory.py:282-286`), which ranks a long drop with hours to spare like a short one with
- * minutes to spare, so the config documents the difference instead.
+ * minutes to spare, so the config documents the difference instead. For a drop whose window
+ * opens later it is only a window fit: the planner ranks by drops that earn now (`plan.ts`).
  */
 export const slackOf = (
   campaign: Campaign,

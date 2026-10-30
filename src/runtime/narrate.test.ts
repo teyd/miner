@@ -1,7 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import { campaign, channel, chid, did, drop, progress, settings } from "../core/fixtures.ts";
 import { initial, type State } from "../core/state.ts";
-import { describeWatch, progressLines } from "./narrate.ts";
+import { Event } from "../core/protocol.ts";
+import { describeWatch, discoveryExpired, progressLines } from "./narrate.ts";
 
 const c = campaign("c1", { drops: [drop("c1-d1", { name: "Hoodie", requiredMinutes: 15 })] });
 const base: State = {
@@ -53,5 +54,24 @@ describe("narrate", () => {
       "claimed Game game-1: Hoodie",
     ]);
     assert.deepStrictEqual(progressLines(at6, at6), []);
+  });
+});
+
+describe("discoveryExpired", () => {
+  const out: State = { ...base, discovery: { pending: ["directory:g1"], until: 1_000 } };
+  const done: State = { ...base, discovery: undefined };
+
+  it("warns when discovery stops waiting with reads still out", () => {
+    assert.strictEqual(
+      discoveryExpired(out, done, Event.Tick(), 1_000),
+      "discovery: planning without 1 channel read(s) still out: directory:g1",
+    );
+  });
+
+  it("stays quiet when the last read answered, or a restart cleared it", () => {
+    const answered: State = { ...base, discovery: { pending: [], until: 1_000 } };
+    assert.isUndefined(discoveryExpired(answered, done, Event.Tick(), 1_000));
+    assert.isUndefined(discoveryExpired(out, done, Event.ChannelsReadFailed({ read: "x" }), 999));
+    assert.isUndefined(discoveryExpired(out, done, Event.Started(), 5_000));
   });
 });

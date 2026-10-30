@@ -1,4 +1,5 @@
 import { Predicate } from "effect";
+import { DEFAULT_GOAL } from "../core/model.ts";
 import type { State } from "../core/state.ts";
 
 /**
@@ -39,19 +40,34 @@ const revive = (value: unknown): unknown => {
 
 /**
  * Bumped whenever `State` changes shape. A file with another version is refused rather than
- * guessed at: a misread claim intent could send a claim twice. 2: `deadlines.subscribe`.
- * 3: `discovery`, and `settings` as a list of drops goals.
+ * guessed at: a misread claim intent could send a claim twice, so only a version with a
+ * written migration is read. 2: `deadlines.subscribe`. 3: `discovery`, and `settings` as a list
+ * of drops goals (2 migrates).
  */
 export const STATE_VERSION = 3;
 
 export const encodeState = (state: State): string =>
   `{"state":${canonical(state)},"version":${STATE_VERSION}}`;
 
-/** Throws on text that isn't a saved state of this version. */
+/**
+ * Version 2 to 3. Only `settings` changed shape, and the runtime maps them from `config.json`
+ * before every step, so any valid value does: the default goal. Discovery starts empty, as after
+ * a restart. Catalog, progress, claims and deadlines are kept as they are.
+ */
+const fromVersion2 = (state: Record<string, unknown>): Record<string, unknown> => ({
+  ...state,
+  settings: { goals: [DEFAULT_GOAL] },
+  discovery: undefined,
+});
+
+/** Throws on text that isn't a saved state of this version, or of one it migrates (2). */
 export const decodeState = (text: string): State => {
   const parsed: unknown = JSON.parse(text);
   if (!Predicate.isObject(parsed) || !("version" in parsed) || !("state" in parsed)) {
     throw new Error("not a saved miner state");
+  }
+  if (parsed.version === 2 && Predicate.isObject(parsed.state)) {
+    return revive(fromVersion2(parsed.state as Record<string, unknown>)) as State;
   }
   if (parsed.version !== STATE_VERSION) {
     throw new Error(`state version ${String(parsed.version)}, this miner reads ${STATE_VERSION}`);

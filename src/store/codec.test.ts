@@ -11,7 +11,7 @@ import {
   settings,
   T0,
 } from "../core/fixtures.ts";
-import { MINUTE } from "../core/model.ts";
+import { DEFAULT_GOAL, MINUTE } from "../core/model.ts";
 import { initial, type State } from "../core/state.ts";
 import { canonical, decodeState, encodeState } from "./codec.ts";
 
@@ -84,12 +84,35 @@ describe("codec", () => {
   });
 });
 
+/**
+ * A state file as version 2 wrote it (the live miner's before 2026-10-30): settings as a game
+ * list and flags, no `discovery`.
+ */
+const version2 = (): string => {
+  const { discovery: _, settings: __, ...rest } = populated;
+  const settings = { badgesAndEmotes: true, excludeChannels: ["x"], games: ["game-1"] };
+  return `{"state":${canonical({ ...rest, settings })},"version":2}`;
+};
+
 describe("decodeState", () => {
+  it("migrates version 2, keeping progress, claims, catalog and deadlines", () => {
+    const decoded = decodeState(version2());
+    assert.deepStrictEqual(decoded.progress, populated.progress);
+    assert.deepStrictEqual(decoded.claims, populated.claims);
+    assert.deepStrictEqual(decoded.catalog, populated.catalog);
+    assert.deepStrictEqual(decoded.deadlines, populated.deadlines);
+    assert.deepStrictEqual(decoded.watch, populated.watch);
+    assert.isUndefined(decoded.discovery);
+    assert.deepStrictEqual(decoded.settings, { goals: [DEFAULT_GOAL] });
+    // Saved again, it is a version 3 file that reads back the same.
+    assert.deepStrictEqual(decodeState(encodeState(decoded)), decoded);
+  });
+
   it("refuses another version and text that isn't a state", () => {
     const text = encodeState(populated);
     assert.match(text, /"version":3}$/);
-    // Version 2 had no `discovery`.
-    assert.throws(() => decodeState(text.replace('"version":3', '"version":2')), /version 2/);
+    assert.throws(() => decodeState(text.replace('"version":3', '"version":1')), /version 1/);
+    assert.throws(() => decodeState(text.replace('"version":3', '"version":4')), /version 4/);
     assert.throws(() => decodeState(canonical(populated)), /not a saved miner state/);
     assert.throws(() => decodeState("{"));
   });

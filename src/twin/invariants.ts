@@ -13,13 +13,11 @@ import {
   type Campaign,
   type CampaignId,
   type ChannelId,
-  type Drop,
-  type DropId,
-  type DropsGoal,
   type Millis,
 } from "../core/model.ts";
 import type { Command, Event } from "../core/protocol.ts";
 import { canonical, decodeState, encodeState } from "../store/codec.ts";
+import { allowedPicks, goalDrops } from "./oracle.ts";
 import { SIM_EPOCH, type Violation } from "./scenario.ts";
 import { TWIN_TIMEOUT, type Activity } from "./twin.ts";
 import {
@@ -126,6 +124,8 @@ export interface Checker {
       }
     | undefined;
   readonly lastCatalogReadAt: Millis | undefined;
+  /** The last catalog or channel read that gave up: the core's picture missed its answer. */
+  readonly lastReadFailureAt: Millis | undefined;
   /** The core's last `Subscribe` since a restart. */
   readonly lastSubscribe:
     | { readonly at: Millis; readonly channelIds: ReadonlyArray<ChannelId> }
@@ -152,40 +152,8 @@ export const initialChecker: Checker = {
   lastSaved: undefined,
   lastWatch: undefined,
   lastCatalogReadAt: undefined,
+  lastReadFailureAt: undefined,
   lastSubscribe: undefined,
-};
-
-/**
- * The drops a goal asks for, judged independently of the core's rules (research 07, decision
- * 28): a reward of a type the goal lists for the game (an item only when linked, unless
- * `linkedOnly` is off), and every drop such a drop waits on. `claimed` drops are done.
- */
-const goalDrops = (
-  goal: DropsGoal,
-  campaign: Campaign,
-  claimed: (id: DropId) => boolean,
-): ReadonlyArray<Drop> => {
-  const game = campaign.game.id;
-  const rewards =
-    goal.games === "all"
-      ? goal.excludeGames.includes(game)
-        ? []
-        : goal.rewards
-      : (goal.games.find((g) => g.id === game)?.rewards ?? []);
-  const asks = (drop: Drop) =>
-    drop.benefits.some((b) => {
-      const type =
-        b.distribution === "BADGE" ? "badge" : b.distribution === "EMOTE" ? "emote" : "item";
-      return rewards.includes(type) && (type !== "item" || campaign.linked || !goal.linkedOnly);
-    });
-  const out = new Set<DropId>();
-  const visit = (drop: Drop | undefined) => {
-    if (drop === undefined || out.has(drop.id) || claimed(drop.id)) return;
-    out.add(drop.id);
-    for (const id of drop.preconditions) visit(campaign.drops.find((d) => d.id === id));
-  };
-  for (const drop of campaign.drops) if (asks(drop)) visit(drop);
-  return campaign.drops.filter((d) => out.has(d.id));
 };
 
 /** Some goal that may watch `channelId` asks for one of these credited drops. */
@@ -453,6 +421,9 @@ const checkCommands = (
   }
 
   if (event._tag === "CatalogRead") c = { ...c, lastCatalogReadAt: o.now };
+  if (event._tag === "ChannelsReadFailed" || event._tag === "CatalogUnavailable") {
+    c = { ...c, lastReadFailureAt: o.now };
+  }
 
   for (const command of commands) {
     switch (command._tag) {
@@ -460,6 +431,8 @@ const checkCommands = (
         const flip = flipWithoutCause(c, o, step, command.channelId);
         if (flip !== undefined) fail("WatchFlip", flip);
         const campaignId = after.watch._tag === "Watching" ? after.watch.campaignId : undefined;
+        const wrong = wrongPick(o, step, campaignId);
+        if (wrong !== undefined) fail("WrongPick", wrong);
         c = {
           ...c,
           watching: command.channelId,
@@ -563,7 +536,9 @@ const flipWithoutCause = (
   }
   const world = o.world;
   const from = last.at - NEWS_LAG;
-  const faulted = faultWindows(world).some((w) => w.from <= o.now && w.to >= from);
+  // Only a read that gave up leaves the core with a picture it can't complete; a fault its
+  // retries absorbed changed nothing it knows (a 5 s blip excused the startup flip, review P2-2).
+  const faulted = c.lastReadFailureAt !== undefined && c.lastReadFailureAt >= from;
   const old = last.channelId;
   const oldChanged =
     changedBetween(world, old, from, o.now) ||
@@ -583,6 +558,39 @@ const flipWithoutCause = (
     );
   if (faulted || oldChanged || oldDone || news) return undefined;
   return `${old} at +${minutesSince(last.at)}m, then ${next} with no cause`;
+};
+
+/**
+ * 7: a new watch is for a campaign decision 28 ranks first among what the core knew (`oracle.ts`,
+ * written apart from the planner). It judges the ranking, not the data: the core's catalog,
+ * progress and channels are the input, so a fault or a discovery still running can't excuse a
+ * wrong pick. Returns the violation's detail.
+ */
+const wrongPick = (
+  o: Observation,
+  step: StepRecord,
+  campaignId: CampaignId | undefined,
+): string | undefined => {
+  const { before, after, event } = step;
+  if (campaignId === undefined || after.catalog === undefined) return undefined;
+  const watched = [
+    ...(before.watch._tag === "Watching" ? [before.watch.campaignId] : []),
+    ...((event._tag === "DropProgress" || event._tag === "CurrentDropRead") &&
+    event.dropId !== undefined
+      ? after.catalog.filter((x) => x.drops.some((d) => d.id === event.dropId)).map((x) => x.id)
+      : []),
+  ];
+  const view = {
+    catalog: after.catalog,
+    progress: after.progress,
+    channels: after.channels,
+    avoid: after.avoid,
+    now: o.now,
+  };
+  const allowed = allowedPicks(o.world.settings, view, watched);
+  if (allowed.has(campaignId)) return undefined;
+  const instead = allowed.size === 0 ? "no goal wants anything" : [...allowed].join(", ");
+  return `watching for ${campaignId}, decision 28 ranks first: ${instead}`;
 };
 
 /**

@@ -98,6 +98,17 @@ const unique = <A>(xs: ReadonlyArray<A>): ReadonlyArray<A> => [...new Set(xs)];
 
 export const channelIdOf = (index: number) => `ch${index}` as ChannelId;
 
+/** A drop's own window, cut to its campaign's and at least a minute long. */
+const windowOf = (
+  window: { readonly startMinute: number; readonly durationMinutes: number } | undefined,
+  startsAt: Millis,
+  endsAt: Millis,
+): { readonly startsAt: Millis; readonly endsAt: Millis } => {
+  if (window === undefined) return { startsAt, endsAt };
+  const from = Math.min(startsAt + window.startMinute * MINUTE, endsAt - MINUTE);
+  return { startsAt: from, endsAt: Math.min(endsAt, from + window.durationMinutes * MINUTE) };
+};
+
 export const buildWorld = (scenario: Scenario): World => {
   const n = scenario.channels.length;
   const channels = scenario.channels.map((spec, i): ChannelModel => {
@@ -141,8 +152,7 @@ export const buildWorld = (scenario: Scenario): World => {
         id: dropId(j),
         name: `Drop ${i}.${j}`,
         requiredMinutes: d.requiredMinutes,
-        startsAt,
-        endsAt,
+        ...windowOf(d.window, startsAt, endsAt),
         preconditions: j > 0 && d.after !== null ? [dropId(d.after % j)] : [],
         benefits: [
           {

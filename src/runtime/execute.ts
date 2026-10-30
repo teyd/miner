@@ -31,6 +31,10 @@ const none: ReadonlyArray<Event> = [];
 const onReadError = (error: TwitchError): ReadonlyArray<Event> =>
   error._tag === "AuthRejected" ? [Event.AuthFailed()] : none;
 
+/** A channel read that gave up still answers, so discovery stops waiting for it. */
+const onChannelsError = (error: TwitchError, read: string): ReadonlyArray<Event> =>
+  error._tag === "AuthRejected" ? [Event.AuthFailed()] : [Event.ChannelsReadFailed({ read })];
+
 const remember = (memory: Ref.Ref<Memory>, f: (m: Memory) => Memory) => Ref.update(memory, f);
 
 export const execute = (
@@ -80,8 +84,10 @@ export const execute = (
         );
 
       case "ReadDirectory": {
+        const read = readKey(command);
+        const failed = [Event.ChannelsReadFailed({ read })];
         const slug = (yield* Ref.get(memory)).slugs.get(command.gameId);
-        if (slug === undefined) return none;
+        if (slug === undefined) return failed;
         return yield* twitch.directory(slug, DIRECTORY_LIMIT).pipe(
           Effect.tap((channels) =>
             remember(memory, (m) => ({
@@ -89,18 +95,19 @@ export const execute = (
               logins: new Map([...m.logins, ...channels.map((c) => [c.id, c.login] as const)]),
             })),
           ),
-          Effect.map((channels) => [Event.ChannelsRead({ channels, read: readKey(command) })]),
-          Effect.catch((e) => Effect.succeed(onReadError(e))),
+          Effect.map((channels) => [Event.ChannelsRead({ channels, read })]),
+          Effect.catch((e) => Effect.succeed(onChannelsError(e, read))),
         );
       }
 
       case "ReadChannels": {
+        const read = readKey(command);
         const logins = (yield* Ref.get(memory)).logins;
         const known = command.channelIds.flatMap((id) => logins.get(id) ?? []);
-        if (known.length === 0) return none;
+        if (known.length === 0) return [Event.ChannelsReadFailed({ read })];
         return yield* twitch.streams(known).pipe(
-          Effect.map((channels) => [Event.ChannelsRead({ channels, read: readKey(command) })]),
-          Effect.catch((e) => Effect.succeed(onReadError(e))),
+          Effect.map((channels) => [Event.ChannelsRead({ channels, read })]),
+          Effect.catch((e) => Effect.succeed(onChannelsError(e, read))),
         );
       }
 

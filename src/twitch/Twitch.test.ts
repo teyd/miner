@@ -13,7 +13,17 @@ import valid from "./fixtures/validate-valid.json" with { type: "json" };
 import wrongClient from "./fixtures/validate-wrong-client.json" with { type: "json" };
 import { chid, game } from "../core/fixtures.ts";
 import { stubTwitch, type Answer, type Hang } from "./stub.ts";
+import { READ_BATCH, READ_GAP, READ_WORST_CASE } from "../core/state.ts";
+import { GQL_BATCH_LIMIT } from "./identity.ts";
+import { REQUEST_GAP } from "./pace.ts";
 import { REQUEST_TIMEOUT, deviceIdOf, Twitch } from "./Twitch.ts";
+
+describe("the core's read bounds", () => {
+  it("match the client's pacing and batches", () => {
+    assert.strictEqual(READ_GAP, REQUEST_GAP);
+    assert.strictEqual(READ_BATCH, GQL_BATCH_LIMIT);
+  });
+});
 
 const account = { userId: "123456789", login: "testuser" };
 
@@ -152,8 +162,10 @@ describe("inventory", () => {
       for (const hang of ["hang", "hang-body"] as const) {
         const { program, stub } = run({ Inventory: [hang] }, (t) => t.inventory);
         const fiber = yield* Effect.forkChild(Effect.exit(program));
-        // Four attempts of 30 s and backoffs of 2, 4 and 8 s: 134 s, well inside 5 min.
-        yield* TestClock.adjust(4 * REQUEST_TIMEOUT + 14_000);
+        // Four attempts of 30 s and backoffs of 2, 4 and 8 s: 134 s, well inside 5 min, and
+        // the core's `READ_WORST_CASE`, which bounds discovery.
+        assert.strictEqual(READ_WORST_CASE, 4 * REQUEST_TIMEOUT + 14_000);
+        yield* TestClock.adjust(READ_WORST_CASE);
         const exit = yield* Fiber.join(fiber);
         assert.deepStrictEqual(errorTag(exit), ["TwitchUnavailable"]);
         assert.strictEqual(stub.calls["Inventory"], 4);

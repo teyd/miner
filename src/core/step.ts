@@ -8,15 +8,22 @@ import {
   type Millis,
   type Progress,
 } from "./model.ts";
-import { minable, plan, wantedOn, watchlist, type PlanInput, type Target } from "./plan.ts";
+import {
+  minable,
+  plan,
+  wantedOn,
+  watchlist,
+  type PlanInput,
+  type Rank,
+  type Target,
+} from "./plan.ts";
 import { Command, readKey, type ChannelRead, type Event } from "./protocol.ts";
-import { canEarn, channelCanEarn, isClaimable } from "./rules.ts";
+import { canEarn, channelCanEarn, isClaimable, wantedDrops } from "./rules.ts";
 import {
   CATALOG_INTERVAL,
   CATALOG_RETRY,
   CLAIM_RECHECK,
   CURRENT_DROP_RECHECK,
-  DISCOVERY_SETTLE,
   INVENTORY_INTERVAL,
   MAX_UNCONFIRMED_MINUTES,
   ONLINE_DELAY,
@@ -25,6 +32,7 @@ import {
   VALIDATE_INTERVAL,
   WATCHLIST_LIMIT,
   WATCH_INTERVAL,
+  discoverySettle,
   type ClaimIntent,
   type State,
   type Watching,
@@ -38,23 +46,38 @@ export interface Step {
 type Handled = readonly [State, ReadonlyArray<Command>];
 
 /**
+ * The miner's decision function, over a ranking of what to mine. `step` is the miner's; the
+ * simulator plants other rankings to prove its checks catch them.
+ */
+export const stepWith =
+  (rank: Rank) =>
+  (state: State, event: Event, now: Millis): Step => {
+    if (state.auth === "needs-login" && event._tag !== "Started") return { state, commands: [] };
+    const [handled, commands] = handle(state, event, now, rank);
+    const [planned, watchCommands] = replan(settleDiscovery(handled, now), now, rank);
+    const [ticking, tickCommands] = event._tag === "Tick" ? watchTick(planned, now) : [planned, []];
+    const [claimed, claimCommands] = sendClaims(ticking, now);
+    const [followed, subscribeCommands] = follow(claimed, now, rank);
+    return {
+      state: followed,
+      commands: [
+        ...commands,
+        ...watchCommands,
+        ...tickCommands,
+        ...claimCommands,
+        ...subscribeCommands,
+      ],
+    };
+  };
+
+/**
  * The miner's only decision function. Pure: the same state, event and time always give the same
  * result, so simulator seeds replay exactly. After any event it re-plans, sends due claims and
  * updates the followed channels.
  */
-export const step = (state: State, event: Event, now: Millis): Step => {
-  if (state.auth === "needs-login" && event._tag !== "Started") return { state, commands: [] };
-  const [handled, commands] = handle(state, event, now);
-  const [planned, watchCommands] = replan(settleDiscovery(handled, now), now);
-  const [claimed, claimCommands] = sendClaims(planned, now);
-  const [followed, subscribeCommands] = follow(claimed, now);
-  return {
-    state: followed,
-    commands: [...commands, ...watchCommands, ...claimCommands, ...subscribeCommands],
-  };
-};
+export const step = stepWith(minable);
 
-const handle = (s: State, event: Event, now: Millis): Handled => {
+const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
   switch (event._tag) {
     case "Started":
       return [
@@ -121,13 +144,16 @@ const handle = (s: State, event: Event, now: Millis): Handled => {
         ...s,
         catalog: event.campaigns,
         catalogStatus: "ok",
-        deadlines: { ...s.deadlines, catalog: now + CATALOG_INTERVAL },
+        deadlines: {
+          ...s.deadlines,
+          catalog: Math.min(now + CATALOG_INTERVAL, nextOpening(s, event.campaigns, now)),
+        },
       };
-      const reads = discover(next, now);
+      const reads = discover(next, now, rank);
       const discovery =
         reads.length === 0
           ? undefined
-          : { pending: reads.map((read) => readKey(read)), until: now + DISCOVERY_SETTLE };
+          : { pending: reads.map((read) => readKey(read)), until: now + discoverySettle(reads) };
       return [{ ...next, discovery }, reads];
     }
 
@@ -167,7 +193,7 @@ const handle = (s: State, event: Event, now: Millis): Handled => {
     }
 
     case "DropProgress": {
-      const updated = credit(s, event.dropId, event.minutes, now);
+      const updated = credit(s, event.dropId, event.minutes, now, rank);
       const drop = findDrop(s.catalog, event.dropId);
       const complete = drop !== undefined && event.minutes >= drop.drop.requiredMinutes;
       return [updated, complete ? [Command.ReadInventory()] : []];
@@ -180,18 +206,17 @@ const handle = (s: State, event: Event, now: Millis): Handled => {
       const w = s.watch;
       const current = w._tag === "Watching" && w.channelId === event.channelId;
       if (!current || event.dropId === undefined) return [s, []];
-      return [credit(s, event.dropId, event.minutes, now), []];
+      return [credit(s, event.dropId, event.minutes, now, rank), []];
     }
 
     case "ChannelsRead": {
       const channels = new Map(s.channels);
       for (const channel of event.channels) channels.set(channel.id, channel);
-      const discovery =
-        s.discovery === undefined
-          ? undefined
-          : { ...s.discovery, pending: s.discovery.pending.filter((k) => k !== event.read) };
-      return [{ ...s, channels, discovery }, []];
+      return [{ ...s, channels, discovery: answered(s, event.read) }, []];
     }
+
+    case "ChannelsReadFailed":
+      return [{ ...s, discovery: answered(s, event.read) }, []];
 
     case "StreamUp": {
       const online = new Map(s.deadlines.online);
@@ -255,10 +280,6 @@ const tick = (s: State, now: Millis): Handled => {
       commands.push(Command.ReadInventory());
       d = { ...d, inventory: nextInventory(s.claims, now) };
     }
-    if (s.watch._tag === "Watching" && d.tick !== undefined && now >= d.tick) {
-      commands.push(Command.WatchTick({ channelId: s.watch.channelId }));
-      d = { ...d, tick: now + WATCH_INTERVAL };
-    }
     const due = [...d.online].filter(([, at]) => now >= at).map(([id]) => id);
     if (due.length > 0) {
       commands.push(Command.ReadChannels({ channelIds: due.toSorted() }));
@@ -266,6 +287,22 @@ const tick = (s: State, now: Millis): Handled => {
     }
   }
   return [{ ...s, deadlines: d }, commands];
+};
+
+/**
+ * On a `Tick`, the watch tick once due, for the watch the plan kept. Deciding it after the plan means a step
+ * that stops or moves the watch never also ticks the old channel: the tick would credit a minute
+ * after the stop (the simulator caught it when a drop's window closed at a tick).
+ */
+const watchTick = (s: State, now: Millis): Handled => {
+  const tick = s.deadlines.tick;
+  if (s.auth !== "valid" || s.watch._tag !== "Watching" || tick === undefined || now < tick) {
+    return [s, []];
+  }
+  return [
+    { ...s, deadlines: { ...s.deadlines, tick: now + WATCH_INTERVAL } },
+    [Command.WatchTick({ channelId: s.watch.channelId })],
+  ];
 };
 
 /**
@@ -305,7 +342,7 @@ const ticked = (s: State, channelId: ChannelId, now: Millis): Handled => {
  * Twitch credited minutes to `dropId`. Record them, and if we're watching, adopt that drop even
  * if we planned another: several campaigns can share a stream and Twitch picks which progresses.
  */
-const credit = (s: State, dropId: DropId, minutes: number, now: Millis): State => {
+const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Rank): State => {
   const updated = withProgress(s, dropId, (p) => ({ ...p, minutes: Math.max(p.minutes, minutes) }));
   const w = updated.watch;
   if (w._tag !== "Watching" || w.dropId === dropId) return confirmWatched(updated, now);
@@ -321,7 +358,7 @@ const credit = (s: State, dropId: DropId, minutes: number, now: Millis): State =
     };
   }
   // Twitch credits a campaign the settings don't ask for: no progress for us, so no adoption.
-  if (!wantedOn(planInput(updated, s.catalog ?? [], now), found.campaign, w.channelId)) {
+  if (!wantedOn(planInput(updated, s.catalog ?? [], now), found.campaign, w.channelId, rank)) {
     return updated;
   }
   return confirmWatched(
@@ -361,14 +398,14 @@ const planInput = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis): P
   watching: s.watch._tag === "Watching" ? s.watch.campaignId : undefined,
 });
 
-const replan = (s: State, now: Millis): Handled => {
+const replan = (s: State, now: Millis, rank: Rank): Handled => {
   if (s.auth !== "valid") return [s, []];
   if (s.catalog === undefined) {
     const reason = s.catalogStatus === "unavailable" ? "catalog-unavailable" : "starting";
     return s.watch._tag === "Idle" ? [{ ...s, watch: { _tag: "Idle", reason } }, []] : [s, []];
   }
   const input = planInput(s, s.catalog, now);
-  const target = plan(input);
+  const target = plan(input, rank);
   const w = s.watch;
   if (typeof target === "string") {
     const reason =
@@ -387,12 +424,12 @@ const replan = (s: State, now: Millis): Handled => {
     const keepDrop =
       w.dropId === target.drop.id ||
       (credited !== undefined &&
-        wantedOn(input, credited.campaign, w.channelId) &&
+        wantedOn(input, credited.campaign, w.channelId, rank) &&
         canEarn(credited.drop, s.progress, now));
     if (keepDrop) return [s, []];
     return [confirmWatched({ ...s, watch: watching(s, target, w.channelId, now) }, now), []];
   }
-  if (s.discovery !== undefined) return holdWhileDiscovering(s, input);
+  if (s.discovery !== undefined) return holdWhileDiscovering(s, input, rank);
   return [
     {
       ...s,
@@ -403,7 +440,13 @@ const replan = (s: State, now: Millis): Handled => {
   ];
 };
 
-/** Discovery is done once every read it started has answered, or `DISCOVERY_SETTLE` passed. */
+/** Discovery stops waiting for a read once it answered or failed. */
+const answered = (s: State, read: string): State["discovery"] =>
+  s.discovery === undefined
+    ? undefined
+    : { ...s.discovery, pending: s.discovery.pending.filter((k) => k !== read) };
+
+/** Discovery is done once every read it started has answered or failed, or `discoverySettle` passed. */
 const settleDiscovery = (s: State, now: Millis): State =>
   s.discovery !== undefined && (s.discovery.pending.length === 0 || now >= s.discovery.until)
     ? { ...s, discovery: undefined }
@@ -413,11 +456,11 @@ const settleDiscovery = (s: State, now: Millis): State =>
  * While discovery runs, the plan only sees part of the channels, so it may not start or switch
  * a watch. A watch that can still earn what it was started for stays; one that can't stops.
  */
-const holdWhileDiscovering = (s: State, input: PlanInput): Handled => {
+const holdWhileDiscovering = (s: State, input: PlanInput, rank: Rank): Handled => {
   const w = s.watch;
   if (w._tag === "Watching") {
     const channel = s.channels.get(w.channelId);
-    const earns = minable(input).some(
+    const earns = rank(input).some(
       (p) =>
         p.campaign.id === w.campaignId &&
         channel !== undefined &&
@@ -483,9 +526,9 @@ const sendClaims = (s: State, now: Millis): Handled => {
  * seen, so a burst of reads coalesces into one `Subscribe` of the set wanted at the deadline; a
  * change that undoes itself before then sends nothing.
  */
-const follow = (s: State, now: Millis): Handled => {
+const follow = (s: State, now: Millis, rank: Rank): Handled => {
   if (s.auth !== "valid" || s.catalog === undefined) return [s, []];
-  const desired = watchlist(planInput(s, s.catalog, now), WATCHLIST_LIMIT).toSorted();
+  const desired = watchlist(planInput(s, s.catalog, now), WATCHLIST_LIMIT, rank).toSorted();
   const pending = s.deadlines.subscribe;
   const withDeadline = (subscribe: Millis | undefined): State =>
     subscribe === pending ? s : { ...s, deadlines: { ...s.deadlines, subscribe } };
@@ -498,14 +541,32 @@ const follow = (s: State, now: Millis): Handled => {
   ];
 };
 
+/**
+ * When the next drop a goal wants opens its window. Discovery only reads channels for what can
+ * earn at the catalog read, so the catalog is read again then (at most every `CATALOG_RETRY`):
+ * otherwise a drop opening between hourly reads waits up to an hour for its channels.
+ */
+const nextOpening = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis): Millis => {
+  const starts = campaigns.flatMap((campaign) => {
+    if (now >= campaign.endsAt) return [];
+    const wanted = new Set(
+      s.settings.goals.flatMap((goal) => [...wantedDrops(goal, campaign, s.progress)]),
+    );
+    return campaign.drops
+      .filter((d) => wanted.has(d.id) && d.startsAt > now)
+      .map((d) => d.startsAt);
+  });
+  return starts.length === 0 ? Infinity : Math.max(now + CATALOG_RETRY, Math.min(...starts));
+};
+
 /** Ask for the channels that can credit the minable campaigns: the directory or the allow-list. */
-const discover = (s: State, now: Millis): ReadonlyArray<ChannelRead> => {
+const discover = (s: State, now: Millis, rank: Rank): ReadonlyArray<ChannelRead> => {
   if (s.catalog === undefined) return [];
   const input = planInput(s, s.catalog, now);
   const games = new Set<string>();
   const listed = new Set<ChannelId>();
   const commands: Array<ChannelRead> = [];
-  for (const { campaign } of minable(input)) {
+  for (const { campaign } of rank(input)) {
     if (campaign.allowedChannels.length > 0) {
       for (const id of campaign.allowedChannels) if (listed.size < WATCHLIST_LIMIT) listed.add(id);
     } else if (!games.has(campaign.game.id)) {

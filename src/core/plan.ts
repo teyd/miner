@@ -13,7 +13,6 @@ import {
   canEarn,
   channelCanEarn,
   isActive,
-  minutesOf,
   remainingMinutes,
   slackOf,
   wantedDrops,
@@ -54,28 +53,46 @@ export const SLACK_HYSTERESIS: Millis = 30 * MINUTE;
 export interface Pick {
   readonly goal: number;
   readonly campaign: Campaign;
+  /** Wanted drops that earn now (`canEarn`): drops whose window hasn't opened don't count. */
   readonly drops: ReadonlyArray<Drop>;
+  /** Some of `drops` can still finish before it ends. */
+  readonly feasible: boolean;
   /** The goal's ranking key under its `order`: smaller goes first. */
   readonly key: number;
 }
 
-const gameRank = (goal: DropsGoal, campaign: Campaign): number =>
-  goal.games === "all" ? 0 : goal.games.findIndex((g) => g.id === campaign.game.id);
+/** Ranks every campaign some goal can work on, best first. `minable` is the miner's ranking. */
+export type Rank = (input: PlanInput) => ReadonlyArray<Pick>;
+
+/** A total order on numbers: `Infinity - Infinity` is `NaN`, which a comparator must never return. */
+export const compareNumbers = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** The game's place in the goal's list; `"all"` ranks every game alike. */
+const gameRank = (goal: DropsGoal, campaign: Campaign): number => {
+  if (goal.games === "all") return 0;
+  const index = goal.games.findIndex((g) => g.id === campaign.game.id);
+  // `picksOf` never sees an unlisted game (it wants nothing from it); last, if it ever does.
+  return index === -1 ? goal.games.length : index;
+};
+
+/** A drop that earns now and can still finish: its slack is not negative. */
+const fits = (input: PlanInput, campaign: Campaign, drop: Drop): boolean =>
+  slackOf(campaign, drop, input.progress, input.now) >= 0;
 
 /**
- * `least-slack`: the wanted drop with the least time to spare. A drop that can no longer finish
- * in time earns nothing, so a campaign with only such drops goes after every feasible one.
+ * `ending-soonest`: the campaign's end. `least-slack`: the least time to spare of a drop that
+ * earns now and can still finish. A drop whose window opens later ranks nothing: only what earns
+ * now can be watched, and a campaign whose watchable drop has hours to spare is no emergency
+ * because a later drop will be (review of decision 28, P1-1).
  */
-const orderKey = (input: PlanInput, goal: DropsGoal, campaign: Campaign): number => {
+const orderKey = (
+  input: PlanInput,
+  goal: DropsGoal,
+  campaign: Campaign,
+  drops: ReadonlyArray<Drop>,
+): number => {
   if (goal.order === "ending-soonest") return campaign.endsAt;
-  const wanted = wantedDrops(goal, campaign, input.progress);
-  const slacks = campaign.drops
-    .filter(
-      (d) =>
-        wanted.has(d.id) &&
-        input.now < d.endsAt &&
-        minutesOf(input.progress, d.id) < d.requiredMinutes,
-    )
+  const slacks = drops
     .map((d) => slackOf(campaign, d, input.progress, input.now))
     .filter((slack) => slack >= 0);
   const bonus = campaign.id === input.watching ? SLACK_HYSTERESIS : 0;
@@ -83,44 +100,65 @@ const orderKey = (input: PlanInput, goal: DropsGoal, campaign: Campaign): number
 };
 
 const picksOf = (input: PlanInput, goal: DropsGoal, index: number): ReadonlyArray<Pick> =>
-  input.campaigns
-    .flatMap((campaign): ReadonlyArray<Pick> => {
-      if (!isActive(campaign, input.now)) return [];
-      const wanted = wantedDrops(goal, campaign, input.progress);
-      const drops = campaign.drops.filter(
-        (d) => wanted.has(d.id) && canEarn(d, input.progress, input.now),
-      );
-      if (drops.length === 0) return [];
-      return [{ goal: index, campaign, drops, key: orderKey(input, goal, campaign) }];
-    })
+  input.campaigns.flatMap((campaign): ReadonlyArray<Pick> => {
+    if (!isActive(campaign, input.now)) return [];
+    const wanted = wantedDrops(goal, campaign, input.progress);
+    const drops = campaign.drops.filter(
+      (d) => wanted.has(d.id) && canEarn(d, input.progress, input.now),
+    );
+    if (drops.length === 0) return [];
+    const feasible = drops.some((d) => fits(input, campaign, d));
+    return [
+      { goal: index, campaign, drops, feasible, key: orderKey(input, goal, campaign, drops) },
+    ];
+  });
+
+/**
+ * Every campaign some goal can work on, best first: first every campaign with a drop that can
+ * still finish, then the rest. Within each, goals in priority order, then the goal's game order,
+ * then its `order`. A campaign that can't finish earns nothing, so it must not hold up a lower
+ * goal that can (review of decision 28, P1-2); it is still watched when nothing else is. A
+ * campaign two goals want appears once per goal.
+ */
+export const minable: Rank = (input) =>
+  input.settings.goals
+    .flatMap((goal, index) => picksOf(input, goal, index))
     .toSorted(
       (a, b) =>
-        gameRank(goal, a.campaign) - gameRank(goal, b.campaign) ||
-        a.key - b.key ||
-        a.campaign.endsAt - b.campaign.endsAt ||
+        Number(b.feasible) - Number(a.feasible) ||
+        a.goal - b.goal ||
+        compareNumbers(goalRank(input, a), goalRank(input, b)) ||
+        compareNumbers(a.key, b.key) ||
+        compareNumbers(a.campaign.endsAt, b.campaign.endsAt) ||
         a.campaign.id.localeCompare(b.campaign.id),
     );
 
-/**
- * Every campaign some goal can work on, best first: goals in priority order, then the goal's
- * game order, then its `order`. A campaign two goals want appears once per goal.
- */
-export const minable = (input: PlanInput): ReadonlyArray<Pick> =>
-  input.settings.goals.flatMap((goal, index) => picksOf(input, goal, index));
+const goalRank = (input: PlanInput, pick: Pick): number =>
+  gameRank(input.settings.goals[pick.goal]!, pick.campaign);
 
 /** The wanted drop of a campaign closest to completion (TDM `Campaign.first_drop`). */
 export const nextDrop = (input: PlanInput, pick: Pick): Drop | undefined =>
   pick.drops.toSorted(
     (a, b) =>
-      remainingMinutes(pick.campaign, a, input.progress) -
-        remainingMinutes(pick.campaign, b, input.progress) || a.endsAt - b.endsAt,
+      Number(fits(input, pick.campaign, b)) - Number(fits(input, pick.campaign, a)) ||
+      compareNumbers(
+        remainingMinutes(pick.campaign, a, input.progress),
+        remainingMinutes(pick.campaign, b, input.progress),
+      ) ||
+      compareNumbers(a.endsAt, b.endsAt) ||
+      a.id.localeCompare(b.id),
   )[0];
 
 const goalOf = (input: PlanInput, pick: Pick): DropsGoal => input.settings.goals[pick.goal]!;
 
 /** Whether a goal that may watch `channelId` wants what this campaign can earn now. */
-export const wantedOn = (input: PlanInput, campaign: Campaign, channelId: ChannelId): boolean =>
-  minable(input).some(
+export const wantedOn = (
+  input: PlanInput,
+  campaign: Campaign,
+  channelId: ChannelId,
+  rank: Rank = minable,
+): boolean =>
+  rank(input).some(
     (p) => p.campaign.id === campaign.id && !goalOf(input, p).excludeChannels.includes(channelId),
   );
 
@@ -131,16 +169,19 @@ export const candidates = (input: PlanInput, pick: Pick): ReadonlyArray<Channel>
       channelCanEarn(pick.campaign, ch, goalOf(input, pick).excludeChannels, input.refused),
     )
     .toSorted(
-      (a, b) => (b.live?.viewers ?? 0) - (a.live?.viewers ?? 0) || a.login.localeCompare(b.login),
+      (a, b) =>
+        compareNumbers(b.live?.viewers ?? 0, a.live?.viewers ?? 0) ||
+        a.login.localeCompare(b.login),
     );
 
 /**
  * The best drop that has a channel to watch: the first goal with something to earn on a live
- * channel wins (decision 28). A better-ranked campaign without a live channel never displaces a
- * working watch, so the search moves on to the next campaign, then the next goal.
+ * channel wins (decision 28), something that can still finish before anything that can't. A
+ * better-ranked campaign without a live channel never displaces a working watch, so the search
+ * moves on to the next campaign, then the next goal.
  */
-export const plan = (input: PlanInput): Target | NoTarget => {
-  const picks = minable(input);
+export const plan = (input: PlanInput, rank: Rank = minable): Target | NoTarget => {
+  const picks = rank(input);
   if (picks.length === 0) return "nothing-to-mine";
   for (const pick of picks) {
     const drop = nextDrop(input, pick);
@@ -153,9 +194,13 @@ export const plan = (input: PlanInput): Target | NoTarget => {
 };
 
 /** Channels worth a live/offline subscription: every candidate for every minable campaign. */
-export const watchlist = (input: PlanInput, limit: number): ReadonlyArray<ChannelId> => {
+export const watchlist = (
+  input: PlanInput,
+  limit: number,
+  rank: Rank = minable,
+): ReadonlyArray<ChannelId> => {
   const ids = new Set<ChannelId>();
-  for (const pick of minable(input)) {
+  for (const pick of rank(input)) {
     const campaign = pick.campaign;
     const excluded = goalOf(input, pick).excludeChannels;
     const known =

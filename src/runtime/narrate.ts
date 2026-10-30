@@ -1,4 +1,5 @@
-import type { Campaign, ChannelId, Drop, DropId } from "../core/model.ts";
+import type { Campaign, ChannelId, Drop, DropId, Millis } from "../core/model.ts";
+import type { Event } from "../core/protocol.ts";
 import type { State, Watch } from "../core/state.ts";
 
 /**
@@ -50,4 +51,21 @@ export const progressLines = (before: State, after: State): ReadonlyArray<string
       lines.push(`progress ${dropName(after, dropId)} ${minutesOf(after, dropId)}`);
   }
   return lines;
+};
+
+/**
+ * Discovery gave up on reads that never answered nor failed (`discoverySettle` ran out): planning
+ * goes on without their channels. It should never happen, since every read answers or fails, so
+ * it is worth a warning.
+ */
+export const discoveryExpired = (
+  before: State,
+  after: State,
+  event: Event,
+  now: Millis,
+): string | undefined => {
+  const d = before.discovery;
+  if (d === undefined || d.pending.length === 0 || after.discovery !== undefined) return undefined;
+  if (event._tag === "Started" || event._tag === "AuthFailed" || now < d.until) return undefined;
+  return `discovery: planning without ${d.pending.length} channel read(s) still out: ${d.pending.join(", ")}`;
 };

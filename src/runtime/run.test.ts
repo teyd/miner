@@ -11,8 +11,10 @@ import { twinHttp } from "../twin/http.ts";
 import { SIM_EPOCH, type Scenario } from "../twin/scenario.ts";
 import { makeTwin, type Twin } from "../twin/twin.ts";
 import { buildWorld } from "../twin/world.ts";
+import { fakeEdge, listenedOn, type FakeEdge } from "../twitch/fakeSocket.ts";
 import { DEFAULT_LIMITS, parseRecording, type Limits } from "../twitch/journal.ts";
 import { REQUEST_GAP } from "../twitch/pace.ts";
+import { Connector } from "../twitch/PubSub.ts";
 import { Credentials } from "../twitch/Twitch.ts";
 import { countAt, MAX_STEPS_AT_INSTANT, run } from "./run.ts";
 import { SHADOW_STATE, shadowLayer } from "./shadow.ts";
@@ -79,7 +81,15 @@ const makeWorld = (): Twin => {
  * scheduler, so one long `adjust` would pass reads still in flight (the simulator polls for the
  * same reason).
  */
-const shadowRun = (twin: Twin, files: MemoryFiles, hours: number, limits?: Limits, stepMs = 1000) =>
+const shadowRun = (
+  twin: Twin,
+  files: MemoryFiles,
+  hours: number,
+  limits?: Limits,
+  stepMs = 1000,
+  edge: FakeEdge = fakeEdge(),
+  during: (hour: number) => void = () => {},
+) =>
   Effect.gen(function* () {
     const services = shadowLayer(DIR, limits).pipe(
       Layer.provide(
@@ -91,11 +101,15 @@ const shadowRun = (twin: Twin, files: MemoryFiles, hours: number, limits?: Limit
           ),
           Gzip.layer,
           files.layer,
+          Layer.succeed(Connector, edge.connector),
         ),
       ),
     );
     const fiber = yield* Effect.forkChild(run(config).pipe(Effect.provide(services)));
-    for (let t = 0; t < hours * HOUR; t += stepMs) yield* TestClock.adjust(stepMs);
+    for (let t = 0; t < hours * HOUR; t += stepMs) {
+      if (t % HOUR === 0) during(t / HOUR);
+      yield* TestClock.adjust(stepMs);
+    }
     assert.isUndefined(fiber.pollUnsafe(), "the runtime stopped by itself");
     yield* Fiber.interrupt(fiber);
   });
@@ -183,6 +197,39 @@ describe("run --shadow", () => {
           "the restarted run planned the watch again",
         );
       }),
+  );
+
+  it.effect("listens to the followed channels and hears what their frames say", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(SIM_EPOCH);
+      const twin = makeWorld();
+      const files = memoryFileSystem();
+      const edge = fakeEdge();
+      // An hour in, Twitch says the watched channel went offline.
+      const offline = JSON.stringify({
+        type: "MESSAGE",
+        data: { topic: "video-playback-by-id.ch0", message: '{"type":"stream-down"}' },
+      });
+      yield* shadowRun(twin, files, 2, undefined, 1000, edge, (hour) => {
+        if (hour === 1) for (const c of edge.connections) if (!c.closed) c.push(offline);
+      });
+
+      // Listening is read-only and real: one socket, the account's drops and the plan's channels.
+      assert.lengthOf(edge.connections, 1);
+      const topics = listenedOn(edge.connections[0]!);
+      assert.isTrue(topics.has("video-playback-by-id.ch0"));
+      assert.isTrue([...topics].some((t) => t.startsWith("user-drop-events.")));
+      assert.lengthOf(intents(files, "Subscribe"), 0, "subscribe is not a shadow intent");
+      const recorded = lines(files).filter((l) => l["kind"] === "frame");
+      assert.isTrue(recorded.some((l) => String(l["text"]).includes("stream-down")));
+      for (const l of recorded) assert.notInclude(JSON.stringify(l), TOKEN);
+
+      // The frame reached the core: it stopped watching ch0 straight away.
+      assert.isAtLeast(intents(files, "StopWatching").length, 1);
+      const stopAt = intents(files, "StopWatching")[0]!["at"] as number;
+      assert.isAtLeast(stopAt, SIM_EPOCH + HOUR);
+      assert.isBelow(stopAt, SIM_EPOCH + HOUR + MINUTE);
+    }),
   );
 
   it.effect("keeps its recordings within the limits over several days", () =>

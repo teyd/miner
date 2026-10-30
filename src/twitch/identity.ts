@@ -87,3 +87,45 @@ export const dropsDirectory = (slug: string, limit: number) => ({
   },
   sortTypeIsRecency: false,
 });
+
+/**
+ * Twitch's PubSub edge. Twitch shut public PubSub down for third-party apps in April 2025 and its
+ * web client moved to Hermes (`wss://hermes.twitch.tv/v1`, TCPM #722, 2025), but the edge still
+ * answers and delivers these topics to the Android token: PING → PONG in 161 ms, LISTEN →
+ * `RESPONSE` with an empty error, live frames on every topic below (probe, 2026-10-30).
+ * TDM and just-mining use it too (2026-10-28).
+ */
+export const PUBSUB_URL = "wss://pubsub-edge.twitch.tv/v1";
+
+/** Topic prefixes; the name is `<prefix>.<user or channel id>` (TDM `constants.py`, 2026-10-28). */
+export const Topics = {
+  /** `drop-progress`, `drop-claim`. */
+  drops: "user-drop-events",
+  /** `stream-up`, `stream-down`, `viewcount`, `commercial`. */
+  playback: "video-playback-by-id",
+  /** `broadcast_settings_update`: title and category changes. */
+  settings: "broadcast-settings-update",
+} as const;
+
+/** Topics one connection may hold (TDM `WS_TOPICS_LIMIT`; Twitch's former PubSub docs). */
+export const PUBSUB_TOPICS_PER_CONNECTION = 50;
+
+/**
+ * Connections at most. Twitch allows about 10 websockets per IP (DevilXD, TDM #1153,
+ * 2026-08-29); TDM stops at 8 (`MAX_WEBSOCKETS`). 8 × 50 topics hold the core's 100 channels.
+ */
+export const PUBSUB_MAX_CONNECTIONS = 8;
+
+/** Topics per LISTEN or UNLISTEN frame (TDM `websocket.py`, chunks of 20). */
+export const PUBSUB_TOPICS_PER_FRAME = 20;
+
+/**
+ * PING every 4 minutes, and a connection that doesn't answer a PING or a LISTEN within 10 s is
+ * dead (just-mining; TDM pings every 3 minutes; Twitch's former docs asked for at least every 5).
+ */
+export const PUBSUB_PING_INTERVAL_MS = 4 * 60_000;
+export const PUBSUB_ANSWER_TIMEOUT_MS = 10_000;
+/** A connection must open within this. */
+export const PUBSUB_OPEN_TIMEOUT_MS = 10_000;
+/** Reconnect delay: 1 s, doubling per failure, at most 2 minutes (just-mining). */
+export const PUBSUB_BACKOFF_MS = { first: 1_000, max: 120_000 } as const;

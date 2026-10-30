@@ -66,6 +66,7 @@ export const stubTwitch = (script: Record<string, ReadonlyArray<Answer | Hang>>)
       Journal.of({
         record: (answer) => Effect.sync(() => recorded.push(answer)),
         intent: () => Effect.void,
+        frame: () => Effect.void,
       }),
     ),
   );

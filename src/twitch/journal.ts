@@ -11,11 +11,23 @@ export interface Answer {
 }
 
 /**
- * One line of a recording: a Twitch answer, or a mutation the miner decided on (in shadow mode,
- * one it would have sent). Recordings feed replay and calibrate the simulator (research 04 §3).
+ * One PubSub frame on connection slot `connection`, as text. An outgoing LISTEN or UNLISTEN is
+ * handed over with its `auth_token` already replaced.
+ */
+export interface Frame {
+  readonly connection: number;
+  readonly direction: "in" | "out";
+  readonly text: string;
+}
+
+/**
+ * One line of a recording: a Twitch answer, a PubSub frame, or a mutation the miner decided on
+ * (in shadow mode, one it would have sent). Recordings feed replay and calibrate the simulator
+ * (research 04 §3).
  */
 export type Entry =
   | ({ readonly kind: "answer"; readonly at: number } & Answer)
+  | ({ readonly kind: "frame"; readonly at: number } & Frame)
   | {
       readonly kind: "intent";
       readonly at: number;
@@ -32,11 +44,12 @@ export class Journal extends Context.Service<
   {
     readonly record: (answer: Answer) => Effect.Effect<void>;
     readonly intent: (command: string, detail: unknown) => Effect.Effect<void>;
+    readonly frame: (frame: Frame) => Effect.Effect<void>;
   }
 >()("miner/twitch/Journal") {
   static readonly none = Layer.succeed(
     Journal,
-    Journal.of({ record: () => Effect.void, intent: () => Effect.void }),
+    Journal.of({ record: () => Effect.void, intent: () => Effect.void, frame: () => Effect.void }),
   );
 
   /** Appends plain JSON lines to one file, as `doctor --record` does. */
@@ -160,6 +173,8 @@ const fromWriter = (write: (entry: Entry) => Effect.Effect<void>): Journal["Serv
     Effect.flatMap(Clock.currentTimeMillis, (at) => write({ kind: "answer", at, ...answer })),
   intent: (command, detail) =>
     Effect.flatMap(Clock.currentTimeMillis, (at) => write({ kind: "intent", at, command, detail })),
+  frame: (frame) =>
+    Effect.flatMap(Clock.currentTimeMillis, (at) => write({ kind: "frame", at, ...frame })),
 });
 
 /** 64-bit FNV-1a in two 32-bit lanes: tells two omitted bodies apart, nothing more. */
@@ -200,7 +215,9 @@ export const seal = (
     at: entry.at,
     ...(entry.kind === "answer"
       ? { operation: entry.operation, status: entry.status }
-      : { command: entry.command }),
+      : entry.kind === "frame"
+        ? { connection: entry.connection, direction: entry.direction }
+        : { command: entry.command }),
     omitted: "failed the redaction check",
   });
 };

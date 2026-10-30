@@ -31,6 +31,10 @@ miner.pipe(
       Effect.sync(() => {
         process.exitCode = 1;
       }),
+    StatusUnhealthy: (e) =>
+      Effect.sync(() => {
+        process.exitCode = e.exitCode;
+      }),
     SimTraceInvalid: () =>
       Effect.sync(() => {
         process.exitCode = 2;

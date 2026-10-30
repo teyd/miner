@@ -10,6 +10,7 @@ import { pace } from "../twitch/pace.ts";
 import { PubSub } from "../twitch/PubSub.ts";
 import { Credentials, Twitch } from "../twitch/Twitch.ts";
 import { withListening } from "./listen.ts";
+import { STATUS_FILE, StatusSink } from "./status.ts";
 
 /** State of live runs. Shadow runs keep theirs apart (`SHADOW_STATE`). */
 export const LIVE_STATE = "state.json";
@@ -60,5 +61,6 @@ export const liveLayer = (dataDir: string, limits?: Limits) => {
       return Layer.mergeAll(twitch, pubsub, actuator);
     }),
   ).pipe(Layer.provide(journal));
-  return Layer.merge(services, Store.file(`${dataDir}/${LIVE_STATE}`));
+  const status = StatusSink.file(`${dataDir}/${STATUS_FILE}`, "live");
+  return Layer.mergeAll(services, Store.file(`${dataDir}/${LIVE_STATE}`), status);
 };

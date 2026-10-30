@@ -5,6 +5,7 @@ import { TestClock } from "effect/testing";
 import { Config } from "../config/schema.ts";
 import { HOUR, MINUTE, type DropId } from "../core/model.ts";
 import { Gzip, nodeGzip } from "../platform/Gzip.ts";
+import { Instance } from "../platform/instance.ts";
 import { decodeState } from "../store/codec.ts";
 import { memoryFileSystem, type MemoryFiles } from "../store/memoryFileSystem.ts";
 import { twinHttp } from "../twin/http.ts";
@@ -100,6 +101,7 @@ const shadowRun = (
             Credentials.of({ token: Redacted.make(TOKEN), deviceId: "0".repeat(32) }),
           ),
           Gzip.layer,
+          Layer.succeed(Instance, Instance.of({ version: "0.0.0-test", pid: 4242 })),
           files.layer,
           Layer.succeed(Connector, edge.connector),
         ),

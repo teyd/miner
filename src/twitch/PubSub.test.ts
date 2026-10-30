@@ -213,6 +213,40 @@ describe("PubSub", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("reports its sockets: wanted, listening, topics, and those that didn't fit", () =>
+    Effect.gen(function* () {
+      const { edge, pubsub } = yield* setup();
+      assert.deepStrictEqual(yield* pubsub.status, {
+        connections: 0,
+        listening: 0,
+        topics: 0,
+        dropped: 0,
+      });
+      yield* pubsub.subscribe(ids(...Array.from({ length: 30 }, (_, i) => i)));
+      yield* pass();
+      assert.deepStrictEqual(yield* pubsub.status, {
+        connections: 2,
+        listening: 2,
+        topics: 61,
+        dropped: 0,
+      });
+      // A socket that drops is wanted but not listening until it reconnects.
+      edge.refuse = 1;
+      open(edge)[0]!.drop("gone");
+      yield* pass();
+      assert.include(yield* pubsub.status, { connections: 2, listening: 1 });
+      yield* pass(5_000);
+      assert.include(yield* pubsub.status, { connections: 2, listening: 2 });
+      yield* pubsub.subscribe([]);
+      yield* pass();
+      assert.include(yield* pubsub.status, { connections: 0, listening: 0, topics: 0 });
+      // 8 connections of 50 topics hold 199 channels and the account; the rest are dropped.
+      yield* pubsub.subscribe(ids(...Array.from({ length: 205 }, (_, i) => i)));
+      yield* pass();
+      assert.include(yield* pubsub.status, { connections: 8, topics: 400, dropped: 11 });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("PINGs every 4 minutes and reconnects and resubscribes when no PONG comes", () =>
     Effect.gen(function* () {
       const { edge, pubsub } = yield* setup();

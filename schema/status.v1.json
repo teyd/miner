@@ -1,0 +1,478 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/teyd/miner/dev/schema/status.v1.json",
+  "$ref": "#/definitions/MinerStatus",
+  "definitions": {
+    "Watching": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["watching"]
+        },
+        "channel": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "login": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "As in twitch.tv/<login>. `null` until a read names the channel."
+            }
+          },
+          "required": ["id", "login"],
+          "additionalProperties": true
+        },
+        "game": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`null`: not in the catalog."
+        },
+        "campaign": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["id", "name"],
+          "additionalProperties": true
+        },
+        "drop": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["id", "name"],
+          "additionalProperties": true
+        },
+        "minutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Minutes Twitch has confirmed for the drop."
+        },
+        "requiredMinutes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Minutes the drop needs. `null`: not in the catalog."
+        }
+      },
+      "required": ["state", "channel", "game", "campaign", "drop", "minutes", "requiredMinutes"],
+      "additionalProperties": true,
+      "description": "The miner watches a channel for a drop."
+    },
+    "Idle": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["idle"]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "starting",
+            "needs-login",
+            "catalog-unavailable",
+            "nothing-to-mine",
+            "no-live-channel"
+          ],
+          "description": "\"starting\": no catalog yet. \"needs-login\": parked on a rejected token. \"catalog-unavailable\": discovery is broken. \"nothing-to-mine\": no campaign the config asks for has a drop left to earn. \"no-live-channel\": there is one, but no eligible channel streams it now."
+        }
+      },
+      "required": ["state", "reason"],
+      "additionalProperties": true,
+      "description": "No channel is watched."
+    },
+    "Watch": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Watching"
+        },
+        {
+          "$ref": "#/definitions/Idle"
+        }
+      ]
+    },
+    "ClaimInFlight": {
+      "type": "object",
+      "properties": {
+        "campaignId": {
+          "type": "string"
+        },
+        "dropId": {
+          "type": "string"
+        },
+        "drop": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`<game>: <drop>`, or `null` when the catalog doesn't hold the drop."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["sent", "unknown"],
+          "description": "\"sent\": waiting for Twitch to answer. \"unknown\": the answer was lost; the next inventory read decides. Claims are never retried blindly."
+        }
+      },
+      "required": ["campaignId", "dropId", "drop", "status"],
+      "additionalProperties": true
+    },
+    "Claimed": {
+      "type": "object",
+      "properties": {
+        "campaignId": {
+          "type": "string"
+        },
+        "dropId": {
+          "type": "string"
+        },
+        "drop": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`<game>: <drop>`, or `null` when the catalog doesn't hold the drop."
+        },
+        "at": {
+          "type": "string",
+          "description": "When the claim settled. ISO 8601, UTC."
+        }
+      },
+      "required": ["campaignId", "dropId", "drop", "at"],
+      "additionalProperties": true
+    },
+    "StatusFile": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number",
+          "enum": [1],
+          "description": "The format version. A reader refuses a version it doesn't know."
+        },
+        "miner": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "description": "The miner's package version."
+            },
+            "pid": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "The process id, in the miner's own pid namespace."
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["live", "shadow"],
+              "description": "\"live\" mines for real. \"shadow\" (`miner run --shadow`) reads and plans for real but only records what it would watch and claim."
+            },
+            "startedAt": {
+              "type": "string",
+              "description": "When this process started. ISO 8601, UTC."
+            }
+          },
+          "required": ["version", "pid", "mode", "startedAt"],
+          "additionalProperties": true
+        },
+        "heartbeatAt": {
+          "type": "string",
+          "description": "When the miner last wrote this file. It writes on every change and at least every 30 s, so a heartbeat older than 90 s means it is gone or hung. ISO 8601, UTC."
+        },
+        "stoppedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "When the miner stopped cleanly. ISO 8601, UTC."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the miner stopped cleanly. `null`: not yet."
+        },
+        "auth": {
+          "type": "string",
+          "enum": ["checking", "valid", "needs-login"],
+          "description": "\"checking\": the token is not validated yet. \"valid\": Twitch accepts it. \"needs-login\": Twitch rejected it; the miner is parked, polls nothing and waits for a new TOKEN and a restart."
+        },
+        "catalog": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["unknown", "ok", "unavailable"],
+              "description": "\"unknown\": not read yet. \"ok\": the last read decoded. \"unavailable\": discovery is broken: Twitch answered `null` or the read failed after retries. Not the same as nothing to mine."
+            },
+            "campaigns": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Campaigns in the last catalog read."
+            }
+          },
+          "required": ["status", "campaigns"],
+          "additionalProperties": true
+        },
+        "watch": {
+          "$ref": "#/definitions/Watch"
+        },
+        "claims": {
+          "type": "object",
+          "properties": {
+            "inFlight": {
+              "type": "array",
+              "description": "Claims sent and not yet settled.",
+              "items": {
+                "$ref": "#/definitions/ClaimInFlight"
+              }
+            },
+            "claimedThisRun": {
+              "type": "array",
+              "description": "Drops this process claimed (or settled as claimed) since it started.",
+              "items": {
+                "$ref": "#/definitions/Claimed"
+              }
+            }
+          },
+          "required": ["inFlight", "claimedThisRun"],
+          "additionalProperties": true
+        },
+        "reads": {
+          "type": "object",
+          "properties": {
+            "validate": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "description": "Last time Twitch accepted the token. ISO 8601, UTC."
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Last time Twitch accepted the token. `null`: not yet."
+            },
+            "catalog": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "description": "Last successful catalog read. ISO 8601, UTC."
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Last successful catalog read. `null`: not yet."
+            },
+            "inventory": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "description": "Last successful inventory read. ISO 8601, UTC."
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Last successful inventory read. `null`: not yet."
+            },
+            "channels": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "description": "Last successful directory or stream read. ISO 8601, UTC."
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Last successful directory or stream read. `null`: not yet."
+            },
+            "currentDrop": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "description": "Last successful read of the drop the watch credits. ISO 8601, UTC."
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Last successful read of the drop the watch credits. `null`: not yet."
+            },
+            "watchTick": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "description": "Last watch tick Twitch served. Always `null` in shadow mode. ISO 8601, UTC."
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Last watch tick Twitch served. Always `null` in shadow mode. `null`: not yet."
+            }
+          },
+          "required": ["validate", "catalog", "inventory", "channels", "currentDrop", "watchTick"],
+          "additionalProperties": true,
+          "description": "When each kind of Twitch request last succeeded in this run."
+        },
+        "pubsub": {
+          "type": "object",
+          "properties": {
+            "connections": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Sockets wanted: one per 50 topics."
+            },
+            "listening": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Sockets open and listening. Fewer than `connections` while reconnecting."
+            },
+            "topics": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Topics followed: the account's drops and channels."
+            },
+            "dropped": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "description": "Topics that didn't fit the connection limit."
+            }
+          },
+          "required": ["connections", "listening", "topics", "dropped"],
+          "additionalProperties": true,
+          "description": "Twitch PubSub, the live/offline and drop-progress feed."
+        }
+      },
+      "required": [
+        "version",
+        "miner",
+        "heartbeatAt",
+        "stoppedAt",
+        "auth",
+        "catalog",
+        "watch",
+        "claims",
+        "reads",
+        "pubsub"
+      ],
+      "additionalProperties": true,
+      "description": "What the running miner writes to $DATA_DIR/status.json."
+    },
+    "MinerStatus": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "enum": ["https://raw.githubusercontent.com/teyd/miner/dev/schema/status.v1.json"]
+        },
+        "version": {
+          "type": "number",
+          "enum": [1]
+        },
+        "checkedAt": {
+          "type": "string",
+          "description": "When `miner status` read the file. ISO 8601, UTC."
+        },
+        "health": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": ["healthy", "starting", "not-running", "needs-login", "discovery-broken"],
+              "description": "\"healthy\" and \"starting\" (exit 0): running, the token is valid or being checked, the catalog reads. \"not-running\" (exit 1): no status file, a clean stop, a heartbeat older than 90 s, or a file this version can't read. \"needs-login\" (exit 2): parked on a rejected token; set a new TOKEN and restart. \"discovery-broken\" (exit 3): the catalog is unavailable, so the miner can't tell whether there is anything to mine, or it has been starting for over 600 s (Twitch unreachable)."
+            },
+            "exitCode": {
+              "type": "number",
+              "enum": [0, 1, 2, 3],
+              "description": "The exit code of `miner status`: 0 healthy, 1 not running, 2 needs login, 3 discovery broken."
+            },
+            "detail": {
+              "type": "string",
+              "description": "One line for a person."
+            }
+          },
+          "required": ["state", "exitCode", "detail"],
+          "additionalProperties": true
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StatusFile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The status file as read, or `null` when there is none or it can't be read."
+        }
+      },
+      "required": ["$schema", "version", "checkedAt", "health", "status"],
+      "additionalProperties": true,
+      "title": "miner status",
+      "description": "What `miner status --json` prints: a verdict on the miner's health from $DATA_DIR/status.json, and the file itself. The exit code repeats `health.exitCode`."
+    }
+  }
+}

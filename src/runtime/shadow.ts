@@ -6,6 +6,7 @@ import { paced } from "../twitch/pace.ts";
 import { PubSub } from "../twitch/PubSub.ts";
 import { Credentials, Twitch } from "../twitch/Twitch.ts";
 import { withListening } from "./listen.ts";
+import { STATUS_FILE, StatusSink } from "./status.ts";
 
 /**
  * The actuator of `miner run --shadow` (research 04 §4, lane C): it records and logs what the
@@ -57,5 +58,11 @@ export const shadowLayer = (dataDir: string, limits?: Limits) => {
       }),
     ).pipe(Layer.provide(journal)),
   ).pipe(Layer.provide(pubsub));
-  return Layer.mergeAll(twitch, pubsub, actuator, Store.file(`${dataDir}/${SHADOW_STATE}`));
+  return Layer.mergeAll(
+    twitch,
+    pubsub,
+    actuator,
+    Store.file(`${dataDir}/${SHADOW_STATE}`),
+    StatusSink.file(`${dataDir}/${STATUS_FILE}`, "shadow"),
+  );
 };

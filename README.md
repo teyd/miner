@@ -10,14 +10,16 @@ list every hour and claims each finished drop once.
 
 ## Status
 
-Early, but it works. `miner run` mined and claimed real drops on 2026-10-30. Today:
+Early, but it works. `miner run` from a checkout mined and claimed real drops on 2026-10-30. The
+Docker image and the systemd unit are new: they build, start and stop cleanly, but haven't mined
+for long yet. Today:
 
 - **Works:** drops for the games you list or for every game, excluded channels, badges and
   emotes on or off, claiming, read-only shadow runs, and a simulator that checks the decision
   logic against a fake Twitch.
 - **Not yet:** channel-points goals (accepted in the config, skipped with a warning), more than
   one drops goal, excluding games from `"games": "all"`, `order: "least-slack"`, a second stream, picking up `config.json` edits without a restart,
-  `miner status`, a Docker health check, and a published image, binary or npm package. You build
+  and a published image, binary or npm package. You build
   it from this repository.
 - **Twitch's API is private** and changes about once a month. Then the miner needs an update
   ([section 5](#5-when-it-needs-you) tells how to notice).
@@ -57,19 +59,25 @@ your password, and the server needs no browser.
    (() => {
      const t = new URLSearchParams(location.hash.slice(1)).get("access_token");
      if (!t) return console.log("No token here: open the link above first.");
-     copy(t);
-     history.replaceState(null, "", "/");
+     try {
+       copy(t);
+     } finally {
+       history.replaceState(null, "", "/");
+     }
      console.log("Copied the token to the clipboard.");
    })();
    ```
 
-   It copies the token and removes it from the address bar and the browser history.
+   It copies the token and removes it from the address bar and the browser history. After you
+   paste it below, copy something else, so a clipboard manager or clipboard sync doesn't keep it.
+   `docker compose config` and `docker inspect` print it in clear: never paste their output into
+   an issue.
 
 3. Keep it like a password. It opens your whole Twitch account, it doesn't expire, and it goes
    only into the one file named in section 3.
 
 Running the link again is safe and gives you a fresh token. A token dies when you change your Twitch password, use "Log out of all devices", or Twitch revokes it.
-The miner then stops and waits for you ([section 5](#5-when-it-needs-you)).
+The miner then stops mining and waits for you ([section 5](#5-when-it-needs-you)).
 
 ## 2. Write config.json
 
@@ -110,6 +118,7 @@ mkdir data && sudo chown 1000:1000 data   # skip the chown if `id -u` already pr
 # The token goes into .env next to compose.yaml (git ignores it). It isn't echoed or saved in
 # your shell history.
 (umask 077; read -rsp 'Token: ' t; echo; printf 'TOKEN=%s\n' "$t" > .env)
+chmod 600 .env   # umask only applies when .env is new
 
 docker compose build
 docker compose run --rm miner config init   # writes data/config.json; edit it if you like
@@ -148,12 +157,13 @@ sudo install -m 644 deploy/miner.service /etc/systemd/system/miner.service
 ```
 
 [`deploy/miner.service`](deploy/miner.service) runs `/usr/bin/node`. If `command -v node` prints
-another path, change `ExecStart` to it. Then write the config, check the token and start the miner:
+another path, change `ExecStart` to it (home directories are read-only to the unit, so a node from
+nvm, asdf or mise works). Then write the config, check the token and start the miner:
 
 ```sh
 sudo -u miner env DATA_DIR=/var/lib/miner LOG_FILE=false "$(command -v node)" /opt/miner/bin.mjs config init
 sudo systemd-run --pty --wait --quiet -p User=miner -p EnvironmentFile=/etc/miner/miner.env \
-  -E LOG_FILE=false "$(command -v node)" /opt/miner/bin.mjs doctor
+  -E DATA_DIR=/var/lib/miner -E LOG_FILE=false "$(command -v node)" /opt/miner/bin.mjs doctor
 sudo systemctl daemon-reload
 sudo systemctl enable --now miner
 journalctl -u miner -f
@@ -163,8 +173,11 @@ The unit runs node directly as the `miner` user, with the token from `/etc/miner
 systemd reads that file as root, so the miner itself can't read it back. The unit is sandboxed:
 read-only system, no home directories, network and `/var/lib/miner` only. `journalctl` gets
 readable lines (`LOG_FORMAT=pretty`) and keeps them, so the JSON file copy is off. After a crash it
-restarts after 10 s, with the delay growing to 15 min. An invalid `config.json` (exit code 2)
-stops it for good until you fix the file and run `systemctl restart miner`.
+restarts after 10 s, with the delay growing to 15 min (systemd 254 or newer, e.g. Debian 13 or
+Ubuntu 24.04; older systemd ignores the growth and retries every 10 s). An invalid `config.json` (exit code 2)
+stops it for good until you fix the file and run `systemctl restart miner`. In Docker,
+`restart: unless-stopped` keeps restarting it and repeating the problem lines: fix the file and run
+`docker compose up -d`.
 
 ## 3c. Run it with plain Node
 
@@ -188,7 +201,6 @@ On a terminal, or with `LOG_FORMAT=pretty`, a healthy start looks like this (tim
 ```text
 18:42:36.906 INFO  live run: state in /data/state.json, recordings in /data/recordings
 18:42:36.917 INFO  runtime: starting fresh
-18:42:36.921 INFO  runtime: idle (starting)
 18:42:37.968 INFO  inventory: 14 drops known, 3 not claimed yet
 18:42:40.344 INFO  runtime: watching oilrats for Rust: Hoodie (6/15 min)
 18:42:47.433 INFO  pubsub: following 100 channels and the account's drops
@@ -209,13 +221,13 @@ On a terminal, or with `LOG_FORMAT=pretty`, a healthy start looks like this (tim
   watched, and others that the same stream also counts for.
 - `runtime: idle (<reason>)` means nothing is being watched right now:
 
-  | Reason                | Meaning                                                             |
-  | --------------------- | ------------------------------------------------------------------- |
-  | `starting`            | It's checking the token and reading the campaigns.                  |
-  | `nothing-to-mine`     | No active campaign matches your config, or everything is claimed.   |
-  | `no-live-channel`     | There are drops to earn, but no channel streaming them is live now. |
-  | `catalog-unavailable` | Twitch didn't return the campaign list. The miner tries again.      |
-  | `needs-login`         | The token was refused. See [section 5](#5-when-it-needs-you).       |
+  | Reason                | Meaning                                                                    |
+  | --------------------- | -------------------------------------------------------------------------- |
+  | `starting`            | Checking the token and reading the campaigns (logged only after a resume). |
+  | `nothing-to-mine`     | No active campaign matches your config, or everything is claimed.          |
+  | `no-live-channel`     | There are drops to earn, but no channel streaming them is live now.        |
+  | `catalog-unavailable` | Twitch didn't return the campaign list. The miner tries again.             |
+  | `needs-login`         | The token was refused. See [section 5](#5-when-it-needs-you).              |
 
 `LOG_LEVEL=Debug` adds every watch tick and PubSub event.
 
@@ -244,14 +256,14 @@ rid of an old token: that kills the new one too.
 Everything the miner keeps is in `DATA_DIR`: `./data` by default, `/data` in Docker,
 `/var/lib/miner` under systemd.
 
-| Path                             | What                                                                                                                                                    |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.json`                    | Your settings. The miner never writes it, except `miner config init` once.                                                                              |
-| `state.json`                     | What the miner knows: campaigns, progress, claims in flight. Written atomically after every change, so it survives crashes and restarts. No token.      |
-| `state.shadow.json`              | The same for [shadow runs](#shadow-runs), kept apart so a shadow run never blocks a real claim.                                                         |
-| `miner.lock`                     | The pid of the running miner. A lock left behind by a crash is taken over on the next start.                                                            |
-| `recordings/YYYY-MM-DD.jsonl.gz` | The flight recorder: Twitch's answers and the miner's actions, one file per UTC day, read with `zcat`. Kept 7 days and 256 MiB at most, 64 MiB per day. |
-| `logs/miner.log`, `.1` … `.5`    | A JSON copy of the log, rotated at 10 MiB. Off in the Docker image and the systemd unit, which keep logs themselves.                                    |
+| Path                             | What                                                                                                                                                                                                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.json`                    | Your settings. The miner never writes it, except `miner config init` once.                                                                                                                                                                  |
+| `state.json`                     | What the miner knows: campaigns, progress, claims in flight. Written atomically after every change, so it survives crashes and restarts. No token.                                                                                          |
+| `state.shadow.json`              | The same for [shadow runs](#shadow-runs), kept apart so a shadow run never blocks a real claim.                                                                                                                                             |
+| `miner.lock`                     | The pid and host (container) of the running miner, so a second miner on this directory refuses to start. A crash's lock is taken over on the next start in the same container; after a crash in another container, remove the file by hand. |
+| `recordings/YYYY-MM-DD.jsonl.gz` | The flight recorder: Twitch's answers and the miner's actions, one file per UTC day, read with `zcat`. Kept 7 days and 256 MiB at most, 64 MiB per day.                                                                                     |
+| `logs/miner.log`, `.1` … `.5`    | A JSON copy of the log, rotated at 10 MiB. Off in the Docker image and the systemd unit, which keep logs themselves.                                                                                                                        |
 
 Recordings and logs are redacted: no token, no signed video URLs, no `Authorization` headers.
 They still show your login and what you watched, so share them only with care.
@@ -293,7 +305,9 @@ docker compose start
 | `miner config schema`   | Print the JSON Schema.                                                          |
 | `miner sim`             | Run the decision logic against a simulated Twitch. Talks to no one.             |
 
-Each takes `--help`. In Docker: `docker compose run --rm miner <command>`.
+Each takes `--help`. In Docker: `docker compose run --rm miner <command>`. `miner status` reads the running
+miner's `status.json` (in Docker: `docker compose exec miner node /app/bin.mjs status`), and its exit code is the
+image's health check: 0 healthy or starting, 1 not running, 2 needs login, 3 discovery broken.
 
 ## Developing
 

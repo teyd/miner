@@ -24,8 +24,8 @@ USER node
 ENV DATA_DIR=/data \
     LOG_FILE=false
 VOLUME /data
-# Waits for `miner status`, which is not built yet. Until then this check would mark every
-# container unhealthy, so it stays commented out:
-# HEALTHCHECK --interval=1m --timeout=10s --start-period=1m CMD ["node", "/app/bin.mjs", "status"]
+# `miner status` reads /data/status.json: 0 healthy or starting, 1 not running or hung (no heartbeat
+# for 90 s), 2 needs login, 3 discovery broken. Any of 1–3 marks the container unhealthy.
+HEALTHCHECK --interval=1m --timeout=10s --start-period=2m CMD ["node", "/app/bin.mjs", "status"]
 ENTRYPOINT ["node", "/app/bin.mjs"]
 CMD ["run"]

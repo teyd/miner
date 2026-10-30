@@ -70,7 +70,7 @@ export const run = Command.make(
         DataDirLocked: (e) =>
           Effect.fail(
             new RunFailed({
-              reason: `another miner (pid ${e.pid}) runs on ${dir}; stop it first (lock: ${e.path})`,
+              reason: `another miner (pid ${e.pid} on ${e.host}) runs on ${dir}; stop it first, or remove ${e.path} if none runs`,
             }),
           ),
         AuthRejected: (e) => Effect.fail(new RunFailed({ reason: e.reason })),

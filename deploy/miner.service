@@ -42,7 +42,8 @@ RestartPreventExitStatus=2
 # needs writable executable memory.
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+# read-only, not yes: a node installed by nvm, asdf or mise lives under /home and must stay executable.
+ProtectHome=read-only
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

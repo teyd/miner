@@ -13,7 +13,8 @@ import {
   dropsDirectory,
   type PersistedQuery,
 } from "./identity.ts";
-import { Journal, redact } from "./journal.ts";
+import { Journal } from "./journal.ts";
+import { redact } from "./redact.ts";
 import {
   CampaignDetails,
   CurrentDrop,

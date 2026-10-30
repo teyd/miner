@@ -1,6 +1,6 @@
 import { Config, Effect, FileSystem, Layer, Logger, Path, References } from "effect";
 import { dataDir } from "../config/load.ts";
-import { redact } from "../twitch/journal.ts";
+import { redact } from "../twitch/redact.ts";
 
 /**
  * Logs go to stderr so command output on stdout (`doctor --json`, `config schema`) stays clean.

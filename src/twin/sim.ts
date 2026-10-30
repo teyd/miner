@@ -8,8 +8,8 @@ import { step } from "../core/step.ts";
 import { Actuator } from "../twitch/Actuator.ts";
 import type { Twitch } from "../twitch/Twitch.ts";
 import { twinActuator } from "./actuator.ts";
-import { canonical, decodeState, encodeState } from "./durable.ts";
-import { emptyMemory, execute, type Memory } from "./execute.ts";
+import { canonical, decodeState, encodeState } from "../store/codec.ts";
+import { emptyMemory, execute, type Memory } from "../runtime/execute.ts";
 import { twinTwitch } from "./http.ts";
 import { checkStep, initialChecker, violation, type InFlight } from "./invariants.ts";
 import {

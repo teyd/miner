@@ -4,12 +4,12 @@ import { TestClock } from "effect/testing";
 import type { CampaignId, ChannelId, DropId, GameId } from "../core/model.ts";
 import { Command, type Event } from "../core/protocol.ts";
 import { Actuator } from "../twitch/Actuator.ts";
-import { twinActuator } from "./actuator.ts";
+import { twinActuator } from "../twin/actuator.ts";
 import { emptyMemory, execute, type Memory } from "./execute.ts";
-import { twinTwitch } from "./http.ts";
-import { SIM_EPOCH, type Fault, type Operation, type Scenario } from "./scenario.ts";
-import { makeTwin, type Twin } from "./twin.ts";
-import { buildWorld, instanceOf, openSession, tick } from "./world.ts";
+import { twinTwitch } from "../twin/http.ts";
+import { SIM_EPOCH, type Fault, type Operation, type Scenario } from "../twin/scenario.ts";
+import { makeTwin, type Twin } from "../twin/twin.ts";
+import { buildWorld, instanceOf, openSession, tick } from "../twin/world.ts";
 
 const scenario = (faults: ReadonlyArray<Fault> = []): Scenario => ({
   latencySeed: 1,

@@ -1,4 +1,4 @@
-import { Clock, Console, Effect, Layer, Option, Schema } from "effect";
+import { Clock, Console, Effect, Layer, Option, Redacted, Schema } from "effect";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 import { isActive, isClaimable, isEligible } from "../core/rules.ts";
@@ -93,9 +93,19 @@ export const doctor = Command.make(
     ),
   },
   Effect.fn(function* ({ json, record }) {
-    const journal = Option.match(record, { onNone: () => Journal.none, onSome: Journal.file });
+    const journal = Option.match(record, {
+      onNone: () => Journal.none,
+      onSome: (path) =>
+        Layer.unwrap(
+          Effect.gen(function* () {
+            const { token } = yield* Credentials;
+            return Journal.file(path, [Redacted.value(token)]);
+          }),
+        ),
+    });
     const live = Twitch.layer.pipe(
-      Layer.provide(Layer.mergeAll(FetchHttpClient.layer, Credentials.layer, journal)),
+      Layer.provide(journal),
+      Layer.provide(Layer.mergeAll(FetchHttpClient.layer, Credentials.layer)),
     );
     const report = yield* Effect.provide(diagnose, live).pipe(
       Effect.catchTag("AuthRejected", (e): Effect.Effect<Report> =>

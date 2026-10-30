@@ -20,6 +20,10 @@ export const catRecording = (path: string) =>
       .readFile(path)
       .pipe(Effect.mapError((e) => new JournalUnreadable({ path, problem: e.message })));
     const text = new TextDecoder().decode(isGzip(bytes) ? gunzip(bytes) : bytes);
+    // `gunzip` skips members it can't inflate, so a fully corrupt file would read as empty.
+    if (isGzip(bytes) && text.length === 0) {
+      return yield* new JournalUnreadable({ path, problem: "no gzip member could be inflated" });
+    }
     const { entries, missing } = expandRecording(parseRecording(text));
     for (const entry of entries) yield* Console.log(JSON.stringify(entry));
     if (missing.length > 0) {

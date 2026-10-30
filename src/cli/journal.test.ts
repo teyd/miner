@@ -62,4 +62,14 @@ describe("miner journal cat", () => {
       assert.include(out.lines.join("\n"), `"$same"`);
     }),
   );
+
+  it.effect("fails on a gzip file none of whose members inflate", () =>
+    Effect.gen(function* () {
+      const gz = nodeGzip.gzip(new TextEncoder().encode('{"kind":"answer"}\n'));
+      const broken = gz.slice(0, 10).fill(0, 10); // a gzip header with nothing behind it
+      const out = yield* cat(new Uint8Array([...broken, 0xff, 0xff, 0xff]));
+      assert.isTrue(Exit.isFailure(out.exit));
+      assert.include(JSON.stringify(out.exit), "no gzip member could be inflated");
+    }),
+  );
 });

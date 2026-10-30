@@ -79,6 +79,8 @@ export class Journal extends Context.Service<
    * points at a line this process wrote to this file and saw succeed: the set of written parts
    * is filled after a write returns, emptied when the day changes, and starts empty, so neither
    * a failed or torn write, a day roll, nor a restart after a crash can leave one dangling.
+   * That holds for the process, not the disk: writes aren't fsynced, so storage that loses an
+   * earlier append can orphan a reference. `expandRecording` reports it, never guesses.
    */
   static readonly rolling = (
     dir: string,

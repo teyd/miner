@@ -145,7 +145,7 @@ same as per-line gzip (582 vs 584 KiB), and whole-file zstd's lead over gzip shr
 answer whole.
 
 A reference only points at a line the same process wrote to the same file and saw succeed, so
-a failed or torn write, a day roll or a restart after a crash can't leave one dangling (property
+a failed or torn write, a day roll or a restart after a crash can't leave one dangling (for the process: writes aren't fsynced, so a disk that loses an append can still orphan one, which `journal cat` reports with exit 1) (property
 test in `src/twitch/journal.test.ts`). Measuring also found that a torn gzip member followed by
 more members (a crash, then a restart appending to the same day) made `gunzip` stop at the tear
 without an error; the reader now inflates member by member.

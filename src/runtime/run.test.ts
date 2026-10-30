@@ -14,7 +14,7 @@ import { buildWorld } from "../twin/world.ts";
 import { DEFAULT_LIMITS, parseRecording, type Limits } from "../twitch/journal.ts";
 import { REQUEST_GAP } from "../twitch/pace.ts";
 import { Credentials } from "../twitch/Twitch.ts";
-import { run } from "./run.ts";
+import { countAt, MAX_STEPS_AT_INSTANT, run } from "./run.ts";
 import { SHADOW_STATE, shadowLayer } from "./shadow.ts";
 
 const DIR = "/data";
@@ -198,4 +198,13 @@ describe("run --shadow", () => {
       assert.isTrue(Option.isSome(Option.fromNullishOr(files.files.get(`${DIR}/${SHADOW_STATE}`))));
     }),
   );
+});
+
+describe("the spin guard", () => {
+  it("counts steps at one instant and restarts when time moves", () => {
+    let instant: readonly [number, number] = [-1, 0];
+    for (let i = 0; i < MAX_STEPS_AT_INSTANT + 1; i++) instant = countAt(instant, 5);
+    assert.deepStrictEqual(instant, [5, MAX_STEPS_AT_INSTANT + 1]);
+    assert.deepStrictEqual(countAt(instant, 6), [6, 1]);
+  });
 });

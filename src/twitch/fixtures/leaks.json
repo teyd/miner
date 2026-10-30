@@ -83,6 +83,10 @@
       "input": "Expected string, got {\"access_token\":\"SCHEMASECRET\"} at [\"token\"]"
     },
     {
+      "shape": "auth-token cookie in a header dump",
+      "input": { "headers": { "cookie": "unique_id=abc; auth-token=COOKIESECRET; other=1" } }
+    },
+    {
       "shape": "camel-cased secret key at depth",
       "input": [{ "session": { "accessToken": "CAMELSECRET", "expiresIn": 3600 } }]
     }

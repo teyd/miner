@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, FiberSet, Option, Queue, Ref } from "effect";
+import { Cause, Clock, Effect, FiberSet, Option, Queue, Ref, Schema } from "effect";
 import type { Config } from "../config/schema.ts";
 import type { Campaign, Channel } from "../core/model.ts";
 import { Event, type Command } from "../core/protocol.ts";
@@ -8,6 +8,25 @@ import { canonical } from "../store/codec.ts";
 import { Store } from "../store/Store.ts";
 import { emptyMemory, execute, type Memory } from "./execute.ts";
 import { toSettings } from "./settings.ts";
+
+/**
+ * A deadline the core never moves would make the loop step forever at one instant (the sim's
+ * `BusyWake`, plan 09 §4 s2). The sim catches it in tests; this stops a real run instead of
+ * spinning a CPU against Twitch. 100 is far above what one instant legitimately holds.
+ */
+export const MAX_STEPS_AT_INSTANT = 100;
+
+/** The core stepped `MAX_STEPS_AT_INSTANT` times without time moving: a core bug. */
+export class RunStuck extends Schema.TaggedError<RunStuck, { readonly brand: unique symbol }>()(
+  "RunStuck",
+  { at: Schema.Finite, steps: Schema.Finite },
+) {}
+
+/** Counts steps at one instant: `[instant, count]` after a step at `now`. */
+export const countAt = (
+  [at, count]: readonly [number, number],
+  now: number,
+): readonly [number, number] => (now === at ? [at, count + 1] : [now, 1]);
 
 /**
  * The runtime: one scheduler fiber that owns the state. It takes the next event, or a `Tick` when
@@ -32,6 +51,7 @@ export const run = (config: Config) =>
       Option.isSome(loaded) ? "runtime: resumed from saved state" : "runtime: starting fresh",
     );
     yield* Queue.offer(events, Event.Started());
+    let instant: readonly [number, number] = [-1, 0];
 
     const start = (command: Command) =>
       FiberSet.run(
@@ -50,6 +70,10 @@ export const run = (config: Config) =>
     while (true) {
       const event = yield* next(events, nextDeadline(state));
       const now = yield* Clock.currentTimeMillis;
+      instant = countAt(instant, now);
+      if (instant[1] > MAX_STEPS_AT_INSTANT) {
+        return yield* new RunStuck({ at: now, steps: instant[1] });
+      }
       const before = { ...state, settings: settingsFor(state, event) };
       const result = step(before, event, now);
       // Save when what a restart keeps has changed: a tick every 20 s would otherwise rewrite

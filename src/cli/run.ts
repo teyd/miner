@@ -68,6 +68,12 @@ export const run = Command.make(
             }),
           ),
         StateNotSaved: (e) => Effect.fail(new RunFailed({ reason: `${e.path}: ${e.detail}` })),
+        RunStuck: (e) =>
+          Effect.fail(
+            new RunFailed({
+              reason: `the core stepped ${e.steps} times at ${e.at} ms without time moving (a bug, please report it)`,
+            }),
+          ),
       }),
       Effect.tapError((e) => Console.log(`run stopped: ${e.reason}`)),
     );

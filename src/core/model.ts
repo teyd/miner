@@ -78,13 +78,44 @@ export interface Channel {
   readonly live: Live | undefined;
 }
 
-export interface Settings {
-  /** Game priority, highest first. Empty mines every eligible game. */
-  readonly games: ReadonlyArray<GameId>;
-  readonly excludeChannels: ReadonlyArray<ChannelId>;
-  /** Mine campaigns whose rewards include a badge or an emote, linked or not. */
-  readonly badgesAndEmotes: boolean;
+/** `item`: an in-game reward (`DIRECT_ENTITLEMENT`, or a type Twitch added since). */
+export type Reward = "item" | "badge" | "emote";
+
+export type Order = "ending-soonest" | "least-slack";
+
+export interface GameGoal {
+  readonly id: GameId;
+  readonly rewards: ReadonlyArray<Reward>;
 }
+
+/** One `drops` goal of `config.json` (decision 28), with names resolved to ids. */
+export interface DropsGoal {
+  /** Games in priority order, or every game but `excludeGames`. */
+  readonly games: "all" | ReadonlyArray<GameGoal>;
+  /** Rewards for `"all"`; a listed game carries its own. */
+  readonly rewards: ReadonlyArray<Reward>;
+  readonly excludeGames: ReadonlyArray<GameId>;
+  /** The goal's and the file's excluded channels. */
+  readonly excludeChannels: ReadonlyArray<ChannelId>;
+  /** Items only from campaigns whose game account is linked. Badges and emotes ignore it. */
+  readonly linkedOnly: boolean;
+  readonly order: Order;
+}
+
+export interface Settings {
+  /** Highest priority first. The first goal with a drop to earn on a live channel wins. */
+  readonly goals: ReadonlyArray<DropsGoal>;
+}
+
+/** The goal of an empty `config.json`: every game, every reward, items only when linked. */
+export const DEFAULT_GOAL: DropsGoal = {
+  games: "all",
+  rewards: ["item", "badge", "emote"],
+  excludeGames: [],
+  excludeChannels: [],
+  linkedOnly: true,
+  order: "ending-soonest",
+};
 
 /**
  * Games whose campaigns earn on any channel, whatever it streams.

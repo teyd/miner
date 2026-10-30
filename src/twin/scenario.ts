@@ -19,6 +19,8 @@ const BOUNDS = {
   pair: [0, 2],
   game: [0, 2],
   campaigns: [1, 4],
+  goals: [1, 3],
+  rewards: [1, 3],
   startMinute: [-120, 600],
   durationMinutes: [30, 2880],
   drops: [1, 3],
@@ -67,6 +69,8 @@ const WINDOW_FAULTS = ["http-5xx", "http-429", "timeout", "service-error", "null
 const CRASH_POINTS = ["before-persist", "after-persist", "in-claim"] as const;
 const BENEFITS = ["BADGE", "EMOTE", "DIRECT_ENTITLEMENT"] as const;
 const CHANGES = ["up", "down", "game-0", "game-1", "game-2"] as const;
+const REWARDS = ["item", "badge", "emote"] as const;
+const ORDERS = ["ending-soonest", "least-slack"] as const;
 
 export const Fault = Schema.Union([
   Schema.Struct({
@@ -105,6 +109,11 @@ const CampaignSpec = Schema.Struct({
   startMinute: int("startMinute"),
   durationMinutes: int("durationMinutes"),
   linked: Schema.Boolean,
+  /**
+   * Twitch credits this campaign's items to an unlinked account, to deliver once linked; some
+   * campaigns do, some don't (research 02 §3). Omitted: false.
+   */
+  creditsUnlinked: Schema.optionalKey(Schema.Boolean),
   /** Channel indices. Empty: any drops-enabled channel streaming the game. */
   allowList: list(int("index"), "short"),
   drops: list(DropSpec, "drops"),
@@ -123,16 +132,39 @@ const ChannelSpec = Schema.Struct({
   ),
 });
 
+const Rewards = list(Schema.Literals(REWARDS), "rewards");
+
+/** A drops goal of `config.json` (decision 28), with game and channel indices for names. */
+const GoalSpec = Schema.Struct({
+  /** `null`: every game. Otherwise games in priority order, each with optional own rewards. */
+  games: Schema.NullOr(
+    list(Schema.Struct({ game: int("game"), rewards: Schema.NullOr(Rewards) }), "short"),
+  ),
+  rewards: Rewards,
+  excludeGames: list(int("game"), "pair"),
+  /** Channel indices. */
+  exclude: list(int("index"), "pair"),
+  linkedOnly: Schema.Boolean,
+  order: Schema.Literals(ORDERS),
+});
+export type GoalSpec = typeof GoalSpec.Type;
+
+/** The config file's default goal: every game, every reward, items only when linked. */
+export const DEFAULT_GOAL_SPEC: GoalSpec = {
+  games: null,
+  rewards: ["item", "badge", "emote"],
+  excludeGames: [],
+  exclude: [],
+  linkedOnly: true,
+  order: "ending-soonest",
+};
+
 export const Scenario = Schema.Struct({
   /** Seeds `Random`, which draws request latencies. */
   latencySeed: Schema.Int,
   horizonMinutes: int("horizonMinutes"),
   inventoryLagMinutes: int("inventoryLagMinutes"),
-  settings: Schema.Struct({
-    games: list(int("game"), "short"),
-    exclude: list(int("index"), "pair"),
-    badgesAndEmotes: Schema.Boolean,
-  }),
+  settings: Schema.Struct({ goals: list(GoalSpec, "goals") }),
   campaigns: list(CampaignSpec, "campaigns"),
   channels: list(ChannelSpec, "channels"),
   faults: list(Fault, "faults"),
@@ -191,21 +223,38 @@ const dropArbitrary = (requiredMinutes: fc.Arbitrary<number>) =>
 const changeArbitrary = (atMinute: fc.Arbitrary<number>) =>
   fc.record({ atMinute, to: fc.constantFrom(...CHANGES) });
 
+const rewardsArb = fc.uniqueArray(fc.constantFrom(...REWARDS), {
+  minLength: BOUNDS.rewards[0],
+  maxLength: BOUNDS.rewards[1],
+});
+
+const goalArbitrary: fc.Arbitrary<GoalSpec> = fc.record({
+  games: fc.option(
+    listArb(
+      fc.record({ game: intArb("game"), rewards: fc.option(rewardsArb, { nil: null }) }),
+      "short",
+    ),
+    { nil: null },
+  ),
+  rewards: rewardsArb,
+  excludeGames: listArb(intArb("game"), "pair"),
+  exclude: listArb(intArb("index"), "pair"),
+  linkedOnly: fc.boolean(),
+  order: fc.constantFrom(...ORDERS),
+});
+
 const randomScenario: fc.Arbitrary<Scenario> = fc.record({
   latencySeed: fc.integer({ min: 0, max: 1_000_000 }),
   horizonMinutes: intArb("horizonMinutes"),
   inventoryLagMinutes: intArb("inventoryLagMinutes"),
-  settings: fc.record({
-    games: listArb(intArb("game"), "short"),
-    exclude: listArb(intArb("index"), "pair"),
-    badgesAndEmotes: fc.boolean(),
-  }),
+  settings: fc.record({ goals: listArb(goalArbitrary, "goals") }),
   campaigns: listArb(
     fc.record({
       game: intArb("game"),
       startMinute: intArb("startMinute"),
       durationMinutes: intArb("durationMinutes"),
       linked: fc.boolean(),
+      creditsUnlinked: fc.boolean(),
       allowList: listArb(intArb("index"), "short"),
       drops: listArb(dropArbitrary(intArb("requiredMinutes")), "drops"),
     }),
@@ -239,12 +288,16 @@ const opportunityArbitrary = fc.record({
   drops: listArb(dropArbitrary(fc.integer({ min: 1, max: 45 })), "drops"),
   viewers: intArb("viewers"),
   changes: listArb(changeArbitrary(fc.integer({ min: 60, max: BOUNDS.atMinute[1] })), "changes"),
+  /** The goal that wants it, modulo the number of goals. */
+  goal: intArb("short"),
 });
+
+const REWARD_OF = { BADGE: "badge", EMOTE: "emote", DIRECT_ENTITLEMENT: "item" } as const;
 
 /**
  * Generates scenarios within the Schema's bounds; fast-check shrinks them towards fewer things.
- * Campaign 0 on channel 0 is always an opportunity the settings want. The rest is random, so
- * faults, newer campaigns and schedule changes may still stand in its way.
+ * Campaign 0 on channel 0 is always an opportunity one of the goals wants. The rest is random,
+ * so faults, newer campaigns, other goals and schedule changes may still stand in its way.
  */
 export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
   .tuple(randomScenario, opportunityArbitrary)
@@ -260,19 +313,47 @@ export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
       changes,
     };
     const channels = [channel, ...s.channels.slice(0, BOUNDS.channels[1] - 1)];
-    const games = s.settings.games;
+    const index = o.goal % s.settings.goals.length;
+    const goals = s.settings.goals.map((g, i) =>
+      i === index ? wanting(g, game, drops, channels.length) : g,
+    );
     return {
       ...s,
-      settings: {
-        ...s.settings,
-        // The opportunity's game joins the priority list last, so the list keeps its order.
-        games:
-          games.length === 0 || games.includes(game)
-            ? games
-            : [...games.slice(0, BOUNDS.short[1] - 1), game],
-        exclude: s.settings.exclude.filter((k) => k % channels.length !== 0),
-      },
+      settings: { goals },
       campaigns: [campaign, ...s.campaigns.slice(0, BOUNDS.campaigns[1] - 1)],
       channels,
     };
   });
+
+/**
+ * Bends a goal just enough to want the first drop of a linked campaign of `game` on channel 0:
+ * the game listed (last, so the list keeps its order) and not excluded, the drop's reward wanted,
+ * channel 0 not excluded.
+ */
+const wanting = (
+  goal: GoalSpec,
+  game: number,
+  drops: ReadonlyArray<{ readonly benefit: (typeof BENEFITS)[number] }>,
+  channels: number,
+): GoalSpec => {
+  const reward = REWARD_OF[drops[0]!.benefit];
+  const withReward = (rewards: ReadonlyArray<(typeof REWARDS)[number]>) =>
+    rewards.includes(reward) ? rewards : [...rewards.slice(0, BOUNDS.rewards[1] - 1), reward];
+  const games =
+    goal.games === null
+      ? null
+      : goal.games.some((g) => g.game === game)
+        ? goal.games.map((g) =>
+            g.game === game && g.rewards !== null ? { ...g, rewards: withReward(g.rewards) } : g,
+          )
+        : [...goal.games.slice(0, BOUNDS.short[1] - 1), { game, rewards: null }];
+  // The game's first entry decides; a later duplicate never does.
+  const own = games?.find((g) => g.game === game)?.rewards ?? null;
+  return {
+    ...goal,
+    games,
+    rewards: own === null ? withReward(goal.rewards) : goal.rewards,
+    excludeGames: goal.excludeGames.filter((g) => g !== game),
+    exclude: goal.exclude.filter((k) => k % channels !== 0),
+  };
+};

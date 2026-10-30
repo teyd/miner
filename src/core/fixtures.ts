@@ -7,11 +7,13 @@ import type {
   Drop,
   DropId,
   DropInstanceId,
+  DropsGoal,
   GameId,
   Progress,
+  Reward,
   Settings,
 } from "./model.ts";
-import { HOUR } from "./model.ts";
+import { DEFAULT_GOAL, HOUR } from "./model.ts";
 
 /** Test data builders. Times are relative to `T0`, a fixed instant. */
 export const T0 = 1_793_275_200_000; // 2026-10-29T12:00:00Z
@@ -28,6 +30,7 @@ export const iid = (id: string) => id as DropInstanceId;
 
 export const item: Benefit = { id: "b-item", name: "Skin", distribution: "DIRECT_ENTITLEMENT" };
 export const badge: Benefit = { id: "b-badge", name: "Badge", distribution: "BADGE" };
+export const emote: Benefit = { id: "b-emote", name: "Emote", distribution: "EMOTE" };
 
 export const drop = (id: string, overrides: Partial<Drop> = {}): Drop => ({
   id: did(id),
@@ -80,9 +83,18 @@ export const progress = (
   ...overrides,
 });
 
-export const settings = (overrides: Partial<Settings> = {}): Settings => ({
-  games: [],
-  excludeChannels: [],
-  badgesAndEmotes: true,
+export const goal = (overrides: Partial<DropsGoal> = {}): DropsGoal => ({
+  ...DEFAULT_GOAL,
   ...overrides,
 });
+
+/** One goal, the config file's default unless overridden. */
+export const settings = (overrides: Partial<DropsGoal> = {}): Settings => ({
+  goals: [goal(overrides)],
+});
+
+/** A goal for these games in priority order, each with the given rewards. */
+export const games = (
+  ids: ReadonlyArray<string>,
+  rewards: ReadonlyArray<Reward> = DEFAULT_GOAL.rewards,
+): DropsGoal["games"] => ids.map((id) => ({ id: id as GameId, rewards }));

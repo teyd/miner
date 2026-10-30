@@ -5,6 +5,7 @@ import {
   chid,
   cid,
   did,
+  games,
   iid,
   progress,
   settings,
@@ -18,10 +19,11 @@ const c = campaign("c");
 
 /** Every kind of value `State` holds: Maps, Sets, `undefined` fields, both claim statuses. */
 const populated: State = {
-  ...initial(settings({ games: [c.game.id], excludeChannels: [chid("x")] })),
+  ...initial(settings({ games: games([c.game.id], ["badge"]), excludeChannels: [chid("x")] })),
   auth: "needs-login",
   catalog: [c],
   catalogStatus: "unavailable",
+  discovery: { pending: ["directory:game-1"], until: 5 },
   progress: new Map([
     [did("c-d1"), progress(c, "c-d1", { minutes: 60, instanceId: iid("i1") })],
     [did("c-d2"), progress(c, "c-d2", { minutes: 3 })],
@@ -85,9 +87,9 @@ describe("codec", () => {
 describe("decodeState", () => {
   it("refuses another version and text that isn't a state", () => {
     const text = encodeState(populated);
-    assert.match(text, /"version":2}$/);
-    // Version 1 had no `deadlines.subscribe`.
-    assert.throws(() => decodeState(text.replace('"version":2', '"version":1')), /version 1/);
+    assert.match(text, /"version":3}$/);
+    // Version 2 had no `discovery`.
+    assert.throws(() => decodeState(text.replace('"version":3', '"version":2')), /version 2/);
     assert.throws(() => decodeState(canonical(populated)), /not a saved miner state/);
     assert.throws(() => decodeState("{"));
   });

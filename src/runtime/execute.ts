@@ -1,6 +1,6 @@
 import { Effect, Ref } from "effect";
 import type { ChannelId, GameId } from "../core/model.ts";
-import { Event, type Command } from "../core/protocol.ts";
+import { Event, readKey, type Command } from "../core/protocol.ts";
 import { Actuator } from "../twitch/Actuator.ts";
 import type { TwitchError } from "../twitch/errors.ts";
 import { Twitch, type Account } from "../twitch/Twitch.ts";
@@ -89,7 +89,7 @@ export const execute = (
               logins: new Map([...m.logins, ...channels.map((c) => [c.id, c.login] as const)]),
             })),
           ),
-          Effect.map((channels) => [Event.ChannelsRead({ channels })]),
+          Effect.map((channels) => [Event.ChannelsRead({ channels, read: readKey(command) })]),
           Effect.catch((e) => Effect.succeed(onReadError(e))),
         );
       }
@@ -99,7 +99,7 @@ export const execute = (
         const known = command.channelIds.flatMap((id) => logins.get(id) ?? []);
         if (known.length === 0) return none;
         return yield* twitch.streams(known).pipe(
-          Effect.map((channels) => [Event.ChannelsRead({ channels })]),
+          Effect.map((channels) => [Event.ChannelsRead({ channels, read: readKey(command) })]),
           Effect.catch((e) => Effect.succeed(onReadError(e))),
         );
       }

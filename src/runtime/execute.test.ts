@@ -7,7 +7,13 @@ import { Actuator } from "../twitch/Actuator.ts";
 import { twinActuator } from "../twin/actuator.ts";
 import { emptyMemory, execute, type Memory } from "./execute.ts";
 import { twinTwitch } from "../twin/http.ts";
-import { SIM_EPOCH, type Fault, type Operation, type Scenario } from "../twin/scenario.ts";
+import {
+  DEFAULT_GOAL_SPEC,
+  SIM_EPOCH,
+  type Fault,
+  type Operation,
+  type Scenario,
+} from "../twin/scenario.ts";
 import { makeTwin, type Twin } from "../twin/twin.ts";
 import { buildWorld, instanceOf, openSession, tick } from "../twin/world.ts";
 
@@ -15,7 +21,7 @@ const scenario = (faults: ReadonlyArray<Fault> = []): Scenario => ({
   latencySeed: 1,
   horizonMinutes: 600,
   inventoryLagMinutes: 0,
-  settings: { games: [], exclude: [], badgesAndEmotes: true },
+  settings: { goals: [DEFAULT_GOAL_SPEC] },
   campaigns: [
     {
       game: 0,

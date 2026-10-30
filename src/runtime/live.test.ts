@@ -9,7 +9,7 @@ import { Instance } from "../platform/instance.ts";
 import { decodeState } from "../store/codec.ts";
 import { memoryFileSystem, type MemoryFiles } from "../store/memoryFileSystem.ts";
 import { twinHttp } from "../twin/http.ts";
-import { SIM_EPOCH, type Scenario } from "../twin/scenario.ts";
+import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Scenario } from "../twin/scenario.ts";
 import { makeTwin, type Twin } from "../twin/twin.ts";
 import * as World from "../twin/world.ts";
 import token from "../twitch/fixtures/playback-token.json" with { type: "json" };
@@ -32,7 +32,7 @@ const scenario: Scenario = {
   latencySeed: 1,
   horizonMinutes: 1440,
   inventoryLagMinutes: 0,
-  settings: { games: [], exclude: [], badgesAndEmotes: true },
+  settings: { goals: [DEFAULT_GOAL_SPEC] },
   campaigns: [
     {
       game: 0,

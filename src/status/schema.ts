@@ -61,13 +61,15 @@ export const CatalogStatus = Schema.Literals(["unknown", "ok", "unavailable"]).a
 
 export const IdleReason = Schema.Literals([
   "starting",
+  "discovering",
   "needs-login",
   "catalog-unavailable",
   "nothing-to-mine",
   "no-live-channel",
 ]).annotate({
   description:
-    '"starting": no catalog yet. "needs-login": parked on a rejected token. "catalog-unavailable": ' +
+    '"starting": no catalog yet. "discovering": waiting for the channel reads of a new catalog ' +
+    'read, at most a minute. "needs-login": parked on a rejected token. "catalog-unavailable": ' +
     'discovery is broken. "nothing-to-mine": no campaign the config asks for has a drop left to ' +
     'earn. "no-live-channel": there is one, but no eligible channel streams it now.',
 });

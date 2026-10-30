@@ -6,7 +6,7 @@ import { TestConsole } from "effect/testing";
 import type { Command as CoreCommand } from "../core/protocol.ts";
 import { nextDeadline } from "../core/state.ts";
 import { step } from "../core/step.ts";
-import type { Capsule, Scenario } from "../twin/scenario.ts";
+import { DEFAULT_GOAL_SPEC, type Capsule, type Scenario } from "../twin/scenario.ts";
 import { runTwice, type Core } from "../twin/sim.ts";
 import { miner } from "./miner.ts";
 import { simulate } from "./sim.ts";
@@ -16,7 +16,7 @@ const scenario: Scenario = {
   latencySeed: 3,
   horizonMinutes: 60,
   inventoryLagMinutes: 0,
-  settings: { games: [], exclude: [], badgesAndEmotes: true },
+  settings: { goals: [DEFAULT_GOAL_SPEC] },
   campaigns: [
     {
       game: 0,

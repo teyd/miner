@@ -38,6 +38,16 @@ export const WATCHLIST_LIMIT = 100;
  * covers about 30 of them.
  */
 export const SUBSCRIBE_SETTLE: Millis = 10_000;
+/**
+ * A catalog read starts one directory read per game and one read of allow-listed channels, and
+ * their answers arrive one by one. Planning on the first answer watched a channel of a
+ * lower-ranked game and switched 5 s later when a better game's answer came in (live run,
+ * 2026-10-30). So no watch starts or switches until every read has answered, or this long after
+ * the catalog read: a read that fails for good sends no answer at all (`execute.ts`). It covers
+ * a read's retries (2 + 4 + 8 s, `retryReads`) and 40 games' reads started 300 ms apart; it
+ * only runs out when a read fails.
+ */
+export const DISCOVERY_SETTLE: Millis = 60_000;
 
 export interface Watching {
   readonly _tag: "Watching";
@@ -57,6 +67,8 @@ export interface Watching {
 export type Idle =
   | NoTarget
   | "starting"
+  /** A catalog read's channel reads are still out: see `DISCOVERY_SETTLE`. */
+  | "discovering"
   | "needs-login"
   /** The catalog is `null` or unreachable: discovery is broken, which is not "nothing to mine". */
   | "catalog-unavailable";
@@ -87,6 +99,12 @@ export interface Deadlines {
   readonly subscribe: Millis | undefined;
 }
 
+/** The channel reads a catalog read started, by `readKey`, and when to stop waiting for them. */
+export interface Discovery {
+  readonly pending: ReadonlyArray<string>;
+  readonly until: Millis;
+}
+
 export interface State {
   readonly settings: Settings;
   readonly auth: "unknown" | "valid" | "needs-login";
@@ -99,6 +117,7 @@ export interface State {
   readonly watch: Watch;
   readonly claims: ReadonlyMap<string, ClaimIntent>;
   readonly subscriptions: ReadonlyArray<ChannelId>;
+  readonly discovery: Discovery | undefined;
   readonly deadlines: Deadlines;
 }
 
@@ -113,6 +132,7 @@ export const initial = (settings: Settings): State => ({
   watch: { _tag: "Idle", reason: "starting" },
   claims: new Map(),
   subscriptions: [],
+  discovery: undefined,
   deadlines: {
     validate: 0,
     catalog: 0,
@@ -139,6 +159,7 @@ export const nextDeadline = (state: State): Millis | undefined => {
         d.inventory,
         d.tick ?? Infinity,
         d.subscribe ?? Infinity,
+        state.discovery?.until ?? Infinity,
         ...d.online.values(),
       );
   }

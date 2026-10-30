@@ -3,7 +3,13 @@ import { Effect, Schema } from "effect";
 import type { Command } from "../core/protocol.ts";
 import { nextDeadline } from "../core/state.ts";
 import { step } from "../core/step.ts";
-import { Capsule, scenarioArbitrary, type Fault, type Scenario } from "./scenario.ts";
+import {
+  Capsule,
+  DEFAULT_GOAL_SPEC,
+  scenarioArbitrary,
+  type Fault,
+  type Scenario,
+} from "./scenario.ts";
 import {
   runProperty,
   runScenario,
@@ -19,7 +25,7 @@ const base: Scenario = {
   latencySeed: 7,
   horizonMinutes: 120,
   inventoryLagMinutes: 1,
-  settings: { games: [], exclude: [], badgesAndEmotes: true },
+  settings: { goals: [DEFAULT_GOAL_SPEC] },
   campaigns: [
     {
       game: 0,
@@ -232,6 +238,38 @@ describe("planted bugs are caught and shrunk", () => {
         maxHorizonMinutes: 120,
       });
       expectCaught(result, ["TwoWatches"]);
+    }),
+  );
+
+  it.effect("planning on the first discovery answer (the live startup flip)", () =>
+    Effect.gen(function* () {
+      // Game 0 ranks first and its campaign is allow-listed to channel 1; game 1's directory
+      // read goes out first and answers first, with channel 0.
+      const flip: Scenario = {
+        ...base,
+        horizonMinutes: 30,
+        settings: {
+          goals: [{ ...DEFAULT_GOAL_SPEC, games: [0, 1].map((game) => ({ game, rewards: null })) }],
+        },
+        campaigns: [
+          { ...base.campaigns[0]!, allowList: [1] },
+          { ...base.campaigns[0]!, game: 1 },
+        ],
+        channels: [
+          { ...base.channels[0]!, game: 1 },
+          { ...base.channels[0]!, viewers: 10 },
+        ],
+      };
+      const impatient: Core = {
+        nextDeadline,
+        step: (state, event, now) => {
+          const result = step({ ...state, discovery: undefined }, event, now);
+          return { ...result, state: { ...result.state, discovery: undefined } };
+        },
+      };
+      const caught = yield* runTwice(flip, { core: impatient });
+      assert.strictEqual(caught.violation?.kind, "WatchFlip");
+      assert.strictEqual((yield* runTwice(flip)).violation, undefined);
     }),
   );
 

@@ -1,13 +1,11 @@
 import { Clock, Console, Effect, Layer, Option, Redacted, Schema } from "effect";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
+import { DEFAULT_GOAL } from "../core/model.ts";
 import { isActive, isClaimable, isEligible } from "../core/rules.ts";
 import type { TwitchError } from "../twitch/errors.ts";
 import { Journal } from "../twitch/journal.ts";
 import { Credentials, Twitch, type Account } from "../twitch/Twitch.ts";
-
-/** Default settings: every game, badges and emotes included. */
-const everything = { games: [], excludeChannels: [], badgesAndEmotes: true };
 
 export class DoctorFailed extends Schema.TaggedError<
   DoctorFailed,
@@ -57,7 +55,7 @@ export const diagnose: Effect.Effect<Report, never, Twitch> = Effect.gen(functio
       const active = c.campaigns.filter((x) => isActive(x, now));
       return {
         active: active.length,
-        eligible: active.filter((x) => isEligible(x, everything)).length,
+        eligible: active.filter((x) => isEligible(x, DEFAULT_GOAL)).length,
         linked: active.filter((x) => x.linked).length,
       };
     }),

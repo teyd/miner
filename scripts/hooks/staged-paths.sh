@@ -5,7 +5,7 @@
 set -eu
 bad="$(git diff --cached --name-only --diff-filter=d -z |
   tr '\0' '\n' |
-  grep -E '^data/|\.jsonl(\.gz)?$|(^|/)\.env($|\.)' |
+  grep -E '(^|/)data/|\.jsonl(\.gz)?$|(^|/)\.env($|\.|rc$)' |
   grep -vE '(^|/)\.env\.schema$' || true)"
 if [ -n "$bad" ]; then
   printf 'never commit these (unstage with git restore --staged <file>):\n%s\n' "$bad" >&2

@@ -8,7 +8,7 @@ import {
 } from "../core/state.ts";
 import { MINUTE, claimKey, type Campaign, type ChannelId, type Millis } from "../core/model.ts";
 import type { Command, Event } from "../core/protocol.ts";
-import { canonical, decodeState, encodeState } from "./durable.ts";
+import { canonical, decodeState, encodeState } from "../store/codec.ts";
 import { SIM_EPOCH, type Violation } from "./scenario.ts";
 import { TWIN_TIMEOUT, type Activity } from "./twin.ts";
 import {
@@ -329,7 +329,7 @@ const checkCommands = (
   const { before, after, event, commands } = step;
 
   // 5: every save decodes to itself.
-  if (encodeState(decodeState(step.persisted)) !== step.persisted) {
+  if (!roundTrips(step.persisted)) {
     fail("StateLost", "the saved state does not survive a round-trip");
   }
   c = { ...c, lastSaved: step.persisted };
@@ -471,4 +471,12 @@ const checkIdle = (
     return { ...checker, idleSince: undefined, knownSince: undefined };
   }
   return { ...checker, idleSince: since, knownSince };
+};
+
+const roundTrips = (text: string): boolean => {
+  try {
+    return encodeState(decodeState(text)) === text;
+  } catch {
+    return false;
+  }
 };

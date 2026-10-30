@@ -4,8 +4,7 @@ import type { State } from "../core/state.ts";
 /**
  * Canonical JSON for core values: object keys sorted, Maps and Sets as sorted tagged entries,
  * `undefined` kept as a sentinel. Equal values give equal text whatever their insertion order, so
- * the text works as a trace line and as a saved state. A stand-in until `store` lands; `store`
- * moves it to `src/store/` and adds a schema version.
+ * the text works as a trace line and as a saved state.
  */
 export const canonical = (value: unknown): string => {
   if (value === undefined) return '{"$undefined":true}';
@@ -38,6 +37,23 @@ const revive = (value: unknown): unknown => {
   return Object.fromEntries(Object.entries(record).map(([k, v]) => [k, revive(v)]));
 };
 
-export const encodeState = (state: State): string => canonical(state);
+/**
+ * Bumped whenever `State` changes shape. A file with another version is refused rather than
+ * guessed at: a misread claim intent could send a claim twice.
+ */
+export const STATE_VERSION = 1;
 
-export const decodeState = (text: string): State => revive(JSON.parse(text)) as State;
+export const encodeState = (state: State): string =>
+  `{"state":${canonical(state)},"version":${STATE_VERSION}}`;
+
+/** Throws on text that isn't a saved state of this version. */
+export const decodeState = (text: string): State => {
+  const parsed: unknown = JSON.parse(text);
+  if (!Predicate.isObject(parsed) || !("version" in parsed) || !("state" in parsed)) {
+    throw new Error("not a saved miner state");
+  }
+  if (parsed.version !== STATE_VERSION) {
+    throw new Error(`state version ${String(parsed.version)}, this miner reads ${STATE_VERSION}`);
+  }
+  return revive(parsed.state) as State;
+};

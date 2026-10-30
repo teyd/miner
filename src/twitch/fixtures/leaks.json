@@ -1,0 +1,90 @@
+{
+  "source": "Leak shapes from real miner logs: just-mining tests/fixtures/triage/jm-2026-10-28.jsonl (secrets already fake), plus the shapes this miner's own answers and errors take. Every secret contains SECRET.",
+  "cases": [
+    {
+      "shape": "signed usher URL inside a log message",
+      "input": {
+        "level": "warn",
+        "msg": "master playlist GET https://usher.ttvnw.net/api/channel/hls/forsen.m3u8?allow_source=true&sig=SIGSECRET1&token=%7B%22user_id%22%3A%22TOKSECRET1%22%7D answered 502"
+      }
+    },
+    {
+      "shape": "edge playlist with hdnts in a field, signed path in the detail",
+      "input": {
+        "level": "error",
+        "msg": "heartbeat failed",
+        "url": "https://video-weaver.fra05.hls.ttvnw.net/v1/playlist/Cq0.m3u8?hdnts=exp%3D1761676320~hmac%3DHMACSECRET",
+        "detail": "GET /api/channel/hls/x.m3u8?sig=SIGSECRET2&token=TOKSECRET2 failed"
+      }
+    },
+    {
+      "shape": "headers object in a field, and the header echoed in a note",
+      "input": {
+        "msg": "gql retry",
+        "headers": { "Authorization": "OAuth OAUTHSECRET" },
+        "note": "sent Authorization: OAuth OAUTHSECRET2"
+      }
+    },
+    {
+      "shape": "segment URL with signature and auth, and a token field",
+      "input": {
+        "msg": "segment https://video-edge.example/v1/segment/abc.ts?signature=SIGSECRET3&auth=AUTHSECRET failed",
+        "token": "FIELDSECRET"
+      }
+    },
+    {
+      "shape": "debug line with a signed segment HEAD",
+      "input": "HEAD https://video-edge.example/v1/segment/a.ts?signature=DEBUGSECRET"
+    },
+    {
+      "shape": "login redirect with the token in the fragment",
+      "input": {
+        "msg": "redirected to https://www.twitch.tv/#access_token=FRAGMENTSECRET&scope=&token_type=bearer"
+      }
+    },
+    {
+      "shape": "torn log line: half a JSON document held as a string",
+      "input": "{\"level\":\"error\",\"msg\":\"torn\",\"token\":\"TORNSECRET"
+    },
+    {
+      "shape": "redirect URL-encoded inside another URL",
+      "input": "https://id.twitch.tv/oauth2/authorize?redirect_uri=https%3A%2F%2Fwww.twitch.tv%2F%23access_token%3DNESTEDSECRET%26scope%3D"
+    },
+    {
+      "shape": "transport error from the HTTP client, quoting the request URL",
+      "input": {
+        "_tag": "TwitchUnavailable",
+        "operation": "usher",
+        "detail": "Transport error (GET https://usher.ttvnw.net/api/channel/hls/forsen.m3u8?player=twitchweb&sig=ERRSECRET&token=%7B%22channel%22%3A%22forsen%22%7D)"
+      }
+    },
+    {
+      "shape": "PlaybackAccessToken answer: signed value next to its signature",
+      "input": {
+        "data": {
+          "streamPlaybackAccessToken": {
+            "value": "{\"adblock\":false,\"user_id\":\"PLAYBACKSECRET\"}",
+            "signature": "SIGNATURESECRET",
+            "__typename": "PlaybackAccessToken"
+          }
+        }
+      }
+    },
+    {
+      "shape": "request headers as a lowercase map with a Bearer token",
+      "input": { "request": { "headers": { "authorization": "Bearer BEARERSECRET.x" } } }
+    },
+    {
+      "shape": "JSON body held as an escaped string inside a field",
+      "input": { "body": "{\"accessToken\":\"ESCAPEDSECRET\",\"login\":\"forsen\"}" }
+    },
+    {
+      "shape": "schema error quoting the rejected input",
+      "input": "Expected string, got {\"access_token\":\"SCHEMASECRET\"} at [\"token\"]"
+    },
+    {
+      "shape": "camel-cased secret key at depth",
+      "input": [{ "session": { "accessToken": "CAMELSECRET", "expiresIn": 3600 } }]
+    }
+  ]
+}

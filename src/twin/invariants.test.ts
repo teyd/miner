@@ -17,7 +17,7 @@ import {
   type ClaimIntent,
   type State,
 } from "../core/state.ts";
-import { encodeState } from "./durable.ts";
+import { encodeState } from "../store/codec.ts";
 import {
   BUSY_STEPS,
   COMMAND_DEADLINE,

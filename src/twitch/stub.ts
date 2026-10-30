@@ -1,7 +1,7 @@
 import { Effect, Layer } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { Credentials } from "./Twitch.ts";
-import type { Entry } from "./journal.ts";
+import type { Answer as Recorded } from "./journal.ts";
 import { Journal } from "./journal.ts";
 import { Redacted } from "effect";
 
@@ -17,7 +17,7 @@ export interface Answer {
  */
 export const stubTwitch = (script: Record<string, ReadonlyArray<Answer>>) => {
   const calls: Record<string, number> = {};
-  const recorded: Array<Omit<Entry, "at">> = [];
+  const recorded: Array<Recorded> = [];
   const http = HttpClient.make((request) => {
     let operation = "validate";
     let size = 1;
@@ -53,7 +53,10 @@ export const stubTwitch = (script: Record<string, ReadonlyArray<Answer>>) => {
     ),
     Layer.succeed(
       Journal,
-      Journal.of({ record: (entry) => Effect.sync(() => recorded.push(entry)) }),
+      Journal.of({
+        record: (answer) => Effect.sync(() => recorded.push(answer)),
+        intent: () => Effect.void,
+      }),
     ),
   );
   return { layer, calls, recorded };

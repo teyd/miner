@@ -12,7 +12,7 @@ import {
 } from "../core/fixtures.ts";
 import { MINUTE } from "../core/model.ts";
 import { initial, type State } from "../core/state.ts";
-import { canonical, decodeState, encodeState } from "./durable.ts";
+import { canonical, decodeState, encodeState } from "./codec.ts";
 
 const c = campaign("c");
 
@@ -56,7 +56,7 @@ const populated: State = {
   },
 };
 
-describe("durable", () => {
+describe("codec", () => {
   it("round-trips a fully populated state", () => {
     const text = encodeState(populated);
     const decoded = decodeState(text);
@@ -78,5 +78,15 @@ describe("durable", () => {
       canonical({ b: 1, a: [2, undefined] }),
       canonical({ a: [2, undefined], b: 1 }),
     );
+  });
+});
+
+describe("decodeState", () => {
+  it("refuses another version and text that isn't a state", () => {
+    const text = encodeState(populated);
+    assert.match(text, /"version":1}$/);
+    assert.throws(() => decodeState(text.replace('"version":1', '"version":2')), /version 2/);
+    assert.throws(() => decodeState(canonical(populated)), /not a saved miner state/);
+    assert.throws(() => decodeState("{"));
   });
 });

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { Command } from "effect/cli";
 import pkg from "../package.json" with { type: "json" };
 import { miner } from "./cli/miner.ts";
+import * as Logging from "./platform/logging.ts";
 
 miner.pipe(
   Command.run({ version: pkg.version }),
@@ -35,6 +36,6 @@ miner.pipe(
         process.exitCode = 2;
       }),
   }),
-  Effect.provide(NodeServices.layer),
+  Effect.provide(Logging.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   NodeRuntime.runMain,
 );

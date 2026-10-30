@@ -80,3 +80,10 @@ Settled answers. Agents: don't reopen these without new evidence.
     `watchStreaks` and `raids` (follow, leave after `stayMinutes`). All on by default.
     Predictions are not supported. Lists hold objects only, no string shorthand. No
     follow-list option. The file reloads while the miner runs.
+
+## teyd, 2026-10-30
+
+29. **Logging is Effect's `Logger`, not pino** (replaces pino in research 03). Logs go to stderr,
+    `pretty` on a terminal and JSON lines otherwise (`LOG_FORMAT`, `LOG_LEVEL`), every entry
+    redacted. A JSON copy rotates by size in `$DATA_DIR/logs` (`LOG_FILE`, on by default) for
+    installs without a log driver. (03 §2b)

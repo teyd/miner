@@ -39,13 +39,20 @@ export const twinActuator = (twin: Twin): Actuator["Service"] => {
   const watchTick = (channelId: ChannelId) =>
     Effect.gen(function* () {
       const startedAt = yield* now;
+      // The request credits the session it left under, even if a `Watch` or `StopWatching`
+      // issued in the same step lands first: the switch can't recall a request already sent.
+      const sentUnder = twin.world.session;
       const timedOut = World.networkDownAt(twin.world, startedAt);
       yield* timedOut ? Effect.sleep(TWIN_TIMEOUT) : latency;
       const at = yield* now;
+      const current = twin.world;
       const ticked = timedOut
-        ? { world: twin.world, result: "network" as const, frames: [], credits: [] }
-        : World.tick(twin.world, channelId, at);
-      twin.world = ticked.world;
+        ? { world: current, result: "network" as const, frames: [], credits: [] }
+        : World.tick({ ...current, session: sentUnder }, channelId, at);
+      twin.world =
+        current.session === sentUnder
+          ? ticked.world
+          : { ...ticked.world, session: current.session };
       emit(twin, ticked.frames);
       twin.activity.credits.push(...ticked.credits);
       twin.activity.calls.push({

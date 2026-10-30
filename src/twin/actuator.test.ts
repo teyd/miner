@@ -86,6 +86,32 @@ describe("twin actuator", () => {
     }),
   );
 
+  it.effect("credits a tick against the session it left under, then keeps the switch", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(SIM_EPOCH);
+      const twin = makeTwin(buildWorld(scenario()));
+      const exit = yield* act(twin, (a) =>
+        Effect.gen(function* () {
+          yield* a.watch(ch(0));
+          for (let i = 0; i < 2; i++) {
+            yield* Effect.sleep("20 seconds");
+            yield* a.watchTick(ch(0));
+          }
+          yield* Effect.sleep("20 seconds");
+          // The third tick leaves, then the switch lands while it is in flight.
+          const third = yield* Effect.forkChild(a.watchTick(ch(0)));
+          yield* Effect.yieldNow;
+          yield* a.watch(ch(1));
+          return yield* Fiber.await(third);
+        }),
+      );
+      assert.deepStrictEqual(exit, Exit.succeed(Exit.void));
+      assert.strictEqual(minutesAt(twin.world, "c0-d0" as DropId, SIM_EPOCH + 60 * 60_000), 1);
+      assert.strictEqual(twin.world.session?.channelId, ch(1));
+      assert.strictEqual(twin.world.session?.creditedSeconds, 0);
+    }),
+  );
+
   it.effect("reports offline and refusing channels", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(SIM_EPOCH);

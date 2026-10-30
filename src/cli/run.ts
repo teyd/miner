@@ -9,6 +9,7 @@ import { run as runtime } from "../runtime/run.ts";
 import { unmapped } from "../runtime/settings.ts";
 import { LIVE_STATE, liveLayer } from "../runtime/live.ts";
 import { SHADOW_STATE, shadowLayer } from "../runtime/shadow.ts";
+import { Instance } from "../platform/instance.ts";
 import { lockDataDir } from "../platform/lock.ts";
 import { Connector } from "../twitch/PubSub.ts";
 import { Credentials } from "../twitch/Twitch.ts";
@@ -55,6 +56,7 @@ export const run = Command.make(
           FetchHttpClient.layer,
           Credentials.layer,
           Gzip.layer,
+          Instance.layer,
           Connector.webSocket.pipe(Layer.provide(NodeSocket.layerWebSocketConstructor)),
         ),
       ),

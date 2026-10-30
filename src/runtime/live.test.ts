@@ -5,6 +5,7 @@ import { TestClock } from "effect/testing";
 import { Config } from "../config/schema.ts";
 import { HOUR, type ChannelId, type DropId, type DropInstanceId } from "../core/model.ts";
 import { Gzip, nodeGzip } from "../platform/Gzip.ts";
+import { Instance } from "../platform/instance.ts";
 import { decodeState } from "../store/codec.ts";
 import { memoryFileSystem, type MemoryFiles } from "../store/memoryFileSystem.ts";
 import { twinHttp } from "../twin/http.ts";
@@ -19,6 +20,8 @@ import { stubPlayback } from "../twitch/stub.ts";
 import { Credentials } from "../twitch/Twitch.ts";
 import { LIVE_STATE, liveLayer } from "./live.ts";
 import { run } from "./run.ts";
+import { STATUS_FILE } from "./status.ts";
+import { parseStatus } from "../status/snapshot.ts";
 import { SHADOW_STATE } from "./shadow.ts";
 
 const DIR = "/data";
@@ -122,6 +125,7 @@ const liveRun = (twin: Twin, files: MemoryFiles, hours: number) =>
           ),
           Layer.succeed(Connector, fakeEdge().connector),
           Gzip.layer,
+          Layer.succeed(Instance, Instance.of({ version: "0.0.0-test", pid: 4242 })),
           files.layer,
         ),
       ),
@@ -182,6 +186,27 @@ describe("run with the live actuator", () => {
         assert.isTrue(saved.progress.get("c0-d0" as DropId)?.claimed);
         assert.lengthOf([...saved.claims.values()], 0);
         assert.isFalse(files.files.has(`${DIR}/${SHADOW_STATE}`));
+
+        // status.json: a live run that claimed the drop and watched for real, then stopped.
+        const status = parseStatus(
+          new TextDecoder().decode(files.files.get(`${DIR}/${STATUS_FILE}`)!),
+        );
+        assert.strictEqual(status._tag, "Read");
+        if (status._tag === "Read") {
+          const s = status.status;
+          assert.strictEqual(s.miner.mode, "live");
+          assert.deepStrictEqual(
+            s.claims.claimedThisRun.map((c) => [c.dropId, c.drop]),
+            [["c0-d0", "Game 0: Drop 0.0"]],
+          );
+          assert.lengthOf(s.claims.inFlight, 0);
+          assert.isAtLeast(s.reads.watchTick ?? 0, SIM_EPOCH + 2 * HOUR - 60_000);
+          assert.deepInclude(s.watch, {
+            state: "watching",
+            channel: { id: "ch0", login: "chan0" },
+          });
+          assert.strictEqual(s.stoppedAt, SIM_EPOCH + 2 * HOUR);
+        }
 
         // Recorded: the claim answer and the ticks, without the token or a signature.
         const recorded = lines(files);

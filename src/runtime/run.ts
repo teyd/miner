@@ -10,6 +10,8 @@ import { emptyMemory, execute, type Memory } from "./execute.ts";
 import { forwardFrames } from "./listen.ts";
 import { describeWatch, progressLines } from "./narrate.ts";
 import { toSettings } from "./settings.ts";
+import { makeReporter } from "./status.ts";
+import { observe, startFacts } from "../status/snapshot.ts";
 
 /**
  * A deadline the core never moves would make the loop step forever at one instant (the sim's
@@ -35,7 +37,8 @@ export const countAt = (
  * `nextDeadline(state)` comes first, steps the core, saves the new state, and only then starts
  * the step's commands. Commands run on their own fibers and come back as events, PubSub frames
  * arrive as events too, so a slow read never delays the scheduler; the deadlines live in `State`, so there are no other timers
- * (critique 08 §6.1).
+ * (critique 08 §6.1). The one other wake-up is the status heartbeat, which writes
+ * `status.json` without stepping the core.
  */
 export const run = (config: Config) =>
   Effect.gen(function* () {
@@ -55,6 +58,9 @@ export const run = (config: Config) =>
     );
     yield* Queue.offer(events, Event.Started());
     let instant: readonly [number, number] = [-1, 0];
+    let facts = startFacts(yield* Clock.currentTimeMillis);
+    const reporter = yield* makeReporter;
+    yield* Effect.addFinalizer(() => Effect.suspend(() => reporter.stop(state, facts)));
 
     const start = (command: Command) =>
       FiberSet.run(
@@ -71,8 +77,12 @@ export const run = (config: Config) =>
       );
 
     while (true) {
-      const event = yield* next(events, nextDeadline(state));
+      const event = yield* next(events, nextDeadline(state), reporter.due());
       const now = yield* Clock.currentTimeMillis;
+      if (event === HEARTBEAT) {
+        yield* reporter.update(state, facts, now);
+        continue;
+      }
       instant = countAt(instant, now);
       if (instant[1] > MAX_STEPS_AT_INSTANT) {
         return yield* new RunStuck({ at: now, steps: instant[1] });
@@ -89,21 +99,35 @@ export const run = (config: Config) =>
         }
       }
       yield* report(state, result.state);
+      facts = observe(facts, state, result.state, event, now);
       state = result.state;
+      yield* reporter.update(state, facts, now);
       for (const command of result.commands) yield* start(command);
     }
   }).pipe(Effect.scoped);
 
-/** The next event, or a `Tick` once the deadline passes. Queued events go first. */
-const next = (events: Queue.Queue<Event>, deadline: number | undefined) =>
+const HEARTBEAT = "heartbeat";
+
+/**
+ * The next event, a `Tick` once the core's deadline passes, or `HEARTBEAT` once the status is due
+ * first. Queued events go first.
+ */
+const next = (
+  events: Queue.Queue<Event>,
+  deadline: number | undefined,
+  statusDue: number,
+): Effect.Effect<Event | typeof HEARTBEAT> =>
   Effect.gen(function* () {
     const queued = yield* Queue.poll(events);
     if (Option.isSome(queued)) return queued.value;
-    if (deadline === undefined) return yield* Queue.take(events);
-    const wait = deadline - (yield* Clock.currentTimeMillis);
-    if (wait <= 0) return Event.Tick();
-    const taken = yield* Queue.take(events).pipe(Effect.timeoutOption(wait));
-    return Option.getOrElse(taken, () => Event.Tick());
+    const wake = Math.min(deadline ?? Infinity, statusDue);
+    const wait = wake - (yield* Clock.currentTimeMillis);
+    if (wait > 0) {
+      const taken = yield* Queue.take(events).pipe(Effect.timeoutOption(wait));
+      if (Option.isSome(taken)) return taken.value;
+    }
+    const now = yield* Clock.currentTimeMillis;
+    return deadline !== undefined && now >= deadline ? Event.Tick() : HEARTBEAT;
   });
 
 const catalogOf = (state: State, event: Event): ReadonlyArray<Campaign> =>

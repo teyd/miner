@@ -115,12 +115,18 @@ export class PubSub extends Context.Service<
      * own reads catch up on what the gap hid.
      */
     readonly events: Stream.Stream<Event>;
+    /** The sockets now, for `status.json`. */
+    readonly status: Effect.Effect<PubSubStatus>;
   }
 >()("miner/twitch/PubSub") {
   /** Follows nothing and hears nothing, for runs without a socket. */
   static readonly none = Layer.succeed(
     PubSub,
-    PubSub.of({ subscribe: () => Effect.void, events: Stream.never }),
+    PubSub.of({
+      subscribe: () => Effect.void,
+      events: Stream.never,
+      status: Effect.succeed({ connections: 0, listening: 0, topics: 0, dropped: 0 }),
+    }),
   );
 
   /** The account comes from token validation, once; the token from `Credentials`. */
@@ -138,6 +144,16 @@ export class PubSub extends Context.Service<
         });
       }),
     );
+}
+
+export interface PubSubStatus {
+  /** Connections wanted: slots with topics. */
+  readonly connections: number;
+  /** Connections whose socket is open and has had a LISTEN accepted. */
+  readonly listening: number;
+  readonly topics: number;
+  /** Topics beyond the connection limit, not followed. */
+  readonly dropped: number;
 }
 
 /** Where each topic lives: one set per connection slot, an empty slot has no connection. */
@@ -195,6 +211,8 @@ type End = "reconnect" | "empty";
 interface Slot {
   topics: ReadonlySet<string>;
   readonly inbox: Queue.Queue<Input>;
+  /** The current connection had a LISTEN accepted and hasn't ended since. */
+  listening: boolean;
 }
 
 const NONCE_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -223,6 +241,7 @@ export const make = (options: {
     const lock = yield* Semaphore.make(1);
     const slots: Array<Slot> = [];
     let userId: string | undefined;
+    let dropped = 0;
 
     const record = (index: number, direction: "in" | "out", text: string) =>
       journal.frame({ connection: index, direction, text });
@@ -391,6 +410,7 @@ export const make = (options: {
         let id = 0;
         const listening = Effect.sync(() => {
           failures = 0;
+          slots[index]!.listening = true;
         });
         while (slots[index]!.topics.size > 0) {
           id += 1;
@@ -398,6 +418,11 @@ export const make = (options: {
           const end = yield* session(index, id, listening).pipe(
             Effect.map((e): End | PubSubLost => e),
             Effect.catch((e) => Effect.succeed(e)),
+            Effect.ensuring(
+              Effect.sync(() => {
+                slots[index]!.listening = false;
+              }),
+            ),
           );
           if (end === "empty") break;
           const jitter = yield* Random.nextIntBetween(0, 1000);
@@ -436,21 +461,26 @@ export const make = (options: {
           ...(user === undefined ? [] : [dropsTopic(user)]),
           ...unique.flatMap(channelTopics),
         ];
-        const { slots: next, dropped } = assign(
+        const { slots: next, dropped: droppedNow } = assign(
           slots.map((s) => s.topics),
           desired,
           PUBSUB_TOPICS_PER_CONNECTION,
           PUBSUB_MAX_CONNECTIONS,
         );
-        if (dropped.length > 0) {
+        dropped = droppedNow.length;
+        if (droppedNow.length > 0) {
           yield* Effect.logWarning(
-            `pubsub: ${dropped.length} topics don't fit in ${PUBSUB_MAX_CONNECTIONS} connections and are not followed`,
+            `pubsub: ${droppedNow.length} topics don't fit in ${PUBSUB_MAX_CONNECTIONS} connections and are not followed`,
           );
         }
         for (let i = 0; i < Math.max(next.length, slots.length); i++) {
           const topics = next[i] ?? new Set<string>();
           if (slots[i] === undefined)
-            slots[i] = { topics: new Set(), inbox: yield* Queue.unbounded<Input>() };
+            slots[i] = {
+              topics: new Set(),
+              inbox: yield* Queue.unbounded<Input>(),
+              listening: false,
+            };
           const slot = slots[i]!;
           const changed =
             topics.size !== slot.topics.size || [...topics].some((t) => !slot.topics.has(t));
@@ -480,7 +510,14 @@ export const make = (options: {
         );
       }).pipe((effect) => lock.withPermit(effect));
 
-    return PubSub.of({ subscribe, events: Stream.fromQueue(events) });
+    const status = Effect.sync((): PubSubStatus => ({
+      connections: slots.filter((s) => s.topics.size > 0).length,
+      listening: slots.filter((s) => s.topics.size > 0 && s.listening).length,
+      topics: slots.reduce((n, s) => n + s.topics.size, 0),
+      dropped,
+    }));
+
+    return PubSub.of({ subscribe, events: Stream.fromQueue(events), status });
   });
 
 const isChatty = (message: string): boolean => {

@@ -37,7 +37,16 @@ export type Event = Data.TaggedEnum<{
     readonly dropId: DropId | undefined;
     readonly minutes: number;
   };
-  ChannelsRead: { readonly channels: ReadonlyArray<Channel> };
+  ChannelsRead: {
+    readonly channels: ReadonlyArray<Channel>;
+    /** `readKey` of the `ReadDirectory` or `ReadChannels` this answers. */
+    readonly read: string;
+  };
+  /**
+   * A `ReadDirectory` or `ReadChannels` gave up after its retries, or had nothing to ask for (no
+   * slug or login known). Its channels stay as they were; discovery stops waiting for it.
+   */
+  ChannelsReadFailed: { readonly read: string };
   /** PubSub `stream-up`. Stream data lags, so the core re-reads the channel later. */
   StreamUp: { readonly channelId: ChannelId };
   StreamDown: { readonly channelId: ChannelId };
@@ -83,3 +92,11 @@ export type Command = Data.TaggedEnum<{
 }>;
 
 export const Command = Data.taggedEnum<Command>();
+
+export type ChannelRead = Extract<Command, { readonly _tag: "ReadDirectory" | "ReadChannels" }>;
+
+/** Names a channel read, so its answer can be matched to it. */
+export const readKey = (command: ChannelRead): string =>
+  command._tag === "ReadDirectory"
+    ? `directory:${command.gameId}`
+    : `channels:${command.channelIds.join(",")}`;

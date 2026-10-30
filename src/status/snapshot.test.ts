@@ -218,6 +218,13 @@ describe("health", () => {
     assert.deepInclude(parseStatus(JSON.stringify({ version: 1 })), { _tag: "Unreadable" });
     const good = parseStatus(JSON.stringify(encodeStatusFile(ok)));
     assert.deepStrictEqual(good, { _tag: "Read", status: ok });
+    // A reason a newer miner added within version 1 still reads, and the verdict stands.
+    const encoded = encodeStatusFile(ok) as { watch: unknown };
+    const newer = parseStatus(
+      JSON.stringify({ ...encoded, watch: { state: "idle", reason: "some-future-reason" } }),
+    );
+    assert.deepInclude(newer, { _tag: "Read" });
+    assert.deepInclude(health(newer, T0), { exitCode: 0 });
     const unreadable = health({ _tag: "Unreadable", detail: "x" }, T0);
     assert.deepInclude(unreadable, { state: "not-running", exitCode: 1 });
   });

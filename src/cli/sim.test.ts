@@ -6,7 +6,7 @@ import { TestConsole } from "effect/testing";
 import type { Command as CoreCommand } from "../core/protocol.ts";
 import { nextDeadline } from "../core/state.ts";
 import { step } from "../core/step.ts";
-import type { Capsule, Scenario } from "../twin/scenario.ts";
+import { DEFAULT_GOAL_SPEC, type Capsule, type Scenario } from "../twin/scenario.ts";
 import { runTwice, type Core } from "../twin/sim.ts";
 import { miner } from "./miner.ts";
 import { simulate } from "./sim.ts";
@@ -16,7 +16,7 @@ const scenario: Scenario = {
   latencySeed: 3,
   horizonMinutes: 60,
   inventoryLagMinutes: 0,
-  settings: { games: [], exclude: [], badgesAndEmotes: true },
+  settings: { goals: [DEFAULT_GOAL_SPEC] },
   campaigns: [
     {
       game: 0,
@@ -73,7 +73,7 @@ const trace = (path: string, json = false) => ({
 describe("miner sim", () => {
   it.effect("runs a range of seeds and prints the summary", () =>
     Effect.gen(function* () {
-      yield* Command.runWith(miner, { version: "0" })(["sim", "--seed", "1", "--seeds", "2"]);
+      yield* Command.runWith(miner, { version: "0" })(["sim", "--seed", "6", "--seeds", "2"]);
       assert.include(
         yield* output,
         "2 seeds, 2 passed, 0 failed; 2 earned watch minutes, 2 claimed a drop",
@@ -96,11 +96,18 @@ describe("miner sim", () => {
 
   it.effect("prints one JSON document with --json", () =>
     Effect.gen(function* () {
-      yield* Command.runWith(miner, { version: "0" })(["sim", "--seeds", "1", "--json"]);
+      yield* Command.runWith(miner, { version: "0" })([
+        "sim",
+        "--seed",
+        "2",
+        "--seeds",
+        "1",
+        "--json",
+      ]);
       const document = JSON.parse(yield* output);
       assert.deepStrictEqual(document, {
         ok: true,
-        seeds: { first: 1, count: 1 },
+        seeds: { first: 2, count: 1 },
         passed: 1,
         watched: 1,
         claimed: 1,

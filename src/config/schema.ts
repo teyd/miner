@@ -114,8 +114,11 @@ export const DropsGoal = Schema.Struct({
     Schema.annotate({
       description:
         'How to rank campaigns of the same game, or all of them with games "all": ' +
-        '"ending-soonest" by end time, "least-slack" by the least time to spare ' +
-        "(time left minus minutes still needed), so fewer drops expire unfinished.",
+        '"ending-soonest" by end time, "least-slack" by the least time to spare of a drop ' +
+        "that earns now (time left minus minutes still needed), so fewer drops expire " +
+        "unfinished. A campaign that can no longer finish a drop in time waits until no goal " +
+        'has one that can. With "least-slack", the campaign being watched keeps its place ' +
+        "until another has 30 minutes less to spare.",
       default: "ending-soonest",
     }),
     Schema.withDecodingDefaultKey(Effect.succeed("ending-soonest" as const)),

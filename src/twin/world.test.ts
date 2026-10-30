@@ -1,8 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
 import { CLAIM_GRACE, HOUR, MINUTE, type ChannelId, type DropId } from "../core/model.ts";
 import { WATCH_INTERVAL } from "../core/state.ts";
-import { SIM_EPOCH, type Scenario } from "./scenario.ts";
+import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Scenario } from "./scenario.ts";
 import {
+  GAMES,
   CLAIMED_FLAG_LAG,
   buildWorld,
   channelFrames,
@@ -49,7 +50,7 @@ const world = (
     latencySeed: 1,
     horizonMinutes: 600,
     inventoryLagMinutes: lag,
-    settings: { games: [], exclude: [], badgesAndEmotes: true },
+    settings: { goals: [DEFAULT_GOAL_SPEC] },
     campaigns,
     channels,
     faults: [],
@@ -70,6 +71,46 @@ const watchFor = (w: World, channel: ChannelId, minutes: number, from = T) => {
   }
   return { world: current, frames };
 };
+
+describe("goals", () => {
+  it("maps goal specs as toSettings maps the file: exclusions win, first entry wins", () => {
+    const w = buildWorld({
+      latencySeed: 1,
+      horizonMinutes: 600,
+      inventoryLagMinutes: 0,
+      settings: {
+        goals: [
+          {
+            ...DEFAULT_GOAL_SPEC,
+            games: [
+              { game: 1, rewards: ["badge"] },
+              { game: 0, rewards: null },
+              { game: 1, rewards: null },
+              { game: 2, rewards: null },
+            ],
+            rewards: ["emote"],
+            excludeGames: [2],
+            exclude: [3],
+          },
+        ],
+      },
+      campaigns: [campaignSpec()],
+      channels: [channelSpec(), channelSpec()],
+      faults: [],
+    });
+    assert.deepStrictEqual(w.settings.goals[0], {
+      games: [
+        { id: GAMES[1]!.id, rewards: ["badge"] },
+        { id: GAMES[0]!.id, rewards: ["emote"] },
+      ],
+      rewards: ["emote"],
+      excludeGames: [GAMES[2]!.id],
+      excludeChannels: [ch(1)],
+      linkedOnly: true,
+      order: "ending-soonest",
+    });
+  });
+});
 
 describe("world", () => {
   it("credits only the session's channel, and a new session closes the old one", () => {
@@ -119,9 +160,11 @@ describe("world", () => {
     );
   });
 
-  it("credits an unlinked campaign only when it has a badge or an emote", () => {
+  it("credits an unlinked campaign only with a badge or an emote, or when it credits unlinked", () => {
     const items = world([campaignSpec({ linked: false })]);
     assert.isUndefined(creditedCampaign(items, ch(0), T));
+    const anyway = world([campaignSpec({ linked: false, creditsUnlinked: true })]);
+    assert.strictEqual(creditedCampaign(anyway, ch(0), T)?.id, "c0");
     const badge = campaignSpec({
       linked: false,
       drops: [{ requiredMinutes: 2, after: null, benefit: "BADGE" }],

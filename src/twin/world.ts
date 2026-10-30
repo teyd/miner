@@ -9,14 +9,16 @@ import {
   type Drop,
   type DropId,
   type DropInstanceId,
+  type DropsGoal,
   type Game,
+  type GameGoal,
   type GameId,
   type Millis,
   type Settings,
 } from "../core/model.ts";
 import { Event } from "../core/protocol.ts";
 import { WATCH_INTERVAL } from "../core/state.ts";
-import { SIM_EPOCH, type Fault, type Operation, type Scenario } from "./scenario.ts";
+import { SIM_EPOCH, type Fault, type GoalSpec, type Operation, type Scenario } from "./scenario.ts";
 
 /**
  * The twin's model of Twitch for one account: what is live, what credits, what can be claimed.
@@ -61,6 +63,8 @@ export interface Session {
 
 export interface World {
   readonly campaigns: ReadonlyArray<Campaign>;
+  /** Unlinked campaigns whose items Twitch credits anyway (`creditsUnlinked`). */
+  readonly creditsUnlinked: ReadonlySet<CampaignId>;
   readonly channels: ReadonlyArray<ChannelModel>;
   readonly settings: Settings;
   readonly inventoryLag: Millis;
@@ -93,6 +97,17 @@ const at = (minute: number): Millis => SIM_EPOCH + minute * MINUTE;
 const unique = <A>(xs: ReadonlyArray<A>): ReadonlyArray<A> => [...new Set(xs)];
 
 export const channelIdOf = (index: number) => `ch${index}` as ChannelId;
+
+/** A drop's own window, cut to its campaign's and at least a minute long. */
+const windowOf = (
+  window: { readonly startMinute: number; readonly durationMinutes: number } | undefined,
+  startsAt: Millis,
+  endsAt: Millis,
+): { readonly startsAt: Millis; readonly endsAt: Millis } => {
+  if (window === undefined) return { startsAt, endsAt };
+  const from = Math.min(startsAt + window.startMinute * MINUTE, endsAt - MINUTE);
+  return { startsAt: from, endsAt: Math.min(endsAt, from + window.durationMinutes * MINUTE) };
+};
 
 export const buildWorld = (scenario: Scenario): World => {
   const n = scenario.channels.length;
@@ -137,8 +152,7 @@ export const buildWorld = (scenario: Scenario): World => {
         id: dropId(j),
         name: `Drop ${i}.${j}`,
         requiredMinutes: d.requiredMinutes,
-        startsAt,
-        endsAt,
+        ...windowOf(d.window, startsAt, endsAt),
         preconditions: j > 0 && d.after !== null ? [dropId(d.after % j)] : [],
         benefits: [
           {
@@ -155,12 +169,13 @@ export const buildWorld = (scenario: Scenario): World => {
   );
   return {
     campaigns,
+    creditsUnlinked: new Set(
+      scenario.campaigns.flatMap((spec, i) =>
+        spec.creditsUnlinked === true ? [`c${i}` as CampaignId] : [],
+      ),
+    ),
     channels,
-    settings: {
-      games: unique(scenario.settings.games.map((g) => GAMES[g]!.id)),
-      excludeChannels: unique(scenario.settings.exclude.map((k) => channelIdOf(k % n))),
-      badgesAndEmotes: scenario.settings.badgesAndEmotes,
-    },
+    settings: { goals: scenario.settings.goals.map((goal) => goalOf(goal, n)) },
     inventoryLag: scenario.inventoryLagMinutes * MINUTE,
     faults: scenario.faults,
     minutes: new Map(),
@@ -168,6 +183,28 @@ export const buildWorld = (scenario: Scenario): World => {
     revokedAt: revokes.length === 0 ? undefined : Math.min(...revokes),
     session: undefined,
     subscriptions: new Set(),
+  };
+};
+
+/**
+ * A goal spec as `toSettings` maps it (`src/runtime/settings.ts`): an excluded game leaves the
+ * list, a game listed twice keeps its first entry, a game without rewards takes the goal's.
+ */
+const goalOf = (spec: GoalSpec, channels: number): DropsGoal => {
+  const excludeGames = unique(spec.excludeGames.map((g) => GAMES[g]!.id)).toSorted();
+  const listed: Array<GameGoal> = [];
+  for (const entry of spec.games ?? []) {
+    const id = GAMES[entry.game]!.id;
+    if (excludeGames.includes(id) || listed.some((g) => g.id === id)) continue;
+    listed.push({ id, rewards: entry.rewards ?? spec.rewards });
+  }
+  return {
+    games: spec.games === null ? "all" : listed,
+    rewards: spec.rewards,
+    excludeGames,
+    excludeChannels: unique(spec.exclude.map((k) => channelIdOf(k % channels))).toSorted(),
+    linkedOnly: spec.linkedOnly,
+    order: spec.order,
   };
 };
 
@@ -222,9 +259,14 @@ export const channelFrames = (world: World, from: Millis, to: Millis): ReadonlyA
   return frames;
 };
 
-/** Source: TDM `inventory.py:394-404`. Unlinked progress on item campaigns is lane-D E7 (inference). */
-export const accountEarns = (campaign: Campaign): boolean =>
+/**
+ * Source: TDM `inventory.py:394-404` (linked, or a badge or emote). Unlinked item progress is
+ * campaign-dependent (research 02 §3: Funcom FAQ, Twitch dev forums 62731) and unmeasured
+ * (lane-D E7), so the scenario decides per campaign.
+ */
+export const accountEarns = (world: World, campaign: Campaign): boolean =>
   campaign.linked ||
+  world.creditsUnlinked.has(campaign.id) ||
   campaign.drops.some((d) =>
     d.benefits.some((b) => b.distribution === "BADGE" || b.distribution === "EMOTE"),
   );
@@ -273,7 +315,7 @@ export const creditedCampaign = (world: World, id: ChannelId, now: Millis): Camp
       (c) =>
         c.startsAt <= now &&
         now < c.endsAt &&
-        accountEarns(c) &&
+        accountEarns(world, c) &&
         channelCredits(world, c, id, now) &&
         c.drops.some((d) => earnable(world, d, now)),
     )

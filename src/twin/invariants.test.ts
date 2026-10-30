@@ -12,6 +12,7 @@ import {
   CATALOG_INTERVAL,
   CLAIM_RECHECK,
   ONLINE_DELAY,
+  STALL_AFTER,
   SUBSCRIBE_SETTLE,
   WATCH_INTERVAL,
   initial,
@@ -22,13 +23,15 @@ import { encodeState } from "../store/codec.ts";
 import {
   BUSY_STEPS,
   COMMAND_DEADLINE,
+  FLIP_WINDOW,
   IN_FLIGHT_LIMIT,
   checkStep,
   initialChecker,
+  opportunities,
   type Observation,
   type StepRecord,
 } from "./invariants.ts";
-import { SIM_EPOCH, type Fault, type Scenario } from "./scenario.ts";
+import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Fault, type Scenario } from "./scenario.ts";
 import type { Activity, ActuatorCall } from "./twin.ts";
 import { buildWorld, instanceOf, openSession, tick, type World } from "./world.ts";
 
@@ -36,7 +39,7 @@ const scenario = (faults: ReadonlyArray<Fault> = []): Scenario => ({
   latencySeed: 1,
   horizonMinutes: 600,
   inventoryLagMinutes: 0,
-  settings: { games: [], exclude: [], badgesAndEmotes: true },
+  settings: { goals: [DEFAULT_GOAL_SPEC] },
   campaigns: [
     {
       game: 0,
@@ -243,7 +246,46 @@ describe("invariant 4: mutations never retried", () => {
 });
 
 describe("invariant 3: no idle time while an eligible live channel exists", () => {
+  it("counts as opportunities only what some goal wants, on a channel that goal may watch", () => {
+    const withGoals = (goals: Scenario["settings"]["goals"]) =>
+      opportunities(buildWorld({ ...scenario(), settings: { goals } }), SIM_EPOCH, new Set()).map(
+        (o) => o.channelId,
+      );
+    assert.deepStrictEqual(withGoals([DEFAULT_GOAL_SPEC]), [ch0, ch1]);
+    assert.deepStrictEqual(withGoals([{ ...DEFAULT_GOAL_SPEC, rewards: ["badge", "emote"] }]), []);
+    const elsewhere = { ...DEFAULT_GOAL_SPEC, games: [{ game: 1, rewards: null }] };
+    const notCh0 = { ...DEFAULT_GOAL_SPEC, exclude: [0] };
+    assert.deepStrictEqual(withGoals([elsewhere, notCh0]), [ch1]);
+    assert.deepStrictEqual(withGoals([{ ...DEFAULT_GOAL_SPEC, excludeGames: [0] }]), []);
+  });
+
   const unwatched = (seconds: number) => observation(at(seconds), { state: idle, world: world0 });
+
+  it("restarts the watching bound at a credit of a campaign the core's catalog lacks", () => {
+    const state: State = { ...watching, catalog: world0.campaigns };
+    const look = (seconds: number, campaignId?: string) =>
+      observation(at(seconds), {
+        state,
+        world: world0,
+        activity: {
+          ...noActivity(),
+          credits:
+            campaignId === undefined
+              ? []
+              : [
+                  {
+                    at: at(seconds),
+                    channelId: ch0,
+                    campaignId: campaignId as CampaignId,
+                    dropIds: [],
+                  },
+                ],
+        },
+      });
+    const late = (STALL_AFTER + 3 * MINUTE) / 1000;
+    assert.include(kinds([look(0), look(600), look(late)]), "Idle");
+    assert.deepStrictEqual(kinds([look(0), look(600, "new"), look(late)]), []);
+  });
 
   it("flags idling past the discovery bound, and allows idling just under it", () => {
     const bound = (CATALOG_INTERVAL + 2 * MINUTE) / 1000;
@@ -343,6 +385,94 @@ describe("invariant 5: state survives a crash", () => {
   it("flags a save that doesn't round-trip", () => {
     const step = { ...record(Event.Tick(), []), persisted: '{"auth": "valid"}' };
     assert.include(kinds([observation(at(60), { step })]), "StateLost");
+  });
+});
+
+describe("invariant 6: no watch switch without a cause", () => {
+  const live = (id: ChannelId, viewers: number) =>
+    [id, { id, login: id, gameId: "g0" as GameId, live: { viewers, dropsEnabled: true } }] as const;
+  const known: State = { ...watching, channels: new Map([live(ch0, 50), live(ch1, 10)]) };
+  const watchOn = (
+    channelId: ChannelId,
+    now: Millis,
+    before: State = known,
+    event = Event.Tick(),
+  ) =>
+    observation(now, {
+      world: world0,
+      step: record(event, [Command.Watch({ channelId })], before, {
+        ...before,
+        watch: { ...known.watch, channelId } as State["watch"],
+      }),
+    });
+
+  it("flags a switch within FLIP_WINDOW of the last watch with nothing new", () => {
+    assert.deepStrictEqual(kinds([watchOn(ch0, at(1)), watchOn(ch1, at(5))]), ["WatchFlip"]);
+    assert.deepStrictEqual(kinds([watchOn(ch0, at(1)), watchOn(ch1, at(1) + FLIP_WINDOW)]), []);
+  });
+
+  it("allows one when the old channel went offline", () => {
+    const offline: State = { ...known, channels: new Map([live(ch1, 10)]) };
+    assert.deepStrictEqual(kinds([watchOn(ch0, at(1)), watchOn(ch1, at(5), offline)]), []);
+  });
+
+  it("allows one after a later catalog read: it may have found more", () => {
+    const read = observation(at(3), {
+      world: world0,
+      step: record(Event.CatalogRead({ campaigns: [] }), [], known),
+    });
+    assert.deepStrictEqual(kinds([watchOn(ch0, at(1)), read, watchOn(ch1, at(5))]), []);
+  });
+
+  it("gives no cause for a catalog read that changed nothing", () => {
+    const knowing: State = { ...known, catalog: world0.campaigns };
+    const same = observation(at(3), {
+      world: world0,
+      step: record(Event.CatalogRead({ campaigns: world0.campaigns }), [], knowing),
+    });
+    assert.deepStrictEqual(
+      kinds([watchOn(ch0, at(1), knowing), same, watchOn(ch1, at(5), knowing)]),
+      ["WatchFlip"],
+    );
+  });
+
+  it("forgets a previous run's read failures and catalog reads on a restart", () => {
+    const failed = observation(at(1), {
+      world: world0,
+      step: record(Event.ChannelsReadFailed({ read: "directory:g0" }), [], known),
+    });
+    const changed = observation(at(1), {
+      world: world0,
+      step: record(Event.CatalogRead({ campaigns: [] }), [], known),
+    });
+    const restart = { saved: undefined, resumed: known };
+    for (const before of [failed, changed]) {
+      const first = { ...watchOn(ch0, at(3)), restart };
+      assert.deepStrictEqual(kinds([before, first, watchOn(ch1, at(5))]), ["WatchFlip"]);
+    }
+  });
+
+  it("allows leaving a campaign that can no longer finish anything (seeds 2011, 4664)", () => {
+    // The twin still has minutes to give, but the drop ends before it can complete.
+    const [c] = world0.campaigns;
+    const doomed = {
+      ...c!,
+      drops: c!.drops.map((d) => ({ ...d, endsAt: at(5) + 30_000, requiredMinutes: 1 })),
+    };
+    const knowing: State = { ...known, catalog: [doomed] };
+    assert.deepStrictEqual(kinds([watchOn(ch0, at(1), knowing), watchOn(ch1, at(5), knowing)]), []);
+    const fine: State = { ...known, catalog: [c!] };
+    assert.deepStrictEqual(kinds([watchOn(ch0, at(1), fine), watchOn(ch1, at(5), fine)]), [
+      "WatchFlip",
+    ]);
+  });
+
+  it("allows one once the old campaign has nothing left to earn", () => {
+    const done = observation(at(70), {
+      world: completed(),
+      step: record(Event.Tick(), [Command.Watch({ channelId: ch1 })], known),
+    });
+    assert.deepStrictEqual(kinds([watchOn(ch0, at(1)), done]), []);
   });
 });
 

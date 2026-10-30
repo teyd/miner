@@ -5,12 +5,13 @@ import {
   chid,
   cid,
   did,
+  games,
   iid,
   progress,
   settings,
   T0,
 } from "../core/fixtures.ts";
-import { MINUTE } from "../core/model.ts";
+import { DEFAULT_GOAL, MINUTE } from "../core/model.ts";
 import { initial, type State } from "../core/state.ts";
 import { canonical, decodeState, encodeState } from "./codec.ts";
 
@@ -18,10 +19,11 @@ const c = campaign("c");
 
 /** Every kind of value `State` holds: Maps, Sets, `undefined` fields, both claim statuses. */
 const populated: State = {
-  ...initial(settings({ games: [c.game.id], excludeChannels: [chid("x")] })),
+  ...initial(settings({ games: games([c.game.id], ["badge"]), excludeChannels: [chid("x")] })),
   auth: "needs-login",
   catalog: [c],
   catalogStatus: "unavailable",
+  discovery: { pending: ["directory:game-1"], until: 5 },
   progress: new Map([
     [did("c-d1"), progress(c, "c-d1", { minutes: 60, instanceId: iid("i1") })],
     [did("c-d2"), progress(c, "c-d2", { minutes: 3 })],
@@ -82,13 +84,61 @@ describe("codec", () => {
   });
 });
 
+/**
+ * A state file as version 2 wrote it (the live miner's before 2026-10-30): settings as a game
+ * list and flags, no `discovery`.
+ */
+const version2 = (): string => {
+  const { discovery: _, settings: __, ...rest } = populated;
+  const settings = { badgesAndEmotes: true, excludeChannels: ["x"], games: ["game-1"] };
+  return `{"state":${canonical({ ...rest, settings })},"version":2}`;
+};
+
 describe("decodeState", () => {
+  it("migrates version 2, keeping progress, claims, catalog and deadlines", () => {
+    const decoded = decodeState(version2());
+    assert.deepStrictEqual(decoded.progress, populated.progress);
+    assert.deepStrictEqual(decoded.claims, populated.claims);
+    assert.deepStrictEqual(decoded.catalog, populated.catalog);
+    assert.deepStrictEqual(decoded.deadlines, populated.deadlines);
+    assert.deepStrictEqual(decoded.watch, populated.watch);
+    assert.isUndefined(decoded.discovery);
+    assert.deepStrictEqual(decoded.settings, { goals: [DEFAULT_GOAL] });
+    // Saved again, it is a version 3 file that reads back the same.
+    assert.deepStrictEqual(decodeState(encodeState(decoded)), decoded);
+  });
+
   it("refuses another version and text that isn't a state", () => {
     const text = encodeState(populated);
-    assert.match(text, /"version":2}$/);
-    // Version 1 had no `deadlines.subscribe`.
-    assert.throws(() => decodeState(text.replace('"version":2', '"version":1')), /version 1/);
+    assert.match(text, /"version":3}$/);
+    assert.throws(() => decodeState(text.replace('"version":3', '"version":1')), /version 1/);
+    assert.throws(() => decodeState(text.replace('"version":3', '"version":4')), /version 4/);
     assert.throws(() => decodeState(canonical(populated)), /not a saved miner state/);
     assert.throws(() => decodeState("{"));
+  });
+
+  it("refuses a file that parses but isn't a whole state, whatever its version", () => {
+    assert.throws(() => decodeState('{"version":2,"state":{}}'), /not a saved miner state/);
+    assert.throws(() => decodeState('{"version":3,"state":{}}'), /not a saved miner state/);
+    assert.throws(() => decodeState('{"version":3,"state":[]}'), /not a saved miner state/);
+    const saved = JSON.parse(encodeState(populated)) as { state: Record<string, unknown> };
+    for (const key of Object.keys(saved.state)) {
+      const { [key]: _, ...rest } = saved.state;
+      const text = JSON.stringify({ state: rest, version: 3 });
+      assert.throws(() => decodeState(text), /not a saved miner state/, key);
+    }
+    // A claim intent missing its status could be resent: refused, not guessed at.
+    const claims = saved.state["claims"] as { $map: Array<[string, Record<string, unknown>]> };
+    const broken = claims.$map.map(([k, v]): [string, unknown] => [k, { ...v, status: "lost" }]);
+    const text = JSON.stringify({
+      state: { ...saved.state, claims: { $map: broken } },
+      version: 3,
+    });
+    assert.throws(() => decodeState(text), /`claims`/);
+  });
+
+  it("keeps claim intents exactly through the version 2 migration", () => {
+    const decoded = decodeState(version2());
+    assert.strictEqual(canonical(decoded.claims), canonical(populated.claims));
   });
 });

@@ -14,13 +14,14 @@ Early, but it works. `miner run` from a checkout mined and claimed real drops on
 Docker image and the systemd unit are new: they build, start and stop cleanly, but haven't mined
 for long yet. Today:
 
-- **Works:** drops for the games you list or for every game, excluded channels, badges and
-  emotes on or off, claiming, read-only shadow runs, and a simulator that checks the decision
-  logic against a fake Twitch.
-- **Not yet:** channel-points goals (accepted in the config, skipped with a warning), more than
-  one drops goal, excluding games from `"games": "all"`, `order: "least-slack"`, a second stream, picking up `config.json` edits without a restart,
-  and a published image, binary or npm package. You build
-  it from this repository.
+- **Works:** several drops goals in priority order, for the games you list or for every game
+  but those you exclude, per-game reward types, `linkedOnly`, `order: "ending-soonest"` or
+  `"least-slack"`, excluded channels, claiming, read-only shadow runs, and a simulator that
+  checks the decision logic against a fake Twitch. A drop that can no longer finish in time
+  never holds up a goal below it that can.
+- **Not yet:** channel-points goals and `claimBonus` (accepted in the config, skipped with a
+  warning), a second stream, picking up `config.json` edits without a restart, and a published
+  image, binary or npm package. You build it from this repository.
 - **Twitch's API is private** and changes about once a month. Then the miner needs an update
   ([section 5](#5-when-it-needs-you) tells how to notice).
 
@@ -221,13 +222,14 @@ On a terminal, or with `LOG_FORMAT=pretty`, a healthy start looks like this (tim
   watched, and others that the same stream also counts for.
 - `runtime: idle (<reason>)` means nothing is being watched right now:
 
-  | Reason                | Meaning                                                                    |
-  | --------------------- | -------------------------------------------------------------------------- |
-  | `starting`            | Checking the token and reading the campaigns (logged only after a resume). |
-  | `nothing-to-mine`     | No active campaign matches your config, or everything is claimed.          |
-  | `no-live-channel`     | There are drops to earn, but no channel streaming them is live now.        |
-  | `catalog-unavailable` | Twitch didn't return the campaign list. The miner tries again.             |
-  | `needs-login`         | The token was refused. See [section 5](#5-when-it-needs-you).              |
+  | Reason                | Meaning                                                                       |
+  | --------------------- | ----------------------------------------------------------------------------- |
+  | `starting`            | Checking the token and reading the campaigns (logged only after a resume).    |
+  | `discovering`         | Reading which channels stream the campaigns; a watch starts once they answer. |
+  | `nothing-to-mine`     | No active campaign matches your config, or everything is claimed.             |
+  | `no-live-channel`     | There are drops to earn, but no channel streaming them is live now.           |
+  | `catalog-unavailable` | Twitch didn't return the campaign list. The miner tries again.                |
+  | `needs-login`         | The token was refused. See [section 5](#5-when-it-needs-you).                 |
 
 `LOG_LEVEL=Debug` adds every watch tick and PubSub event.
 
@@ -236,16 +238,17 @@ On a terminal, or with `LOG_FORMAT=pretty`, a healthy start looks like this (tim
 The miner retries reads on its own, with a backoff. It never retries a login or a claim, so
 these cases are yours:
 
-| You see                                                              | What happened                                                   | What to do                                                                                                                  |
-| -------------------------------------------------------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `runtime: idle (needs-login)`                                        | Twitch refused the token. The miner stays up but sends nothing. | Get a new token ([section 1](#1-get-a-token)), put it in `.env` or `miner.env`, restart.                                    |
-| `run stopped: TOKEN is not set`, exit 1                              | No token in the environment.                                    | Set `TOKEN`.                                                                                                                |
-| `…config.json#/…: …`, exit 2                                         | `config.json` is invalid. Each line names one problem.          | Fix it, check with `miner config validate`, restart.                                                                        |
-| `run stopped: another miner (pid …) runs on …`, exit 1               | A second miner on the same data directory.                      | Stop the other one. Only one miner per account, ever, even across machines.                                                 |
-| `run stopped: …state.json can't be read …`, exit 1                   | The state file is damaged or from another version.              | Stop the miner, move `state.json` away. It starts fresh from Twitch's inventory.                                            |
-| `config: … is not supported yet …` (warning at start)                | A config option the miner doesn't honour yet.                   | Nothing. The miner runs without it ([status](#status)).                                                                     |
-| `idle (catalog-unavailable)` for hours, or minutes that stop growing | Twitch changed its private API, or is down.                     | Run `miner doctor`: it names an answer that "changed shape or was null". Update the miner, or open an issue with that line. |
-| `claim: … outcome unknown …`                                         | The answer to a claim got lost.                                 | Nothing. The next inventory read shows whether it went through, and only then is it claimed again.                          |
+| You see                                                              | What happened                                                   | What to do                                                                                                                      |
+| -------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `runtime: idle (needs-login)`                                        | Twitch refused the token. The miner stays up but sends nothing. | Get a new token ([section 1](#1-get-a-token)), put it in `.env` or `miner.env`, restart.                                        |
+| `run stopped: TOKEN is not set`, exit 1                              | No token in the environment.                                    | Set `TOKEN`.                                                                                                                    |
+| `…config.json#/…: …`, exit 2                                         | `config.json` is invalid. Each line names one problem.          | Fix it, check with `miner config validate`, restart.                                                                            |
+| `run stopped: another miner (pid …) runs on …`, exit 1               | A second miner on the same data directory.                      | Stop the other one. Only one miner per account, ever, even across machines.                                                     |
+| `run stopped: …state.json can't be read …`, exit 1                   | The state file is damaged or from another version.              | Stop the miner, move `state.json` away. It starts fresh from Twitch's inventory.                                                |
+| `config: … is not supported yet …` (warning at start)                | A config option the miner doesn't honour yet.                   | Nothing. The miner runs without it ([status](#status)).                                                                         |
+| `config: game "…" matches no game with an active campaign`           | A listed game is misspelt, or has no campaign right now.        | If it names a "did you mean", fix the name in `config.json` and restart. Otherwise nothing: it is mined once a campaign starts. |
+| `idle (catalog-unavailable)` for hours, or minutes that stop growing | Twitch changed its private API, or is down.                     | Run `miner doctor`: it names an answer that "changed shape or was null". Update the miner, or open an issue with that line.     |
+| `claim: … outcome unknown …`                                         | The answer to a claim got lost.                                 | Nothing. The next inventory read shows whether it went through, and only then is it claimed again.                              |
 
 To restart after a new token: `docker compose up -d` (it recreates the container when `.env`
 changed) or `sudo systemctl restart miner`. Don't use "Log out of all devices" on Twitch to get

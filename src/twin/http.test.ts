@@ -4,7 +4,7 @@ import { TestClock } from "effect/testing";
 import type { ChannelId } from "../core/model.ts";
 import { Twitch } from "../twitch/Twitch.ts";
 import { twinTwitch } from "./http.ts";
-import { SIM_EPOCH, type Fault, type Scenario } from "./scenario.ts";
+import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Fault, type Scenario } from "./scenario.ts";
 import { makeTwin, type Twin } from "./twin.ts";
 import { ACCOUNT, buildWorld, openSession, tick } from "./world.ts";
 
@@ -12,7 +12,7 @@ const scenario = (faults: ReadonlyArray<Fault> = []): Scenario => ({
   latencySeed: 1,
   horizonMinutes: 600,
   inventoryLagMinutes: 0,
-  settings: { games: [], exclude: [], badgesAndEmotes: true },
+  settings: { goals: [DEFAULT_GOAL_SPEC] },
   campaigns: [
     {
       game: 0,

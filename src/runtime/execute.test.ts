@@ -2,12 +2,18 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import type { CampaignId, ChannelId, DropId, GameId } from "../core/model.ts";
-import { Command, type Event } from "../core/protocol.ts";
+import { Command, Event, readKey } from "../core/protocol.ts";
 import { Actuator } from "../twitch/Actuator.ts";
 import { twinActuator } from "../twin/actuator.ts";
 import { emptyMemory, execute, type Memory } from "./execute.ts";
 import { twinTwitch } from "../twin/http.ts";
-import { SIM_EPOCH, type Fault, type Operation, type Scenario } from "../twin/scenario.ts";
+import {
+  DEFAULT_GOAL_SPEC,
+  SIM_EPOCH,
+  type Fault,
+  type Operation,
+  type Scenario,
+} from "../twin/scenario.ts";
 import { makeTwin, type Twin } from "../twin/twin.ts";
 import { buildWorld, instanceOf, openSession, tick } from "../twin/world.ts";
 
@@ -15,7 +21,7 @@ const scenario = (faults: ReadonlyArray<Fault> = []): Scenario => ({
   latencySeed: 1,
   horizonMinutes: 600,
   inventoryLagMinutes: 0,
-  settings: { games: [], exclude: [], badgesAndEmotes: true },
+  settings: { goals: [DEFAULT_GOAL_SPEC] },
   campaigns: [
     {
       game: 0,
@@ -133,10 +139,11 @@ describe("execute", () => {
         Command.ReadInventory(),
         Command.ReadCurrentDrop({ channelId: ch0 }),
       ]);
-      // Without a slug or a login, nothing is asked: the catalog brings both.
+      // Without a slug or a login, nothing is asked: the catalog brings both. The core still
+      // hears that the read is over, so discovery stops waiting for it.
       assert.deepStrictEqual(tags(events), [
-        [],
-        [],
+        ["ChannelsReadFailed"],
+        ["ChannelsReadFailed"],
         ["CatalogRead"],
         ["ChannelsRead"],
         ["ChannelsRead"],
@@ -156,6 +163,20 @@ describe("execute", () => {
       ]);
       const down = makeTwin(buildWorld(scenario([storm()])));
       assert.deepStrictEqual(tags((yield* run(down, reads)).events), [[], []]);
+    }),
+  );
+
+  it.effect("reports a channel read that gave up as ChannelsReadFailed, with its key", () =>
+    Effect.gen(function* () {
+      const twin = makeTwin(buildWorld(scenario([storm()])));
+      const memory: Memory = { ...knowsCh0, slugs: new Map([["g0" as GameId, "game-0"]]) };
+      const directory = Command.ReadDirectory({ gameId: "g0" as GameId });
+      const channels = Command.ReadChannels({ channelIds: [ch0] });
+      const { events } = yield* run(twin, [directory, channels], memory);
+      assert.deepStrictEqual(events, [
+        [Event.ChannelsReadFailed({ read: readKey(directory) })],
+        [Event.ChannelsReadFailed({ read: readKey(channels) })],
+      ]);
     }),
   );
 

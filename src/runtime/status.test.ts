@@ -16,7 +16,7 @@ import {
 import { changeKey, parseStatus } from "../status/snapshot.ts";
 import { memoryFileSystem, type MemoryFiles } from "../store/memoryFileSystem.ts";
 import { twinHttp } from "../twin/http.ts";
-import { SIM_EPOCH, type Fault, type Scenario } from "../twin/scenario.ts";
+import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Fault, type Scenario } from "../twin/scenario.ts";
 import { makeTwin, type Twin } from "../twin/twin.ts";
 import { buildWorld } from "../twin/world.ts";
 import { fakeEdge } from "../twitch/fakeSocket.ts";
@@ -34,7 +34,7 @@ const scenario = (faults: ReadonlyArray<Fault>): Scenario => ({
   latencySeed: 1,
   horizonMinutes: 1440,
   inventoryLagMinutes: 0,
-  settings: { games: [], exclude: [], badgesAndEmotes: true },
+  settings: { goals: [DEFAULT_GOAL_SPEC] },
   campaigns: [
     {
       game: 0,

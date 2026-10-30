@@ -43,6 +43,8 @@ export default defineConfig({
   },
   test: {
     include: ["src/**/*.test.ts"],
+    // Simulator-driven tests take seconds here and 2–3× that on CI's 4-core runner (#22, #25).
+    testTimeout: 30_000,
   },
   pack: {
     entry: ["src/bin.ts"],

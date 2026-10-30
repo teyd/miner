@@ -2,7 +2,8 @@ import { assert, describe, it } from "@effect/vitest";
 import fc from "fast-check";
 import { Schema } from "effect";
 import { Capsule, Scenario, scenarioArbitrary } from "./scenario.ts";
-import { buildWorld } from "./world.ts";
+import { isEligible } from "../core/rules.ts";
+import { buildWorld, channelIdOf } from "./world.ts";
 
 describe("scenario", () => {
   it("generates only values the Schema accepts", () => {
@@ -25,8 +26,46 @@ describe("scenario", () => {
           }
         }
       }
-      for (const id of world.settings.excludeChannels) assert.isTrue(channelIds.has(id));
+      for (const goal of world.settings.goals) {
+        for (const id of goal.excludeChannels) assert.isTrue(channelIds.has(id));
+      }
     }
+  });
+
+  it("covers every drops goal option, and always has a goal that wants campaign 0 on channel 0", () => {
+    const seen = new Set<string>();
+    for (const scenario of fc.sample(scenarioArbitrary, { seed: 7, numRuns: 200 })) {
+      const goals = scenario.settings.goals;
+      if (goals.length > 1) seen.add("several goals");
+      for (const g of goals) {
+        seen.add(g.order);
+        seen.add(g.games === null ? "all" : "listed");
+        if (!g.linkedOnly) seen.add("linkedOnly false");
+        if (g.excludeGames.length > 0) seen.add("excluded games");
+        if (g.games?.some((x) => x.rewards !== null) === true) seen.add("per-game rewards");
+        if (g.rewards.length === 1) seen.add(`only ${g.rewards[0]}`);
+      }
+      if (scenario.campaigns.some((c) => c.creditsUnlinked === true)) seen.add("creditsUnlinked");
+      const world = buildWorld(scenario);
+      const wanted = world.settings.goals.some(
+        (g) => isEligible(world.campaigns[0]!, g) && !g.excludeChannels.includes(channelIdOf(0)),
+      );
+      assert.isTrue(wanted);
+    }
+    assert.deepStrictEqual([...seen].toSorted(), [
+      "all",
+      "creditsUnlinked",
+      "ending-soonest",
+      "excluded games",
+      "least-slack",
+      "linkedOnly false",
+      "listed",
+      "only badge",
+      "only emote",
+      "only item",
+      "per-game rewards",
+      "several goals",
+    ]);
   });
 
   it("rejects values outside the bounds", () => {

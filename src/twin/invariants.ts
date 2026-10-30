@@ -7,21 +7,32 @@ import {
   WATCH_INTERVAL,
   type State,
 } from "../core/state.ts";
-import { MINUTE, claimKey, type Campaign, type ChannelId, type Millis } from "../core/model.ts";
+import {
+  MINUTE,
+  claimKey,
+  type Campaign,
+  type CampaignId,
+  type ChannelId,
+  type Millis,
+} from "../core/model.ts";
 import type { Command, Event } from "../core/protocol.ts";
 import { canonical, decodeState, encodeState } from "../store/codec.ts";
+import { allowedPicks, allowedWatch, canFinishOn, goalDrops, type View } from "./oracle.ts";
 import { SIM_EPOCH, type Violation } from "./scenario.ts";
 import { TWIN_TIMEOUT, type Activity } from "./twin.ts";
 import {
   channelOf,
   claimableAt,
   creditedCampaign,
+  earnable,
   faultWindows,
   framesDownAt,
   gameAt,
   instanceOf,
+  isClaimedAt,
   isRevoked,
   liveAt,
+  type Credit,
   type World,
 } from "./world.ts";
 
@@ -60,6 +71,13 @@ export interface Observation {
 export const COMMAND_DEADLINE: Millis = 5 * MINUTE;
 export const IN_FLIGHT_LIMIT = 4;
 export const BUSY_STEPS = 20;
+/**
+ * A `Watch` this soon after the previous one needs a cause (`WatchFlip`). The startup flip seen
+ * live came 5 s after the first watch.
+ */
+export const FLIP_WINDOW: Millis = 2 * MINUTE;
+/** How far before a watch a schedule change may still be news to the core: `stream-up` waits. */
+const NEWS_LAG: Millis = ONLINE_DELAY + MINUTE;
 /** Discovery after a restart: validate, catalog, directory and channel reads. */
 const RESTART_GRACE: Millis = 2 * MINUTE;
 
@@ -88,10 +106,27 @@ export interface Checker {
   readonly fairlyAvoided: ReadonlySet<ChannelId>;
   /** Channels whose last schedule change reached the core as a frame. */
   readonly heard: ReadonlySet<ChannelId>;
+  /**
+   * The last credit of a campaign missing from the core's catalog. The core takes it as a sign of
+   * life and rereads the catalog (`credit` in `step.ts`), so its stall clock restarts there.
+   */
+  readonly unknownCreditAt: Millis | undefined;
   /** When each channel last credited a campaign the settings want. */
   readonly lastWantedCredit: ReadonlyMap<ChannelId, Millis>;
   readonly lastObservedAt: Millis;
   readonly lastSaved: string | undefined;
+  /** The core's last `Watch` since a restart, kept through `StopWatching`. */
+  readonly lastWatch:
+    | {
+        readonly channelId: ChannelId;
+        readonly at: Millis;
+        readonly campaignId: CampaignId | undefined;
+      }
+    | undefined;
+  /** The last catalog read that changed the core's catalog. */
+  readonly lastCatalogChangeAt: Millis | undefined;
+  /** The last catalog or channel read that gave up: the core's picture missed its answer. */
+  readonly lastReadFailureAt: Millis | undefined;
   /** The core's last `Subscribe` since a restart. */
   readonly lastSubscribe:
     | { readonly at: Millis; readonly channelIds: ReadonlyArray<ChannelId> }
@@ -109,26 +144,39 @@ export const initialChecker: Checker = {
   idleSince: undefined,
   knownSince: undefined,
   watchSince: undefined,
+  unknownCreditAt: undefined,
   restartedAt: undefined,
   fairlyAvoided: new Set(),
   heard: new Set(),
   lastWantedCredit: new Map(),
   lastObservedAt: SIM_EPOCH,
   lastSaved: undefined,
+  lastWatch: undefined,
+  lastCatalogChangeAt: undefined,
+  lastReadFailureAt: undefined,
   lastSubscribe: undefined,
 };
 
-/** Whether the settings ask for this campaign, judged independently of the core's rules. */
-const wanted = (world: World, campaign: Campaign): boolean => {
-  const s = world.settings;
-  const badgeOrEmote = campaign.drops.some((d) =>
-    d.benefits.some((b) => b.distribution === "BADGE" || b.distribution === "EMOTE"),
-  );
-  return (
-    (s.games.length === 0 || s.games.includes(campaign.game.id)) &&
-    (campaign.linked || (s.badgesAndEmotes && badgeOrEmote))
+/** Some goal that may watch `channelId` asks for one of these credited drops. */
+const wantedCredit = (world: World, credit: Credit): boolean => {
+  const campaign = world.campaigns.find((x) => x.id === credit.campaignId);
+  if (campaign === undefined) return false;
+  return world.settings.goals.some(
+    (g) =>
+      !g.excludeChannels.includes(credit.channelId) &&
+      goalDrops(g, campaign, (id) => isClaimedAt(world, id, credit.at)).some((d) =>
+        credit.dropIds.includes(d.id),
+      ),
   );
 };
+
+/** Some goal that may watch `channelId` asks for a drop of the campaign that can earn now. */
+const wanted = (world: World, campaign: Campaign, channelId: ChannelId, now: Millis): boolean =>
+  world.settings.goals.some(
+    (g) =>
+      !g.excludeChannels.includes(channelId) &&
+      goalDrops(g, campaign, (id) => world.claimed.has(id)).some((d) => earnable(world, d, now)),
+  );
 
 export interface Opportunity {
   readonly channelId: ChannelId;
@@ -146,9 +194,9 @@ export const opportunities = (
   avoided: ReadonlySet<ChannelId>,
 ): ReadonlyArray<Opportunity> =>
   world.channels.flatMap((ch) => {
-    if (world.settings.excludeChannels.includes(ch.id) || avoided.has(ch.id)) return [];
+    if (avoided.has(ch.id)) return [];
     const campaign = creditedCampaign(world, ch.id, now);
-    if (campaign === undefined || !wanted(world, campaign)) return [];
+    if (campaign === undefined || !wanted(world, campaign, ch.id, now)) return [];
     const discoverable =
       campaign.allowedChannels.length > 0 || gameAt(world, ch.id, now) === campaign.game.id;
     return discoverable ? [{ channelId: ch.id, campaign }] : [];
@@ -159,7 +207,7 @@ const productive = (world: World, now: Millis): boolean => {
   const session = world.session;
   if (session === undefined) return false;
   const campaign = creditedCampaign(world, session.channelId, now);
-  return campaign !== undefined && wanted(world, campaign);
+  return campaign !== undefined && wanted(world, campaign, session.channelId, now);
 };
 
 const minutesSince = (at: Millis) => ((at - SIM_EPOCH) / MINUTE).toFixed(2);
@@ -197,9 +245,14 @@ export const checkStep = (
       idleSince: undefined,
       knownSince: undefined,
       watchSince: undefined,
+      unknownCreditAt: undefined,
       fairlyAvoided: new Set(),
       heard: new Set(),
+      lastWatch: undefined,
       lastSubscribe: undefined,
+      // What a previous run read or failed to read is no news to this one, which reads again.
+      lastCatalogChangeAt: undefined,
+      lastReadFailureAt: undefined,
     };
   }
 
@@ -271,10 +324,12 @@ export const checkStep = (
   }
   const lastWantedCredit = new Map(c.lastWantedCredit);
   for (const credit of o.activity.credits) {
+    if (o.state.catalog?.some((x) => x.id === credit.campaignId) !== true) {
+      c = { ...c, unknownCreditAt: credit.at };
+    }
     if (isRevoked(world, credit.at))
       fail("TwinBroken", `credit on ${credit.channelId} after revoke`);
-    const campaign = world.campaigns.find((x) => x.id === credit.campaignId);
-    if (campaign !== undefined && wanted(world, campaign)) {
+    if (wantedCredit(world, credit)) {
       lastWantedCredit.set(credit.channelId, credit.at);
     }
   }
@@ -369,11 +424,32 @@ const checkCommands = (
     c = { ...c, claims };
   }
 
+  if (
+    event._tag === "CatalogRead" &&
+    (before.catalog === undefined || canonical(before.catalog) !== canonical(event.campaigns))
+  ) {
+    c = { ...c, lastCatalogChangeAt: o.now };
+  }
+  if (event._tag === "ChannelsReadFailed" || event._tag === "CatalogUnavailable") {
+    c = { ...c, lastReadFailureAt: o.now };
+  }
+
   for (const command of commands) {
     switch (command._tag) {
-      case "Watch":
-        c = { ...c, watching: command.channelId, watchSince: o.now };
+      case "Watch": {
+        const flip = flipWithoutCause(c, o, step, command.channelId);
+        if (flip !== undefined) fail("WatchFlip", flip);
+        const campaignId = after.watch._tag === "Watching" ? after.watch.campaignId : undefined;
+        const wrong = wrongPick(o, step, campaignId, command.channelId);
+        if (wrong !== undefined) fail("WrongPick", wrong);
+        c = {
+          ...c,
+          watching: command.channelId,
+          watchSince: o.now,
+          lastWatch: { channelId: command.channelId, at: o.now, campaignId },
+        };
         break;
+      }
       case "StopWatching":
         c = { ...c, watching: undefined };
         break;
@@ -428,6 +504,12 @@ const checkCommands = (
     }
   }
 
+  // 7: a watch the core keeps must still be one decision 28 ranks first.
+  if (!commands.some((x) => x._tag === "Watch")) {
+    const held = wrongHold(o, step);
+    if (held !== undefined) fail("WrongPick", held);
+  }
+
   // 3b: avoid a channel only for a cause the twin agrees with.
   for (const id of after.avoid) {
     if (before.avoid.has(id)) continue;
@@ -445,6 +527,135 @@ const checkCommands = (
     }
   }
   return c;
+};
+
+const changedBetween = (world: World, id: ChannelId, from: Millis, to: Millis): boolean =>
+  channelOf(world, id)?.phases.some((p, i) => i > 0 && from < p.at && p.at <= to) === true;
+
+/**
+ * 6: a `Watch` within `FLIP_WINDOW` of the previous one on another channel needs a cause the
+ * twin or the core can name: the old channel changed, failed or is avoided, the old campaign has
+ * nothing wanted left, or there is news since: the new channel changed, a claim unlocked a drop,
+ * a campaign started, or a new catalog read found more. Planning on half the discovery answers
+ * has none of these (the startup flip, live 2026-10-30). Returns the violation's detail.
+ */
+const flipWithoutCause = (
+  c: Checker,
+  o: Observation,
+  step: StepRecord,
+  next: ChannelId,
+): string | undefined => {
+  const last = c.lastWatch;
+  if (last === undefined || last.channelId === next || o.now - last.at >= FLIP_WINDOW) {
+    return undefined;
+  }
+  const world = o.world;
+  const from = last.at - NEWS_LAG;
+  // Only a read that gave up leaves the core with a picture it can't complete; a fault its
+  // retries absorbed changed nothing it knows (a 5 s blip excused the startup flip, review P2-2).
+  const faulted = c.lastReadFailureAt !== undefined && c.lastReadFailureAt >= from;
+  const old = last.channelId;
+  const oldChanged =
+    changedBetween(world, old, from, o.now) ||
+    step.after.avoid.has(old) ||
+    step.after.channels.get(old)?.live === undefined;
+  const oldCampaigns = [
+    last.campaignId,
+    step.before.watch._tag === "Watching" ? step.before.watch.campaignId : undefined,
+  ].flatMap((id) => world.campaigns.filter((x) => x.id === id));
+  // Done: nothing wanted left by twin truth, or, as far as the core knows, nothing wanted that
+  // earns now can still finish (the switch from a doomed campaign to one that can, seeds 2011
+  // and 4664).
+  const view = viewOf(o, step);
+  const oldDone = oldCampaigns.some(
+    (campaign) =>
+      !wanted(world, campaign, old, o.now) ||
+      (view.catalog.some((x) => x.id === campaign.id) &&
+        !canFinishOn(world.settings, view, campaign.id, old)),
+  );
+  const news =
+    changedBetween(world, next, from, o.now) ||
+    (c.lastCatalogChangeAt !== undefined && c.lastCatalogChangeAt > last.at) ||
+    [...world.claimed.values()].some((at) => at > from) ||
+    // Twitch credited a wanted campaign: the core follows the credit (seed 23266).
+    [...c.lastWantedCredit.values()].some((at) => at > from) ||
+    world.campaigns.some((x) =>
+      [x.startsAt, ...x.drops.map((d) => d.startsAt)].some((t) => from < t && t <= o.now),
+    );
+  if (faulted || oldChanged || oldDone || news) return undefined;
+  return `${old} at +${minutesSince(last.at)}m, then ${next} with no cause`;
+};
+
+const viewOf = (o: Observation, step: StepRecord): View => ({
+  catalog: step.after.catalog ?? [],
+  progress: step.after.progress,
+  channels: step.after.channels,
+  avoid: step.after.avoid,
+  now: o.now,
+});
+
+/**
+ * The campaigns that hold the `least-slack` margin when the core planned: the one watched before
+ * the step, and one a credit adopted during it. None when the core watched nothing.
+ */
+const holdersOf = (step: StepRecord): ReadonlyArray<CampaignId> => {
+  const { before, after, event } = step;
+  return [
+    ...(before.watch._tag === "Watching" ? [before.watch.campaignId] : []),
+    ...((event._tag === "DropProgress" || event._tag === "CurrentDropRead") &&
+    event.dropId !== undefined
+      ? (after.catalog ?? [])
+          .filter((x) => x.drops.some((d) => d.id === event.dropId))
+          .map((x) => x.id)
+      : []),
+  ];
+};
+
+const instead = (o: Observation, step: StepRecord): string => {
+  const allowed = allowedPicks(o.world.settings, viewOf(o, step), holdersOf(step));
+  return allowed.size === 0 ? "no goal wants anything" : [...allowed].join(", ");
+};
+
+/**
+ * 7: a new watch is for a campaign decision 28 ranks first among what the core knew (`oracle.ts`,
+ * written apart from the planner), on a channel that goal may watch and that credits it. It judges
+ * the ranking, not the data: the core's catalog, progress and channels are the input, so a fault
+ * or a discovery still running can't excuse a wrong pick. Returns the violation's detail.
+ */
+const wrongPick = (
+  o: Observation,
+  step: StepRecord,
+  campaignId: CampaignId | undefined,
+  channelId: ChannelId,
+): string | undefined => {
+  if (campaignId === undefined || step.after.catalog === undefined) return undefined;
+  const view = viewOf(o, step);
+  if (allowedWatch(o.world.settings, view, holdersOf(step), campaignId, channelId)) {
+    return undefined;
+  }
+  return `watching ${channelId} for ${campaignId}, decision 28 ranks first: ${instead(o, step)}`;
+};
+
+/**
+ * 7, for a watch the core keeps: after every step it must still be one decision 28 ranks first,
+ * or the core never moves to a better campaign. A discovery still running excuses holding on
+ * (the core may not switch on half a picture), and so does a credit Twitch chose: several
+ * campaigns can share a stream, and Twitch picks which one progresses, so a channel that credits
+ * a first-ranked campaign is right whatever it credits.
+ */
+const wrongHold = (o: Observation, step: StepRecord): string | undefined => {
+  const { after } = step;
+  const w = after.watch;
+  if (w._tag !== "Watching" || after.auth !== "valid" || after.catalog === undefined) {
+    return undefined;
+  }
+  if (after.discovery !== undefined) return undefined;
+  const view = viewOf(o, step);
+  const holders = holdersOf(step);
+  const settings = o.world.settings;
+  if (allowedWatch(settings, view, holders, w.campaignId, w.channelId)) return undefined;
+  if (w.credited && allowedWatch(settings, view, holders, undefined, w.channelId)) return undefined;
+  return `kept ${w.channelId} for ${w.campaignId}, decision 28 ranks first: ${instead(o, step)}`;
 };
 
 /**
@@ -479,7 +690,8 @@ const checkIdle = (
   // Watching a channel the core believes credits: stream info can't tell `dropsEnabled`
   // (`wire.ts`), so only the stall rule can find out.
   const watching = o.state.watch._tag === "Watching";
-  const watchedFor = o.now - Math.max(since, checker.watchSince ?? since);
+  const watchedFor =
+    o.now - Math.max(since, checker.watchSince ?? since, checker.unknownCreditAt ?? since);
   const late = watching
     ? watchedFor > STALL_AFTER + 2 * MINUTE
     : o.now - since > CATALOG_INTERVAL + 2 * MINUTE ||

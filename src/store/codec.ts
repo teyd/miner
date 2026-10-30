@@ -1,4 +1,5 @@
 import { Predicate } from "effect";
+import { DEFAULT_GOAL } from "../core/model.ts";
 import type { State } from "../core/state.ts";
 
 /**
@@ -39,21 +40,122 @@ const revive = (value: unknown): unknown => {
 
 /**
  * Bumped whenever `State` changes shape. A file with another version is refused rather than
- * guessed at: a misread claim intent could send a claim twice. 2: `deadlines.subscribe`.
+ * guessed at: a misread claim intent could send a claim twice, so only a version with a
+ * written migration is read. 2: `deadlines.subscribe`. 3: `discovery`, and `settings` as a list
+ * of drops goals (2 migrates).
  */
-export const STATE_VERSION = 2;
+export const STATE_VERSION = 3;
 
 export const encodeState = (state: State): string =>
   `{"state":${canonical(state)},"version":${STATE_VERSION}}`;
 
-/** Throws on text that isn't a saved state of this version. */
+/**
+ * Version 2 to 3. Only `settings` changed shape, and the runtime maps them from `config.json`
+ * before every step, so any valid value does: the default goal. Discovery starts empty, as after
+ * a restart. Catalog, progress, claims and deadlines are kept as they are.
+ */
+const fromVersion2 = (state: Record<string, unknown>): Record<string, unknown> => ({
+  ...state,
+  settings: { goals: [DEFAULT_GOAL] },
+  discovery: undefined,
+});
+
+/** Throws on text that isn't a saved state of this version, or of one it migrates (2). */
 export const decodeState = (text: string): State => {
   const parsed: unknown = JSON.parse(text);
   if (!Predicate.isObject(parsed) || !("version" in parsed) || !("state" in parsed)) {
     throw new Error("not a saved miner state");
   }
+  if (parsed.version === 2 && Predicate.isObject(parsed.state)) {
+    return checked(revive(fromVersion2(parsed.state as Record<string, unknown>)));
+  }
   if (parsed.version !== STATE_VERSION) {
     throw new Error(`state version ${String(parsed.version)}, this miner reads ${STATE_VERSION}`);
   }
-  return revive(parsed.state) as State;
+  return checked(revive(parsed.state));
+};
+
+type Check = (value: unknown) => boolean;
+
+// `canonical` writes Infinity as null, which the next load would refuse.
+const isNumber: Check = (v) => typeof v === "number" && Number.isFinite(v);
+const isString: Check = (v) => typeof v === "string";
+const optional =
+  (check: Check): Check =>
+  (v) =>
+    v === undefined || check(v);
+const oneOf =
+  (...values: ReadonlyArray<string>): Check =>
+  (v) =>
+    typeof v === "string" && values.includes(v);
+const arrayOf =
+  (check: Check): Check =>
+  (v) =>
+    Array.isArray(v) && v.every(check);
+const mapOf =
+  (key: Check, value: Check): Check =>
+  (v) =>
+    v instanceof Map && [...v].every(([k, x]) => key(k) && value(x));
+/** Every key present (an `undefined` field is saved as a sentinel, so it is present too). */
+const record =
+  (fields: Record<string, Check>): Check =>
+  (v) =>
+    Predicate.isObject(v) &&
+    Object.entries(fields).every(
+      ([k, check]) => k in v && check((v as Record<string, unknown>)[k]),
+    );
+const isObject: Check = (v) => Predicate.isObject(v);
+
+const claimIntent = record({
+  campaignId: isString,
+  dropId: isString,
+  status: oneOf("sent", "unknown"),
+  recheckAt: optional(isNumber),
+});
+
+const progressOf = record({
+  dropId: isString,
+  campaignId: isString,
+  campaignEndsAt: isNumber,
+  minutes: isNumber,
+  instanceId: optional(isString),
+  claimed: (v) => typeof v === "boolean",
+});
+
+/**
+ * The fields of `State`, deep where a misread could cost a claim (claims, progress, deadlines)
+ * and by kind elsewhere. A file that parses but lacks them is refused like any unreadable state:
+ * starting from a half state would forget claims in flight.
+ */
+const fields: { readonly [K in keyof State]-?: Check } = {
+  settings: record({ goals: arrayOf(isObject) }),
+  auth: oneOf("unknown", "valid", "needs-login"),
+  catalog: optional(arrayOf(isObject)),
+  catalogStatus: oneOf("unknown", "ok", "unavailable"),
+  progress: mapOf(isString, progressOf),
+  channels: mapOf(isString, isObject),
+  avoid: (v) => v instanceof Set,
+  watch: (v) => record({ _tag: oneOf("Watching", "Idle") })(v),
+  claims: mapOf(isString, claimIntent),
+  subscriptions: arrayOf(isString),
+  discovery: optional(record({ pending: arrayOf(isString), until: isNumber })),
+  deadlines: record({
+    validate: isNumber,
+    catalog: isNumber,
+    inventory: isNumber,
+    tick: optional(isNumber),
+    online: mapOf(isString, isNumber),
+    subscribe: optional(isNumber),
+  }),
+};
+
+const checked = (state: unknown): State => {
+  if (!Predicate.isObject(state)) throw new Error("not a saved miner state");
+  const saved = state as Record<string, unknown>;
+  for (const [key, check] of Object.entries(fields)) {
+    if (!(key in saved) || !check(saved[key])) {
+      throw new Error(`not a saved miner state: \`${key}\` is missing or malformed`);
+    }
+  }
+  return saved as unknown as State;
 };

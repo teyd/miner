@@ -158,3 +158,41 @@ completes, or the file changes.
 1. `$schema` points at the raw GitHub file on `dev`; a stable host later.
 2. `least-slack` ships in v1.
 3. The file reloads while the miner runs.
+
+## 4. Proposed refinement of decision 28: feasibility first, across goals (2026-10-30)
+
+Not settled: decision 28 is teyd's, and this awaits his answer. The code already behaves this way
+(`src/core/plan.ts` `minable`, `src/twin/oracle.ts`), since the review of the planner (P1-2).
+
+**The refinement.** Decision 28 says the miner works on "the first goal with something to do now".
+Read literally, a goal whose only earnable drop can no longer finish before it ends still has
+"something to do", so it holds the miner, and every goal below it starves while the doomed drop
+earns minutes that never pay out. The planner instead ranks in this order:
+
+1. Campaigns with a wanted drop that earns now and can still finish (time left ≥ minutes still
+   needed) come before campaigns without one, whatever their goal.
+2. Within each group: goals in priority order, then the goal's game order, then its `order`.
+3. Among campaigns that can't finish anything, the one ending soonest goes first, under either
+   `order` (with nothing to finish there is no slack to rank by, and the `least-slack` switching
+   margin does not apply).
+
+A campaign that can't finish is still watched when nothing else can be: it earns progress Twitch
+keeps, and it's better than idling.
+
+**Why (P1-2).** A first goal on a game with one long drop and a campaign ending in 50 minutes
+(240 needed) blocked a second goal's 30-minute drop with 10 hours left: the old ranking mined the
+doomed drop to its end, and the second goal's drop was mined only afterwards, if at all. The
+simulator now plants that ranking and catches it (`src/twin/sim.test.ts`, "a doomed first goal
+starving the second"). The switch away from a doomed campaign is a legitimate cause for a quick
+watch switch (seeds 2011 and 4664, `WatchFlip`).
+
+**What the schema says today.** The `order` description in `src/config/schema.ts`: "A campaign
+that can no longer finish a drop in time waits until no goal has one that can." If teyd accepts
+this, decision 28 gains that sentence; if not, the planner's first sort key goes and the goal
+order wins again.
+
+**Catalog rereads when a drop opens.** Discovery reads channels only for what earns at a catalog
+read, so a wanted drop opening later brings the next catalog read forward to its opening, but at
+most every 15 minutes (`CATALOG_OPENING_GAP`, `src/core/state.ts`): at most four catalog reads an
+hour, each with its directory reads, instead of twelve. A drop opening within 15 minutes of the
+last read waits up to that long for its channels.

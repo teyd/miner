@@ -8,8 +8,8 @@ import { canonical } from "../store/codec.ts";
 import { Store } from "../store/Store.ts";
 import { emptyMemory, execute, type Memory } from "./execute.ts";
 import { forwardFrames } from "./listen.ts";
-import { describeWatch, progressLines } from "./narrate.ts";
-import { toSettings } from "./settings.ts";
+import { describeWatch, discoveryExpired, progressLines } from "./narrate.ts";
+import { toSettings, unresolvedGames } from "./settings.ts";
 import { makeReporter } from "./status.ts";
 import { observe, startFacts } from "../status/snapshot.ts";
 
@@ -58,6 +58,7 @@ export const run = (config: Config) =>
     );
     yield* Queue.offer(events, Event.Started());
     let instant: readonly [number, number] = [-1, 0];
+    let unresolved = new Set<string>();
     let facts = startFacts(yield* Clock.currentTimeMillis);
     const reporter = yield* makeReporter;
     yield* Effect.addFinalizer(() => Effect.suspend(() => reporter.stop(state, facts)));
@@ -70,7 +71,21 @@ export const run = (config: Config) =>
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.void
-              : Effect.logError(`runtime: ${command._tag} failed`, cause),
+              : Effect.andThen(
+                  Effect.logError(`runtime: ${command._tag} failed`, cause),
+                  // A claim that died may still have reached Twitch: report it unknown, so the
+                  // next inventory read settles it, instead of leaving it "sent" forever.
+                  command._tag === "Claim"
+                    ? Queue.offer(
+                        events,
+                        Event.ClaimResult({
+                          campaignId: command.campaignId,
+                          dropId: command.dropId,
+                          outcome: "unknown",
+                        }),
+                      )
+                    : Effect.void,
+                ),
           ),
           Effect.asVoid,
         ),
@@ -99,6 +114,15 @@ export const run = (config: Config) =>
         }
       }
       yield* report(state, result.state);
+      const expired = discoveryExpired(state, result.state, event, now);
+      if (expired !== undefined) yield* Effect.logWarning(`runtime: ${expired}`);
+      if (event._tag === "CatalogRead") {
+        const notes = unresolvedGames(config, event.campaigns);
+        for (const note of notes) {
+          if (!unresolved.has(note)) yield* Effect.logWarning(`config: ${note}`);
+        }
+        unresolved = new Set(notes);
+      }
       facts = observe(facts, state, result.state, event, now);
       state = result.state;
       yield* reporter.update(state, facts, now);

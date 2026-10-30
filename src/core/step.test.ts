@@ -1,10 +1,27 @@
 import { assert, describe, it } from "@effect/vitest";
-import { campaign, channel, chid, did, game, iid, progress, settings, T0 } from "./fixtures.ts";
+import {
+  badge,
+  campaign,
+  channel,
+  chid,
+  did,
+  drop,
+  game,
+  games,
+  goal,
+  iid,
+  progress,
+  settings,
+  T0,
+} from "./fixtures.ts";
 import { HOUR, MINUTE, type Campaign, type Channel, type Millis } from "./model.ts";
-import { Event, type Command } from "./protocol.ts";
+import { Command, Event, readKey } from "./protocol.ts";
 import {
   CATALOG_RETRY,
   CLAIM_RECHECK,
+  READ_GAP,
+  READ_WORST_CASE,
+  discoverySettle,
   initial,
   nextDeadline,
   ONLINE_DELAY,
@@ -38,13 +55,21 @@ const driver = (state: State = initial(settings())) => {
 
 const tags = (commands: ReadonlyArray<Command>) => commands.map((c) => c._tag);
 
-/** Started → token valid → catalog → channels: the miner is watching. */
+/** A channel read's answer. The default key answers the directory read of `game-1`. */
+const read = (channels: ReadonlyArray<Channel>, key = "directory:game-1") =>
+  Event.ChannelsRead({ channels, read: key });
+
+const reads = (commands: ReadonlyArray<Command>) =>
+  commands.flatMap((c) => (c._tag === "ReadDirectory" || c._tag === "ReadChannels" ? [c] : []));
+
+/** Started → token valid → catalog → its channel reads answered: the miner is watching. */
 const startedWatching = (campaigns: ReadonlyArray<Campaign>, channels: ReadonlyArray<Channel>) => {
   const d = driver();
   d.send(Event.Started());
   d.send(Event.TokenValid());
-  d.send(Event.CatalogRead({ campaigns }));
-  d.send(Event.ChannelsRead({ channels }));
+  for (const [i, command] of reads(d.send(Event.CatalogRead({ campaigns }))).entries()) {
+    d.send(read(i === 0 ? channels : [], readKey(command)));
+  }
   return d;
 };
 
@@ -67,10 +92,160 @@ describe("start-up", () => {
       tags(d.send(Event.CatalogRead({ campaigns: [campaign("c"), listed] }))),
       ["ReadDirectory", "ReadChannels"],
     );
-    const commands = d.send(Event.ChannelsRead({ channels: [channel("a")] }));
+    assert.deepStrictEqual(tags(d.send(read([channel("a")]))), []);
+    assert.strictEqual(watchedChannel(d.state), "discovering");
+    const commands = d.send(read([channel("x", "offline")], "channels:x"));
     assert.deepStrictEqual(tags(commands), ["Watch"]);
     assert.strictEqual(watchedChannel(d.state), "a");
     assert.deepStrictEqual(subscribes(settle(d)), [[chid("a"), chid("x")]]);
+  });
+
+  it("plans on every discovery answer, not the first one in (the live startup flip)", () => {
+    const top = campaign("top", { game: game("top") });
+    const low = campaign("low", { game: game("low") });
+    const d = driver(initial(settings({ games: games(["top", "low"]) })));
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    const issued = reads(d.send(Event.CatalogRead({ campaigns: [low, top] })));
+    assert.deepStrictEqual(issued.map(readKey), ["directory:top", "directory:low"]);
+    assert.strictEqual(nextDeadline(d.state), T0 + discoverySettle(issued));
+    // The lower-ranked game answers first: nothing starts on half the picture.
+    assert.deepStrictEqual(
+      tags(d.send(read([channel("b", { gameId: "low" })], "directory:low"))),
+      [],
+    );
+    assert.strictEqual(watchedChannel(d.state), "discovering");
+    const commands = d.send(read([channel("a", { gameId: "top" })], "directory:top"));
+    assert.deepStrictEqual(tags(commands), ["Watch"]);
+    assert.strictEqual(watchedChannel(d.state), "a");
+    assert.isUndefined(d.state.discovery);
+  });
+
+  it("reads the catalog again when a wanted drop opens its window, to find its channels", () => {
+    const later = campaign("later", {
+      drops: [
+        drop("soon", { startsAt: T0 + 20 * MINUTE }),
+        drop("much-later", { startsAt: T0 + 2 * HOUR }),
+      ],
+    });
+    const d = driver();
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    // Nothing earns yet, so no channel is read for it.
+    assert.deepStrictEqual(reads(d.send(Event.CatalogRead({ campaigns: [later] }))), []);
+    assert.strictEqual(d.state.deadlines.catalog, T0 + 20 * MINUTE);
+    assert.include(tags(d.send(Event.Tick(), T0 + 20 * MINUTE)), "ReadCatalog");
+    const issued = reads(d.send(Event.CatalogRead({ campaigns: [later] })));
+    assert.deepStrictEqual(issued.map(readKey), ["directory:game-1"]);
+    // The next opening is past the regular interval: the regular read finds it.
+    assert.strictEqual(d.state.deadlines.catalog, T0 + 20 * MINUTE + HOUR);
+  });
+
+  it("reads the catalog at most four times an hour, however many drops open", () => {
+    // A drop opens every 5 minutes for 4 hours, in two games: each catalog read also reads
+    // their directories, so the rate of both is bounded by the catalog's.
+    const opening = (name: string, g: string) =>
+      campaign(name, {
+        game: game(g),
+        endsAt: T0 + 6 * HOUR,
+        drops: Array.from({ length: 48 }, (_, i) =>
+          drop(`${name}-${i}`, { startsAt: T0 + (i + 1) * 5 * MINUTE, endsAt: T0 + 6 * HOUR }),
+        ),
+      });
+    const campaigns = [opening("x", "gx"), opening("y", "gy")];
+    const d = driver();
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    const catalogReads: Array<Millis> = [T0];
+    let directoryReads = reads(d.send(Event.CatalogRead({ campaigns }))).length;
+    while (d.now < T0 + 4 * HOUR) {
+      const commands = d.send(Event.Tick(), nextDeadline(d.state) ?? d.now + HOUR);
+      if (!tags(commands).includes("ReadCatalog")) continue;
+      catalogReads.push(d.now);
+      const started = reads(d.send(Event.CatalogRead({ campaigns })));
+      directoryReads += started.length;
+      for (const r of started) d.send(read([], readKey(r)));
+    }
+    for (const at of catalogReads) {
+      assert.isAtMost(catalogReads.filter((t) => t >= at && t < at + HOUR).length, 4);
+    }
+    assert.isAtMost(directoryReads, 2 * catalogReads.length);
+    assert.isAtLeast(catalogReads.length, 4 * 4 - 1);
+  });
+
+  it("stops waiting for a read that failed", () => {
+    const top = campaign("top", { game: game("top") });
+    const low = campaign("low", { game: game("low") });
+    const d = driver();
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    d.send(Event.CatalogRead({ campaigns: [low, top] }));
+    d.send(read([channel("b", { gameId: "low" })], "directory:low"), T0 + 1_000);
+    assert.strictEqual(watchedChannel(d.state), "discovering");
+    const commands = d.send(Event.ChannelsReadFailed({ read: "directory:top" }), T0 + 135_000);
+    assert.include(tags(commands), "Watch");
+    assert.strictEqual(watchedChannel(d.state), "b");
+    assert.isUndefined(d.state.discovery);
+  });
+
+  it("stops waiting for a read that never answers once no read can still be running", () => {
+    const top = campaign("top", { game: game("top") });
+    const low = campaign("low", { game: game("low") });
+    const d = driver();
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    const issued = reads(d.send(Event.CatalogRead({ campaigns: [low, top] })));
+    d.send(read([channel("b", { gameId: "low" })], "directory:low"), T0 + 1_000);
+    const settle = discoverySettle(issued);
+    // A read that fails every attempt answers only after its worst case: still waiting then.
+    assert.isAbove(settle, READ_WORST_CASE);
+    const watches = (commands: ReadonlyArray<Command>) =>
+      tags(commands).filter((t) => t === "Watch");
+    assert.deepStrictEqual(watches(d.send(Event.Tick(), T0 + READ_WORST_CASE)), []);
+    assert.deepStrictEqual(watches(d.send(Event.Tick(), T0 + settle - 1)), []);
+    assert.deepStrictEqual(watches(d.send(Event.Tick(), T0 + settle)), ["Watch"]);
+    assert.strictEqual(watchedChannel(d.state), "b");
+  });
+
+  it("waits longer for more reads: every attempt queues at the pacer", () => {
+    const directories = (n: number) =>
+      Array.from({ length: n }, (_, i) => Command.ReadDirectory({ gameId: game(`g${i}`).id }));
+    assert.strictEqual(
+      discoverySettle(directories(50)) - discoverySettle(directories(10)),
+      40 * 4 * READ_GAP,
+    );
+    const many = Command.ReadChannels({
+      channelIds: Array.from({ length: 100 }, (_, i) => chid(`c${i}`)),
+    });
+    // 100 channels are three stream-info requests, one after the other.
+    assert.isAbove(discoverySettle([many]), 3 * READ_WORST_CASE);
+  });
+
+  it("keeps a working watch through a catalog reread, and switches once it has every answer", () => {
+    const low = campaign("low", { game: game("low") });
+    const d = driver(initial(settings({ games: games(["top", "low"]) })));
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    d.send(Event.CatalogRead({ campaigns: [low] }));
+    d.send(read([channel("b", { gameId: "low" })], "directory:low"));
+    assert.strictEqual(watchedChannel(d.state), "b");
+    const top = campaign("top", { game: game("top") });
+    const later = T0 + HOUR;
+    d.send(Event.CatalogRead({ campaigns: [low, top] }), later);
+    d.send(read([channel("b", { gameId: "low" })], "directory:low"), later + 500);
+    assert.strictEqual(watchedChannel(d.state), "b");
+    const commands = d.send(read([channel("a", { gameId: "top" })], "directory:top"), later + 900);
+    assert.deepStrictEqual(tags(commands), ["Watch"]);
+    assert.strictEqual(watchedChannel(d.state), "a");
+  });
+
+  it("stops a watch that can't earn any more while discovery runs", () => {
+    const d = startedWatching([campaign("c")], [channel("a")]);
+    d.send(Event.CatalogRead({ campaigns: [campaign("c")] }), T0 + HOUR);
+    assert.deepStrictEqual(tags(d.send(Event.StreamDown({ channelId: chid("a") }))), [
+      "StopWatching",
+    ]);
+    assert.strictEqual(watchedChannel(d.state), "discovering");
   });
 
   it("tells a broken catalog apart from an empty one", () => {
@@ -106,10 +281,7 @@ describe("switching", () => {
   it("doesn't hop to a busier channel of the same campaign", () => {
     const d = startedWatching([campaign("c")], [channel("a")]);
     settle(d);
-    assert.deepStrictEqual(
-      tags(d.send(Event.ChannelsRead({ channels: [channel("b", { viewers: 9000 })] }))),
-      [],
-    );
+    assert.deepStrictEqual(tags(d.send(read([channel("b", { viewers: 9000 })], "channels:b"))), []);
     assert.strictEqual(watchedChannel(d.state), "a");
   });
 
@@ -148,6 +320,22 @@ describe("progress", () => {
     settle(d);
     assert.strictEqual(nextDeadline(d.state), T0 + WATCH_INTERVAL);
     assert.deepStrictEqual(tags(d.send(Event.Tick(), T0 + WATCH_INTERVAL)), ["WatchTick"]);
+  });
+
+  it("never ticks a watch the same step stops (a drop's window closing at a tick)", () => {
+    const c = campaign("c", { drops: [drop("short", { endsAt: T0 + 10 * MINUTE })] });
+    const d = startedWatching([c], [channel("a")]);
+    settle(d);
+    const due = d.state.deadlines.tick!;
+    assert.isAtMost(due, T0 + 10 * MINUTE);
+    let at = due;
+    while (at < T0 + 10 * MINUTE) {
+      assert.include(tags(d.send(Event.Tick(), at)), "WatchTick");
+      at = d.state.deadlines.tick!;
+    }
+    const commands = tags(d.send(Event.Tick(), at));
+    assert.include(commands, "StopWatching");
+    assert.notInclude(commands, "WatchTick");
   });
 
   it("asks which drop is credited once its estimate runs 15 minutes ahead of Twitch", () => {
@@ -239,14 +427,32 @@ describe("progress", () => {
   it("doesn't adopt a drop Twitch credits from a campaign the settings exclude", () => {
     const wanted = campaign("a");
     const other = campaign("b", { game: game("game-2") });
-    const d = driver(initial(settings({ games: [wanted.game.id] })));
+    const d = driver(initial(settings({ games: games([wanted.game.id]) })));
     d.send(Event.Started());
     d.send(Event.TokenValid());
     d.send(Event.CatalogRead({ campaigns: [wanted, other] }));
-    d.send(Event.ChannelsRead({ channels: [channel("x")] }));
+    d.send(read([channel("x")]));
     d.send(Event.DropProgress({ dropId: did("b-d1"), minutes: 5 }), T0 + 5 * MINUTE);
     const w = d.state.watch;
     assert.strictEqual(w._tag === "Watching" ? w.campaignId : "", "a");
+  });
+
+  it("doesn't adopt a credit only a goal excluding the watched channel wants", () => {
+    const badges = campaign("a", { drops: [drop("a-d1", { benefits: [badge] })] });
+    const items = campaign("b");
+    const goals = [
+      goal({ rewards: ["badge"] }),
+      goal({ rewards: ["item"], excludeChannels: [chid("x")] }),
+    ];
+    const d = driver(initial({ goals }));
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    d.send(Event.CatalogRead({ campaigns: [badges, items] }));
+    d.send(read([channel("x")]));
+    assert.strictEqual(watchedChannel(d.state), "x");
+    d.send(Event.DropProgress({ dropId: did("b-d1"), minutes: 5 }), T0 + 5 * MINUTE);
+    const w = d.state.watch;
+    assert.strictEqual(w._tag === "Watching" ? `${w.campaignId}:${w.credited}` : "", "a:false");
   });
 
   it("gives up on a channel that never credits", () => {
@@ -296,6 +502,26 @@ describe("claims", () => {
     assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [unclaimed] }))), 0);
     assert.include(tags(d.send(Event.Tick(), T0 + CLAIM_RECHECK)), "ReadInventory");
     assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [unclaimed] }))), 1);
+  });
+
+  it("keeps a lost claim's intent when the recheck read doesn't show the drop at all", () => {
+    // Twin seed 4647: the merged progress still knew the drop, so a read that omitted it
+    // settled the intent and the claim went out again.
+    const d = startedWatching([c], [channel("a")]);
+    d.send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }));
+    d.send(Event.ClaimResult({ campaignId: c.id, dropId: did("c-d1"), outcome: "unknown" }));
+    d.send(Event.Tick(), T0 + CLAIM_RECHECK);
+    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [] }))), 0);
+    assert.strictEqual(d.state.claims.get("c/c-d1")?.status, "unknown");
+    const unclaimed = progress(c, "c-d1", { minutes: 60, instanceId: iid("i1") });
+    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [unclaimed] }))), 1);
+  });
+
+  it("keeps a claim in flight when a read omits its drop", () => {
+    const d = startedWatching([c], [channel("a")]);
+    d.send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }));
+    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [] }), T0 + HOUR)), 0);
+    assert.strictEqual(d.state.claims.get("c/c-d1")?.status, "sent");
   });
 
   it("treats a lost claim as done when inventory shows it claimed", () => {
@@ -386,7 +612,7 @@ describe("following", () => {
   it("sends nothing when a read leaves the followed set as it is", () => {
     const d = startedWatching([c], [channel("a"), channel("b")]);
     settle(d);
-    assert.deepStrictEqual(tags(d.send(Event.ChannelsRead({ channels: [channel("b")] }))), []);
+    assert.deepStrictEqual(tags(d.send(read([channel("b")], "channels:b"))), []);
     assert.deepStrictEqual(tags(d.send(Event.CatalogRead({ campaigns: [c] }))), ["ReadDirectory"]);
     assert.isUndefined(d.state.deadlines.subscribe);
   });
@@ -399,7 +625,7 @@ describe("following", () => {
     for (const [i, id] of ["b", "c", "d"].entries()) {
       // Each answer moves the set; none extends the wait.
       const at = start + i * 4_000;
-      sent.push(...subscribes(d.send(Event.ChannelsRead({ channels: [channel(id)] }), at)));
+      sent.push(...subscribes(d.send(read([channel(id)], `channels:${id}`), at)));
       assert.strictEqual(nextDeadline(d.state), start + SUBSCRIBE_SETTLE);
     }
     sent.push(...subscribes(d.send(Event.Tick(), start + SUBSCRIBE_SETTLE)));
@@ -411,7 +637,7 @@ describe("following", () => {
   it("drops a change that undoes itself before it goes out", () => {
     const d = startedWatching([c], [channel("a")]);
     settle(d);
-    d.send(Event.ChannelsRead({ channels: [channel("b")] }));
+    d.send(read([channel("b")], "channels:b"));
     assert.isDefined(d.state.deadlines.subscribe);
     d.send(Event.GameChanged({ channelId: chid("b"), gameId: undefined }));
     assert.isUndefined(d.state.deadlines.subscribe);
@@ -427,8 +653,8 @@ describe("following", () => {
     restarted.send(Event.TokenValid());
     restarted.send(Event.CatalogRead({ campaigns: [c] }));
     const commands = [
-      ...restarted.send(Event.ChannelsRead({ channels: [channel("a")] })),
-      ...restarted.send(Event.ChannelsRead({ channels: [channel("b")] })),
+      ...restarted.send(read([channel("a")])),
+      ...restarted.send(read([channel("b")], "channels:b")),
       ...settle(restarted),
     ];
     assert.deepStrictEqual(subscribes(commands), [[chid("a"), chid("b")]]);

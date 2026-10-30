@@ -10,7 +10,7 @@ import {
 } from "./model.ts";
 import { minable, plan, watchlist, type PlanInput, type Target } from "./plan.ts";
 import { Command, type Event } from "./protocol.ts";
-import { canEarn, channelCanEarn, isActive, isClaimable } from "./rules.ts";
+import { canEarn, channelCanEarn, isActive, isClaimable, isEligible } from "./rules.ts";
 import {
   CATALOG_INTERVAL,
   CATALOG_RETRY,
@@ -64,11 +64,12 @@ const handle = (s: State, event: Event, now: Millis): Handled => {
           channels: new Map(),
           avoid: new Set(),
           subscriptions: [],
-          // A claim in flight when the process died may have succeeded: inventory decides.
+          // A claim in flight when the process died may have succeeded: inventory decides, once
+          // it can show the claim, as after a lost answer.
           claims: mapValues(s.claims, (c): ClaimIntent => ({
             ...c,
             status: "unknown",
-            recheckAt: now,
+            recheckAt: now + CLAIM_RECHECK,
           })),
           deadlines: {
             ...s.deadlines,
@@ -89,7 +90,7 @@ const handle = (s: State, event: Event, now: Millis): Handled => {
           deadlines: {
             ...s.deadlines,
             catalog: now + CATALOG_INTERVAL,
-            inventory: now + INVENTORY_INTERVAL,
+            inventory: nextInventory(s.claims, now),
           },
         },
         [Command.ReadCatalog(), Command.ReadInventory()],
@@ -150,7 +151,7 @@ const handle = (s: State, event: Event, now: Millis): Handled => {
         ...s,
         progress,
         claims,
-        deadlines: { ...s.deadlines, inventory: now + INVENTORY_INTERVAL },
+        deadlines: { ...s.deadlines, inventory: nextInventory(claims, now) },
       };
       return [confirmWatched(next, now), []];
     }
@@ -209,10 +210,11 @@ const handle = (s: State, event: Event, now: Millis): Handled => {
       const claims = new Map(s.claims);
       if (event.outcome === "unknown") {
         const intent = claims.get(key);
-        if (intent !== undefined) {
-          claims.set(key, { ...intent, status: "unknown", recheckAt: now + CLAIM_RECHECK });
-        }
-        return [{ ...s, claims }, []];
+        if (intent === undefined) return [s, []];
+        const recheckAt = now + CLAIM_RECHECK;
+        claims.set(key, { ...intent, status: "unknown", recheckAt });
+        const inventory = Math.min(s.deadlines.inventory, recheckAt);
+        return [{ ...s, claims, deadlines: { ...s.deadlines, inventory } }, []];
       }
       claims.delete(key);
       return [withProgress({ ...s, claims }, event.dropId, (p) => ({ ...p, claimed: true })), []];
@@ -237,17 +239,11 @@ const tick = (s: State, now: Millis): Handled => {
     }
     if (now >= d.inventory) {
       commands.push(Command.ReadInventory());
-      d = { ...d, inventory: now + INVENTORY_INTERVAL };
+      d = { ...d, inventory: nextInventory(s.claims, now) };
     }
     if (s.watch._tag === "Watching" && d.tick !== undefined && now >= d.tick) {
       commands.push(Command.WatchTick({ channelId: s.watch.channelId }));
       d = { ...d, tick: now + WATCH_INTERVAL };
-    }
-    const recheck = [...s.claims.values()].some(
-      (c) => c.recheckAt !== undefined && now >= c.recheckAt,
-    );
-    if (recheck && !commands.some((c) => c._tag === "ReadInventory")) {
-      commands.push(Command.ReadInventory());
     }
     const due = [...d.online].filter(([, at]) => now >= at).map(([id]) => id);
     if (due.length > 0) {
@@ -257,6 +253,18 @@ const tick = (s: State, now: Millis): Handled => {
   }
   return [{ ...s, deadlines: d }, commands];
 };
+
+/**
+ * The next inventory read: the regular interval, or earlier when a lost claim answer is due its
+ * recheck. A recheck is just an inventory read, so it never needs a deadline of its own.
+ */
+const nextInventory = (claims: ReadonlyMap<string, ClaimIntent>, now: Millis): Millis =>
+  Math.min(
+    now + INVENTORY_INTERVAL,
+    ...[...claims.values()].map((c) =>
+      c.recheckAt !== undefined && c.recheckAt > now ? c.recheckAt : Infinity,
+    ),
+  );
 
 const ticked = (s: State, channelId: ChannelId, now: Millis): Handled => {
   const w = s.watch;
@@ -288,7 +296,18 @@ const credit = (s: State, dropId: DropId, minutes: number, now: Millis): State =
   const w = updated.watch;
   if (w._tag !== "Watching" || w.dropId === dropId) return confirmWatched(updated, now);
   const found = findDrop(s.catalog, dropId);
-  if (found === undefined) return updated;
+  if (found === undefined) {
+    // A campaign that started after the last catalog read: the channel does credit us, and the
+    // catalog is stale. Read it again within `CATALOG_RETRY`, which also bounds the rate.
+    const catalog = Math.min(s.deadlines.catalog, now + CATALOG_RETRY);
+    return {
+      ...updated,
+      watch: { ...w, confirmedAt: now },
+      deadlines: { ...updated.deadlines, catalog },
+    };
+  }
+  // Twitch credits a campaign the settings don't ask for: no progress for us, so no adoption.
+  if (!isEligible(found.campaign, s.settings)) return updated;
   return confirmWatched(
     {
       ...updated,

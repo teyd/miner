@@ -62,7 +62,10 @@ export interface ClaimIntent {
   readonly dropId: DropId;
   /** `sent`: waiting for the answer. `unknown`: the answer was lost; inventory decides. */
   readonly status: "sent" | "unknown";
-  /** For `unknown`: only an inventory read at or after this time may settle the claim. */
+  /**
+   * For `unknown`: only an inventory read at or after this time may settle the claim. The read
+   * itself is due through `deadlines.inventory`, so a failed read never wakes the core in a loop.
+   */
   readonly recheckAt: Millis | undefined;
 }
 
@@ -114,13 +117,6 @@ export const nextDeadline = (state: State): Millis | undefined => {
     case "unknown":
       return d.validate;
     case "valid":
-      return Math.min(
-        d.validate,
-        d.catalog,
-        d.inventory,
-        d.tick ?? Infinity,
-        ...d.online.values(),
-        ...[...state.claims.values()].map((c) => c.recheckAt ?? Infinity),
-      );
+      return Math.min(d.validate, d.catalog, d.inventory, d.tick ?? Infinity, ...d.online.values());
   }
 };

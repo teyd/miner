@@ -76,3 +76,10 @@ Favourites and a second stream wait for experiments E2/E3 of research 05 (decisi
 ## Log
 
 - 2026-10-30 18:42 — A0 started. A1–A5 delegated.
+- 2026-10-30 19:30 — Merged A1 (#19), A5 (#20), A2 (#21), A4 (#23), each after a DeepSeek review; the P1s
+  found: escaped `auth_token` and `signature=` slipped past gitleaks, a fractional `requiredMinutes` froze
+  `status.json`, and the pid lock let a second Docker container (also pid 1) take over. #22 gave a slow
+  72-hour runtime test 30 s on CI. Open follow-ups from the reviews: status write-failure and heartbeat
+  tests, a crash loop reads as "starting", validate retries hourly while `auth` is unknown, gitleaks rules for
+  signed URL paths and `user_ip`, `journal cat` streaming, digest-pinned base images, and logging failed
+  reads in `run` (now only visible in `status`).

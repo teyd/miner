@@ -57,8 +57,8 @@ nothing watches or claims on real Twitch yet.
 - Watching and points: `docs/research/05-watch-slots.md`.
 - Toolchain, bundling, RAM: `docs/research/03-stack-and-ram.md`.
 - The config file and its schema: `docs/research/07-config.md`.
-- Effect APIs: Effect's `LLMS.md` and `ai-docs/` on GitHub (Effect-TS/effect). They match 4.x. Older blog
-  posts and v3 examples don't.
+- Effect APIs: `node_modules/effect/AGENTS.md` first, then its `ai-docs/` and `src/`. They match the
+  installed version; GitHub `main` and v3-era posts may not.
 
 ## Code rules
 

@@ -84,7 +84,8 @@ export interface Rotation {
   readonly window: number;
 }
 
-export const defaultRotation: Rotation = { maxBytes: 10 * 1024 * 1024, keep: 5, window: 1000 };
+/** Fixed on purpose, not a setting: at most 60 MB on disk. Tests pass their own `Rotation`. */
+export const ROTATION: Rotation = { maxBytes: 10 * 1024 * 1024, keep: 5, window: 1000 };
 
 /**
  * A logger that appends to `file` and rotates by size. The directory and the file are created on
@@ -95,7 +96,7 @@ export const defaultRotation: Rotation = { maxBytes: 10 * 1024 * 1024, keep: 5, 
 export const rotatingFile = Effect.fnUntraced(function* <M>(
   self: Logger.Logger<M, string>,
   file: string,
-  rotation: Rotation = defaultRotation,
+  rotation: Rotation = ROTATION,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

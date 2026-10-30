@@ -1,8 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
-import { campaign, channel, chid, did, iid, progress, settings, T0 } from "./fixtures.ts";
+import { campaign, channel, chid, did, game, iid, progress, settings, T0 } from "./fixtures.ts";
 import { HOUR, MINUTE, type Campaign, type Channel, type Millis } from "./model.ts";
 import { Event, type Command } from "./protocol.ts";
 import {
+  CATALOG_RETRY,
   CLAIM_RECHECK,
   initial,
   nextDeadline,
@@ -212,6 +213,30 @@ describe("progress", () => {
     assert.isFalse(d.state.avoid.has(chid("a")));
   });
 
+  it("keeps a channel that credits a campaign newer than its catalog, and rereads the catalog", () => {
+    const d = startedWatching([campaign("c")], [channel("a", { viewers: 500 }), channel("b")]);
+    for (let minute = 1; minute <= 40; minute++) {
+      d.send(Event.DropProgress({ dropId: did("new-d1"), minutes: minute }), T0 + minute * MINUTE);
+      d.send(Event.WatchTicked({ channelId: chid("a") }), T0 + minute * MINUTE);
+    }
+    assert.strictEqual(watchedChannel(d.state), "a");
+    assert.isFalse(d.state.avoid.has(chid("a")));
+    assert.strictEqual(d.state.deadlines.catalog, T0 + MINUTE + CATALOG_RETRY);
+  });
+
+  it("doesn't adopt a drop Twitch credits from a campaign the settings exclude", () => {
+    const wanted = campaign("a");
+    const other = campaign("b", { game: game("game-2") });
+    const d = driver(initial(settings({ games: [wanted.game.id] })));
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    d.send(Event.CatalogRead({ campaigns: [wanted, other] }));
+    d.send(Event.ChannelsRead({ channels: [channel("x")] }));
+    d.send(Event.DropProgress({ dropId: did("b-d1"), minutes: 5 }), T0 + 5 * MINUTE);
+    const w = d.state.watch;
+    assert.strictEqual(w._tag === "Watching" ? w.campaignId : "", "a");
+  });
+
   it("gives up on a channel that never credits", () => {
     const d = startedWatching([campaign("c")], [channel("a", { viewers: 500 }), channel("b")]);
     d.send(Event.WatchTicked({ channelId: chid("a") }), T0 + STALL_AFTER);
@@ -278,7 +303,34 @@ describe("claims", () => {
     assert.strictEqual(restarted.state.claims.get("c/c-d1")?.status, "unknown");
     assert.strictEqual(claims(restarted.send(Event.TokenValid())), 0);
     const unclaimed = progress(c, "c-d1", { minutes: 60, instanceId: iid("i1") });
+    // Inventory shows a claim seconds late: a read right after the restart proves nothing.
+    assert.strictEqual(claims(restarted.send(Event.InventoryRead({ progress: [unclaimed] }))), 0);
+    const late = T0 + MINUTE + CLAIM_RECHECK;
+    assert.include(tags(restarted.send(Event.Tick(), late)), "ReadInventory");
     assert.strictEqual(claims(restarted.send(Event.InventoryRead({ progress: [unclaimed] }))), 1);
+  });
+
+  it("never sets a deadline in the past while a claim waits for its recheck", () => {
+    const d = startedWatching([c], [channel("a")]);
+    d.send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }));
+    const restarted = driver(d.state);
+    restarted.send(Event.Started(), T0 + MINUTE);
+    restarted.send(Event.TokenValid(), T0 + MINUTE + 1_000);
+    assert.isAbove(nextDeadline(restarted.state) ?? 0, restarted.now);
+    // The recheck read fails: the next inventory read rechecks, nothing spins meanwhile.
+    const recheck = T0 + MINUTE + CLAIM_RECHECK;
+    assert.include(tags(restarted.send(Event.Tick(), recheck)), "ReadInventory");
+    assert.isAbove(nextDeadline(restarted.state) ?? 0, recheck);
+  });
+
+  it("rechecks a lost claim answer through the inventory deadline", () => {
+    const d = startedWatching([c], [channel("a")]);
+    d.send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }));
+    d.send(Event.ClaimResult({ campaignId: c.id, dropId: did("c-d1"), outcome: "unknown" }));
+    assert.strictEqual(d.state.deadlines.inventory, T0 + CLAIM_RECHECK);
+    assert.strictEqual(nextDeadline(d.state), T0 + WATCH_INTERVAL);
+    d.send(Event.Tick(), T0 + CLAIM_RECHECK);
+    assert.isAbove(nextDeadline(d.state) ?? 0, T0 + CLAIM_RECHECK);
   });
 
   it("claims nothing before the token is validated", () => {

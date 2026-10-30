@@ -21,7 +21,9 @@
       "shape": "headers object in a field, and the header echoed in a note",
       "input": {
         "msg": "gql retry",
-        "headers": { "Authorization": "OAuth OAUTHSECRET" },
+        "headers": {
+          "Authorization": "OAuth OAUTHSECRET"
+        },
         "note": "sent Authorization: OAuth OAUTHSECRET2"
       }
     },
@@ -72,11 +74,19 @@
     },
     {
       "shape": "request headers as a lowercase map with a Bearer token",
-      "input": { "request": { "headers": { "authorization": "Bearer BEARERSECRET.x" } } }
+      "input": {
+        "request": {
+          "headers": {
+            "authorization": "Bearer BEARERSECRET.x"
+          }
+        }
+      }
     },
     {
       "shape": "JSON body held as an escaped string inside a field",
-      "input": { "body": "{\"accessToken\":\"ESCAPEDSECRET\",\"login\":\"forsen\"}" }
+      "input": {
+        "body": "{\"accessToken\":\"ESCAPEDSECRET\",\"login\":\"forsen\"}"
+      }
     },
     {
       "shape": "schema error quoting the rejected input",
@@ -84,7 +94,11 @@
     },
     {
       "shape": "auth-token cookie in a header dump",
-      "input": { "headers": { "cookie": "unique_id=abc; auth-token=COOKIESECRET; other=1" } }
+      "input": {
+        "headers": {
+          "cookie": "unique_id=abc; auth-token=COOKIESECRET; other=1"
+        }
+      }
     },
     {
       "shape": "PubSub LISTEN frame as sent, the token in data.auth_token",
@@ -106,7 +120,41 @@
     },
     {
       "shape": "camel-cased secret key at depth",
-      "input": [{ "session": { "accessToken": "CAMELSECRET", "expiresIn": 3600 } }]
+      "input": [
+        {
+          "session": {
+            "accessToken": "CAMELSECRET",
+            "expiresIn": 3600
+          }
+        }
+      ]
+    },
+    {
+      "shape": "media playlist line: segment URL signed in its path and its dna parameter (live 2026-10-30)",
+      "input": "#EXTINF:2.000,live\nhttps://dacaf1fd2c05.j.cloudfront.hls.ttvnw.net/v1/segment/CvQCSEGPATHSECRETxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.ts?dna=DNASECRET-x_y"
+    },
+    {
+      "shape": "transport error quoting the signed media playlist URL",
+      "input": {
+        "_tag": "WatchFailure",
+        "detail": "Transport error (GET https://euc12.playlist.ttvnw.net/v1/playlist/CvQCPLAYLISTPATHSECRETxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.m3u8)"
+      }
+    },
+    {
+      "shape": "master playlist info line with the viewer's IP and per-viewer values (live 2026-10-30)",
+      "input": "#EXT-X-TWITCH-INFO:NODE=\"x.j.cloudfront.hls.ttvnw.net\",USER-IP=\"IPSECRET\",USER-COUNTRY=\"DE\",C=\"CSECRET\",D=\"false\",E=\"ESECRET\""
+    },
+    {
+      "shape": "media playlist trigger URL signed in its path",
+      "input": "#EXT-X-DATERANGE:ID=\"trigger-1\",CLASS=\"twitch-trigger\",X-TV-TWITCH-TRIGGER-URL=\"https://euc12.playlist.ttvnw.net/trigger/CvQCTRIGGERSECRETxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\""
+    },
+    {
+      "shape": "playback token value with the viewer's IP, without its signature",
+      "input": {
+        "user_id": 12,
+        "user_ip": "IPSECRET2",
+        "expires": 1793371904
+      }
     }
   ]
 }

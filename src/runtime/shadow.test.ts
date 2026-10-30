@@ -20,7 +20,7 @@ describe("shadowActuator", () => {
     Effect.gen(function* () {
       const { intents, actuator } = recorder();
       const ch = "ch0" as ChannelId;
-      yield* actuator.watch(ch);
+      yield* actuator.watch(ch, "chan0");
       yield* actuator.subscribe([ch]);
       yield* actuator.stopWatching;
       const tick = yield* Effect.flip(actuator.watchTick(ch));

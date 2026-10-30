@@ -257,3 +257,34 @@ export const toChannel = (info: typeof StreamInfo.Type): Channel | undefined => 
       user.stream === null ? undefined : { viewers: user.stream.viewersCount, dropsEnabled: true },
   };
 };
+
+/**
+ * `null` when Twitch issues no token for the login (just-mining treats it as offline).
+ * `authorization` says whether this account may play the stream at all.
+ */
+export const PlaybackToken = Schema.Struct({
+  streamPlaybackAccessToken: Schema.NullOr(
+    Schema.Struct({
+      value: Schema.String,
+      signature: Schema.String,
+      authorization: Schema.Struct({
+        isForbidden: Schema.Boolean,
+        forbiddenReasonCode: Schema.String,
+      }),
+    }),
+  ),
+});
+
+/** The token's `value` is a JSON document; `expires` is when usher stops honouring it. */
+export const PlaybackTokenValue = Schema.fromJsonString(Schema.Struct({ expires: Schema.Finite }));
+
+/**
+ * `null` is no claim: Twitch answers so for an instance id it doesn't know (just-mining fixture
+ * `claim-unknown-instance.json`, 2026-10-28). `isUserAccountConnected: false` comes with
+ * `ELIGIBLE_FOR_ALL` when the game account isn't linked; Twitch grants the reward on linking.
+ */
+export const ClaimDropRewards = Schema.Struct({
+  claimDropRewards: Schema.NullOr(
+    Schema.Struct({ status: Schema.String, isUserAccountConnected: Schema.Boolean }),
+  ),
+});

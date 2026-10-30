@@ -1,0 +1,8 @@
+{
+  "status": 404,
+  "body": [
+    {
+      "error": "Can not find channel"
+    }
+  ]
+}

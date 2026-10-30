@@ -1,0 +1,28 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "claimDropRewards": {
+          "status": "ELIGIBLE_FOR_ALL",
+          "isUserAccountConnected": false,
+          "dropType": {
+            "id": "",
+            "campaign": {
+              "id": "",
+              "detailsURL": "",
+              "__typename": "DropCampaign"
+            },
+            "__typename": "TimeBasedDrop"
+          },
+          "__typename": "ClaimDropRewardsPayload"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 16,
+        "requestID": "redacted-request-id",
+        "operationName": "DropsPage_ClaimDropRewards"
+      }
+    }
+  ]
+}

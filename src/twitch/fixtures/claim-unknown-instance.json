@@ -1,0 +1,15 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "claimDropRewards": null
+      },
+      "extensions": {
+        "durationMilliseconds": 11,
+        "requestID": "redacted-request-id",
+        "operationName": "DropsPage_ClaimDropRewards"
+      }
+    }
+  ]
+}

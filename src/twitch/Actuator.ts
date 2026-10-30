@@ -17,14 +17,14 @@ export type ClaimAnswer = "claimed" | "already-claimed";
 
 /**
  * Every write the miner makes to Twitch: the one watch session, its ticks, claims, and the channels
- * followed for live/offline/game frames. Typed until the live actuator exists (milestone 3); the
- * simulator's twin implements it today.
+ * followed for live/offline/game frames. `live.ts` sends them to Twitch, the twin simulates them,
+ * and the shadow only records them.
  */
 export class Actuator extends Context.Service<
   Actuator,
   {
-    /** Opens the watch session on this channel, closing any other. */
-    readonly watch: (channelId: ChannelId) => Effect.Effect<void>;
+    /** Opens the watch session on this channel, closing any other. Playback goes by login. */
+    readonly watch: (channelId: ChannelId, login: string) => Effect.Effect<void>;
     readonly watchTick: (channelId: ChannelId) => Effect.Effect<void, WatchFailure | AuthRejected>;
     readonly stopWatching: Effect.Effect<void>;
     /** Sent once per call. A lost answer may still have succeeded: never retry it. */

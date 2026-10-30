@@ -234,18 +234,26 @@ describe("run --shadow", () => {
     }),
   );
 
-  it.effect("keeps its recordings within the limits over several days", () =>
-    Effect.gen(function* () {
-      yield* TestClock.setTime(SIM_EPOCH);
-      const files = memoryFileSystem();
-      const limits = { ...DEFAULT_LIMITS, keepDays: 2, maxBytes: 200_000, maxDayBytes: 60_000 };
-      yield* shadowRun(makeWorld(), files, 72, limits, MINUTE);
-      const recordings = [...files.files.keys()].filter((k) => k.startsWith(`${DIR}/recordings/`));
-      assert.lengthOf(recordings, 2);
-      const total = recordings.reduce((sum, k) => sum + files.files.get(k)!.length, 0);
-      assert.isAtMost(total, limits.maxBytes);
-      assert.isTrue(Option.isSome(Option.fromNullishOr(files.files.get(`${DIR}/${SHADOW_STATE}`))));
-    }),
+  it.effect(
+    "keeps its recordings within the limits over several days",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(SIM_EPOCH);
+        const files = memoryFileSystem();
+        const limits = { ...DEFAULT_LIMITS, keepDays: 2, maxBytes: 200_000, maxDayBytes: 60_000 };
+        yield* shadowRun(makeWorld(), files, 72, limits, MINUTE);
+        const recordings = [...files.files.keys()].filter((k) =>
+          k.startsWith(`${DIR}/recordings/`),
+        );
+        assert.lengthOf(recordings, 2);
+        const total = recordings.reduce((sum, k) => sum + files.files.get(k)!.length, 0);
+        assert.isAtMost(total, limits.maxBytes);
+        assert.isTrue(
+          Option.isSome(Option.fromNullishOr(files.files.get(`${DIR}/${SHADOW_STATE}`))),
+        );
+      }),
+    // 72 virtual hours of the whole runtime: about 2 s here, over 5 s on CI's 4-core runner.
+    30_000,
   );
 });
 

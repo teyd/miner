@@ -1,5 +1,6 @@
 import { Effect, Random } from "effect";
 import type { ChannelId, DropId, DropInstanceId, Millis } from "../core/model.ts";
+import { REQUEST_TIMEOUT } from "../twitch/Twitch.ts";
 import type { Operation } from "./scenario.ts";
 import { SIM_EPOCH } from "./scenario.ts";
 import { framesDownAt, type Credit, type Frame, type World } from "./world.ts";
@@ -9,8 +10,11 @@ import { framesDownAt, type Credit, type Frame, type World } from "./world.ts";
  * client and the actuator share it. Mutated only inside `Effect.sync`, on one fiber at a time.
  */
 
-/** A request that never answers fails after this long; the client sets no timeout itself. */
-export const TWIN_TIMEOUT: Millis = 30_000;
+/**
+ * A `timeout` fault: the reads hang until `Twitch`'s own timeout gives up; an actuator call fails
+ * after this long, as the live actuator's request timeout would make it.
+ */
+export const TWIN_TIMEOUT: Millis = REQUEST_TIMEOUT;
 
 export interface TwinRequest {
   readonly at: Millis;

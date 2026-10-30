@@ -53,6 +53,7 @@ const populated: State = {
     inventory: T0 + MINUTE,
     tick: undefined,
     online: new Map([[chid("b"), T0 + 2 * MINUTE]]),
+    subscribe: T0 + 10_000,
   },
 };
 
@@ -84,8 +85,9 @@ describe("codec", () => {
 describe("decodeState", () => {
   it("refuses another version and text that isn't a state", () => {
     const text = encodeState(populated);
-    assert.match(text, /"version":1}$/);
-    assert.throws(() => decodeState(text.replace('"version":1', '"version":2')), /version 2/);
+    assert.match(text, /"version":2}$/);
+    // Version 1 had no `deadlines.subscribe`.
+    assert.throws(() => decodeState(text.replace('"version":2', '"version":1')), /version 1/);
     assert.throws(() => decodeState(canonical(populated)), /not a saved miner state/);
     assert.throws(() => decodeState("{"));
   });

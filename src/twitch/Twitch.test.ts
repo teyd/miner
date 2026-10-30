@@ -12,13 +12,13 @@ import invalidToken from "./fixtures/validate-invalid-token.json" with { type: "
 import valid from "./fixtures/validate-valid.json" with { type: "json" };
 import wrongClient from "./fixtures/validate-wrong-client.json" with { type: "json" };
 import { chid, game } from "../core/fixtures.ts";
-import { stubTwitch, type Answer } from "./stub.ts";
-import { deviceIdOf, Twitch } from "./Twitch.ts";
+import { stubTwitch, type Answer, type Hang } from "./stub.ts";
+import { REQUEST_TIMEOUT, deviceIdOf, Twitch } from "./Twitch.ts";
 
 const account = { userId: "123456789", login: "testuser" };
 
 const run = <A, E>(
-  script: Record<string, ReadonlyArray<Answer>>,
+  script: Record<string, ReadonlyArray<Answer | Hang>>,
   use: (twitch: Twitch["Service"]) => Effect.Effect<A, E>,
 ) => {
   const stub = stubTwitch(script);
@@ -132,6 +132,32 @@ describe("inventory", () => {
       yield* TestClock.adjust("1 minute");
       assert.deepStrictEqual(errorTag(yield* Fiber.join(fiber)), ["TwitchUnavailable"]);
       assert.strictEqual(stub.calls["Inventory"], 4);
+    }),
+  );
+
+  it.effect("gives up on a request that never answers and tries again", () =>
+    Effect.gen(function* () {
+      const { program, stub } = run({ Inventory: ["hang", inventory] }, (t) => t.inventory);
+      const fiber = yield* Effect.forkChild(program);
+      yield* TestClock.adjust(REQUEST_TIMEOUT - 1);
+      assert.strictEqual(stub.calls["Inventory"], 1);
+      yield* TestClock.adjust(1 + 2_000);
+      assert.strictEqual((yield* Fiber.join(fiber)).length, 8);
+      assert.strictEqual(stub.calls["Inventory"], 2);
+    }),
+  );
+
+  it.effect("reports Twitch unavailable, not a defect, when every attempt hangs", () =>
+    Effect.gen(function* () {
+      for (const hang of ["hang", "hang-body"] as const) {
+        const { program, stub } = run({ Inventory: [hang] }, (t) => t.inventory);
+        const fiber = yield* Effect.forkChild(Effect.exit(program));
+        // Four attempts of 30 s and backoffs of 2, 4 and 8 s: 134 s, well inside 5 min.
+        yield* TestClock.adjust(4 * REQUEST_TIMEOUT + 14_000);
+        const exit = yield* Fiber.join(fiber);
+        assert.deepStrictEqual(errorTag(exit), ["TwitchUnavailable"]);
+        assert.strictEqual(stub.calls["Inventory"], 4);
+      }
     }),
   );
 

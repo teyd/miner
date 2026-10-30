@@ -39,9 +39,9 @@ const revive = (value: unknown): unknown => {
 
 /**
  * Bumped whenever `State` changes shape. A file with another version is refused rather than
- * guessed at: a misread claim intent could send a claim twice.
+ * guessed at: a misread claim intent could send a claim twice. 2: `deadlines.subscribe`.
  */
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
 
 export const encodeState = (state: State): string =>
   `{"state":${canonical(state)},"version":${STATE_VERSION}}`;

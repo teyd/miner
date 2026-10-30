@@ -11,11 +11,14 @@ export interface Answer {
   readonly body: unknown;
 }
 
+/** A connection that never answers, or answers headers and then never finishes the body. */
+export type Hang = "hang" | "hang-body";
+
 /**
  * A fake Twitch for tests: answers by GQL operation name (or `validate`) from a script of
  * answers, and counts requests. Each answer is used once, the last one repeats.
  */
-export const stubTwitch = (script: Record<string, ReadonlyArray<Answer>>) => {
+export const stubTwitch = (script: Record<string, ReadonlyArray<Answer | Hang>>) => {
   const calls: Record<string, number> = {};
   const recorded: Array<Recorded> = [];
   const http = HttpClient.make((request) => {
@@ -32,6 +35,13 @@ export const stubTwitch = (script: Record<string, ReadonlyArray<Answer>>) => {
     calls[operation] = n + 1;
     const answers = script[operation] ?? [{ status: 404, body: null }];
     const answer = answers[Math.min(n, answers.length - 1)]!;
+    if (answer === "hang") return Effect.never;
+    if (answer === "hang-body") {
+      const body = new ReadableStream<Uint8Array>({ start: () => undefined });
+      return Effect.succeed(
+        HttpClientResponse.fromWeb(request, new Response(body, { status: 200 })),
+      );
+    }
     // A GQL fixture holds one answer element; a batch gets it once per request.
     const raw: unknown = answer.body;
     const body =

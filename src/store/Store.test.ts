@@ -3,7 +3,7 @@ import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import { Effect, FileSystem, Option } from "effect";
 import { settings } from "../core/fixtures.ts";
 import { initial, type State } from "../core/state.ts";
-import { encodeState } from "./codec.ts";
+import { STATE_VERSION, encodeState } from "./codec.ts";
 import { memoryFileSystem } from "./memoryFileSystem.ts";
 import { Store } from "./Store.ts";
 
@@ -33,7 +33,7 @@ describe("Store.file", () => {
   it.effect("refuses a state of another version instead of starting fresh", () =>
     Effect.gen(function* () {
       const files = memoryFileSystem();
-      const text = encodeState(state).replace('"version":1', '"version":9');
+      const text = encodeState(state).replace(`"version":${STATE_VERSION}`, '"version":9');
       files.files.set("/d/state.json", new TextEncoder().encode(text));
       const error = yield* withStore("/d/state.json", (store) => store.load).pipe(
         Effect.provide(files.layer),

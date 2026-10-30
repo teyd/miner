@@ -1,6 +1,6 @@
 import { Config, Context, Effect, Layer, Random, Redacted, Schedule, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
-import type { Campaign, Channel, ChannelId, DropId, Progress } from "../core/model.ts";
+import type { Campaign, Channel, ChannelId, DropId, Millis, Progress } from "../core/model.ts";
 import { AuthRejected, TwitchDrift, TwitchUnavailable, type TwitchError } from "./errors.ts";
 import {
   CLIENT_ID,
@@ -104,6 +104,14 @@ export const deviceIdOf = Effect.gen(function* () {
   return id;
 });
 
+/**
+ * A request with no answer this long fails as `TwitchUnavailable`, so a hung connection can't hang
+ * the runtime. With its three retries one request (a batch of up to 35 reads) gives up within
+ * 4 × 30 s + 14 s = 134 s, inside the simulator's 5 min bound on a command (plan 09 §4 s3). The
+ * wait for a pacing turn counts too.
+ */
+export const REQUEST_TIMEOUT: Millis = 30_000;
+
 /** Reads retry three times, 2, 4 and 8 s apart, and only when the failure may pass. */
 const retryReads = <A, E extends TwitchError>(effect: Effect.Effect<A, E>) =>
   effect.pipe(
@@ -127,11 +135,20 @@ const make = (
     variables: unknown,
   ) =>
     Effect.gen(function* () {
-      const response = yield* http
-        .execute(request)
-        .pipe(Effect.mapError((e) => new TwitchUnavailable({ operation, detail: e.message })));
-      // Keep the raw text when it isn't JSON (an HTML error page): that is the answer to record.
-      const text = yield* response.text.pipe(Effect.orElseSucceed(() => ""));
+      const [response, text] = yield* http.execute(request).pipe(
+        // Keep the raw text when it isn't JSON (an HTML error page): that is the answer to record.
+        Effect.flatMap((r) =>
+          Effect.map(r.text.pipe(Effect.orElseSucceed(() => "")), (t) => [r, t] as const),
+        ),
+        Effect.mapError((e) => new TwitchUnavailable({ operation, detail: e.message })),
+        Effect.timeoutOrElse({
+          duration: REQUEST_TIMEOUT,
+          orElse: () =>
+            Effect.fail(
+              new TwitchUnavailable({ operation, detail: `no answer in ${REQUEST_TIMEOUT} ms` }),
+            ),
+        }),
+      );
       const body: unknown = yield* Effect.try(() => JSON.parse(text) as unknown).pipe(
         Effect.orElseSucceed(() => text),
       );

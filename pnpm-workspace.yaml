@@ -26,6 +26,10 @@ peerDependencyRules:
   allowAny:
     - vite
 
+# lefthook's postinstall would install the git hooks; `prepare` does it instead, and skips outside git.
+allowBuilds:
+  lefthook: false
+
 # Packages may ship agent skills; this repo keeps its own (docs/decisions.md 13).
 permissions:
   varlock:

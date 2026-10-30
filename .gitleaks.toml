@@ -1,0 +1,72 @@
+# gitleaks: the default rules plus the shapes this miner's secrets take (AGENTS.md, Twitch gotchas).
+# The pre-commit hook (lefthook.yml) scans staged changes, CI scans the whole history.
+# Never allowlist a real secret: rotate it. An allowlist entry names one file and the fake values in it.
+
+[extend]
+useDefault = true
+
+# Twitch OAuth tokens are 30 lowercase letters and digits, sent as `OAuth <token>`, as `auth_token` in
+# PubSub frames and stored as `TOKEN=` in .env.local.
+[[rules]]
+id = "twitch-oauth-token"
+description = "Twitch OAuth token"
+regex = '''(?:(?i:oauth)\s+|(?i:auth[_-]token)["']?\s*[:=]\s*["']?|\bTOKEN\s*=\s*["']?)([a-z0-9]{30})\b'''
+keywords = ["oauth", "auth_token", "auth-token", "token"]
+
+# Usher and edge playlists and segments are signed with these query parameters (research 02 §4), and a
+# browser login redirect carries `access_token`. Real values are never REDACTED.
+[[rules]]
+id = "twitch-signed-url-param"
+description = "Signed Twitch playlist or segment parameter"
+regex = '''\b(?:sig|token|hdnts|dna|access_token)=([A-Za-z0-9%._~+\-]+)'''
+keywords = ["sig=", "token=", "hdnts=", "dna="]
+[[rules.allowlists]]
+regexes = ['''^REDACTED$''']
+
+[[rules]]
+id = "authorization-header"
+description = "Authorization header with a credential"
+regex = '''(?i:\bauthorization)["']?\s*[:=]\s*["']?(?i:oauth|bearer)\s+([A-Za-z0-9._~+/=\-]{6,})'''
+keywords = ["authorization"]
+[[rules.allowlists]]
+regexes = ['''^REDACTED$''']
+
+# The master playlist names the viewer's IP in #EXT-X-TWITCH-INFO.
+[[rules]]
+id = "twitch-user-ip"
+description = "Viewer IP in a Twitch playlist"
+regex = '''USER-IP=\\?"?((?:\d{1,3}\.){3}\d{1,3}|[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})'''
+keywords = ["user-ip="]
+
+[[rules]]
+id = "twitch-auth-token-cookie"
+description = "Twitch auth-token cookie"
+regex = '''\bauth-token=([A-Za-z0-9%._~+\-]+)'''
+keywords = ["auth-token="]
+[[rules.allowlists]]
+regexes = ['''^REDACTED$''']
+
+# The redaction test feeds these fake values to the logger and checks they never come out.
+[[allowlists]]
+description = "fake credentials in the logger's redaction test"
+condition = "AND"
+paths = ['''^src/platform/logging\.test\.ts$''']
+regexes = ['''^(abcdefghij0123456789|abc123|%7Bsecret%7D)$''']
+
+# The leak corpus and the redaction tests, now and in history: every line with a fake secret holds
+# the word SECRET (see the corpus's "source"). redaction.json, an early corpus, also used the two names below.
+[[allowlists]]
+description = "leak corpus and redaction tests"
+condition = "AND"
+paths = [
+  '''^src/twitch/(fixtures/leaks\.json|redact\.test\.ts|journal\.test\.ts|redaction\.fixtures\.ts)$''',
+]
+regexTarget = "line"
+regexes = ['''SECRET''']
+
+[[allowlists]]
+description = "early leak corpus, removed in history"
+condition = "AND"
+paths = ['''^src/twitch/fixtures/redaction\.json$''']
+regexTarget = "line"
+regexes = ['''SECRET|USHERSIGTOKEN|INNERREDIRECT[12]''']

@@ -292,10 +292,19 @@ export const checkStep = (
 
   if (o.step !== undefined) c = checkCommands(c, o, o.step, fail);
 
-  // Channels whose schedule changed since the last look: did the core hear about it?
+  // Channels whose schedule changed since the last look: did the core hear about it? A change
+  // to what already holds (`up` while live) sends no frame (`channelFrames`), so it isn't heard.
   const heard = new Set(c.heard);
   for (const ch of world.channels) {
-    const changed = ch.phases.some((p, i) => i > 0 && p.at > c.lastObservedAt && p.at <= o.now);
+    const changed = ch.phases.some((p, i) => {
+      const before = ch.phases[i - 1];
+      return (
+        before !== undefined &&
+        p.at > c.lastObservedAt &&
+        p.at <= o.now &&
+        (p.live !== before.live || p.gameId !== before.gameId)
+      );
+    });
     if (!changed) continue;
     if (world.subscriptions.has(ch.id) && !framesDownAt(world, o.now)) heard.add(ch.id);
     else heard.delete(ch.id);

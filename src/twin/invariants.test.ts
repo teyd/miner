@@ -4,12 +4,14 @@ import {
   type CampaignId,
   type ChannelId,
   type DropId,
+  type GameId,
   type Millis,
 } from "../core/model.ts";
 import { Command, Event } from "../core/protocol.ts";
 import {
   CATALOG_INTERVAL,
   CLAIM_RECHECK,
+  ONLINE_DELAY,
   WATCH_INTERVAL,
   initial,
   type ClaimIntent,
@@ -246,6 +248,49 @@ describe("invariant 3: no idle time while an eligible live channel exists", () =
     const bound = (CATALOG_INTERVAL + 2 * MINUTE) / 1000;
     assert.deepStrictEqual(kinds([unwatched(0), unwatched(bound - 60)]), []);
     assert.include(kinds([unwatched(0), unwatched(bound + 60)]), "Idle");
+  });
+
+  it("flags idling past ONLINE_DELAY + 1 min once the core knows the campaign and the live channel", () => {
+    const knowing: State = {
+      ...idle,
+      catalog: [world0.campaigns[0]!],
+      channels: new Map([
+        [
+          ch0,
+          {
+            id: ch0,
+            login: "chan0",
+            gameId: "g0" as GameId,
+            live: { viewers: 50, dropsEnabled: true },
+          },
+        ],
+      ]),
+    };
+    const known = (seconds: number) => observation(at(seconds), { state: knowing, world: world0 });
+    const bound = (ONLINE_DELAY + MINUTE) / 1000;
+    assert.deepStrictEqual(kinds([known(0), known(ONLINE_DELAY / 1000), known(bound)]), []);
+    assert.include(kinds([known(0), known(bound + 1)]), "Idle");
+    // The core that doesn't know yet only answers to the discovery bound.
+    assert.deepStrictEqual(kinds([unwatched(0), unwatched(bound + 1)]), []);
+  });
+
+  it("counts a channel as heard only when its change sends a frame", () => {
+    const knowsCatalog: State = { ...idle, catalog: [world0.campaigns[0]!] };
+    const subscribed = (changes: Scenario["channels"][number]["changes"]): World => {
+      const [first, ...rest] = scenario().channels;
+      const world = buildWorld({ ...scenario(), channels: [{ ...first!, changes }, ...rest] });
+      return { ...world, subscriptions: new Set([ch0]) };
+    };
+    const o = (world: World, minutes: number) =>
+      observation(at(minutes * 60), { state: knowsCatalog, world });
+    // `up` while live sends no `stream-up`, so the core can't know before its catalog read.
+    const noOp = subscribed([{ atMinute: 5, to: "up" }]);
+    assert.deepStrictEqual(kinds([o(noOp, 0), o(noOp, 6), o(noOp, 10)]), []);
+    const bounced = subscribed([
+      { atMinute: 4, to: "down" },
+      { atMinute: 5, to: "up" },
+    ]);
+    assert.include(kinds([o(bounced, 3), o(bounced, 6), o(bounced, 10)]), "Idle");
   });
 
   it("pauses the idle clock during a fault window", () => {

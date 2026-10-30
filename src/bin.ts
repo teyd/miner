@@ -18,6 +18,14 @@ miner.pipe(
       Effect.sync(() => {
         process.exitCode = 2;
       }),
+    SimFailed: () =>
+      Effect.sync(() => {
+        process.exitCode = 1;
+      }),
+    SimTraceInvalid: () =>
+      Effect.sync(() => {
+        process.exitCode = 2;
+      }),
   }),
   Effect.provide(NodeServices.layer),
   NodeRuntime.runMain,

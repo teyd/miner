@@ -2,12 +2,13 @@ import { Cause, Clock, Effect, FiberSet, Option, Queue, Ref, Schema } from "effe
 import type { Config } from "../config/schema.ts";
 import type { Campaign, Channel } from "../core/model.ts";
 import { Event, type Command } from "../core/protocol.ts";
-import { initial, nextDeadline, type State, type Watch } from "../core/state.ts";
+import { initial, nextDeadline, type State } from "../core/state.ts";
 import { step } from "../core/step.ts";
 import { canonical } from "../store/codec.ts";
 import { Store } from "../store/Store.ts";
 import { emptyMemory, execute, type Memory } from "./execute.ts";
 import { forwardFrames } from "./listen.ts";
+import { describeWatch, progressLines } from "./narrate.ts";
 import { toSettings } from "./settings.ts";
 
 /**
@@ -87,7 +88,7 @@ export const run = (config: Config) =>
           saved = key;
         }
       }
-      yield* report(state.watch, result.state.watch);
+      yield* report(state, result.state);
       state = result.state;
       for (const command of result.commands) yield* start(command);
     }
@@ -127,13 +128,10 @@ const durableChanged = (before: State, after: State): boolean =>
   before.progress !== after.progress ||
   before.claims !== after.claims;
 
-const describeWatch = (watch: Watch): string =>
-  watch._tag === "Idle"
-    ? `idle (${watch.reason})`
-    : `watching ${watch.channelId} for drop ${watch.dropId} of campaign ${watch.campaignId}`;
-
-const report = (before: Watch, after: Watch) => {
-  const a = describeWatch(before);
-  const b = describeWatch(after);
-  return a === b ? Effect.void : Effect.logInfo(`runtime: ${b}`);
-};
+const report = (before: State, after: State) =>
+  Effect.gen(function* () {
+    const a = describeWatch(before, before.watch);
+    const b = describeWatch(after, after.watch);
+    if (a !== b) yield* Effect.logInfo(`runtime: ${b}`);
+    for (const line of progressLines(before, after)) yield* Effect.logInfo(line);
+  });

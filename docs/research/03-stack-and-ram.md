@@ -116,10 +116,23 @@ ORM, has `Migrator`), or drizzle 1.0 rc on top of it (typed schema + drizzle-kit
 one more dependency, still rc). (inference) Start with a JSON state file. Add SQLite only
 when history or a journal needs queries.
 
-## 4. Container (later)
+## 4. Container (measured 2026-10-30)
 
-Not in scope yet. Notes for then: `node:26-alpine` vs distroless; multi-arch amd64/arm64
-(Pi 4/5 homelabs); run as non-root uid 1000; the bundle + `node` binary is the whole payload.
+`Dockerfile`: build on `$BUILDPLATFORM` (the bundle is plain JavaScript), run on
+`node:26.13.0-alpine` as uid 1000 with `/data` as the volume. Sizes on amd64, disk / download:
+
+| Runtime base                                       | Image          | Note                                    |
+| -------------------------------------------------- | -------------- | --------------------------------------- |
+| `node:26.13.0-alpine` + bundle (chosen)            | 254 MB / 63 MB | official tag, has a shell for debugging |
+| `gcr.io/distroless/nodejs26-debian13` (base only)  | 243 MB / 60 MB | no shell, floating tag, uid 65532       |
+| `alpine:3.24.3` + node binary copied + `libstdc++` | 216 MB / 56 MB | two pins that must move together        |
+
+The node binary alone is 139 MB, so no base gets far below 200 MB. The 8 MB download saved by
+copying the binary is not worth keeping the Alpine and Node versions in step by hand.
+The runtime stage has no `RUN`, so `docker buildx build --platform linux/arm64` builds on an amd64
+host without QEMU (checked; not run on arm64). Node as PID 1 is fine: `NodeRuntime.runMain`
+interrupts on SIGINT and SIGTERM. `docker stop` ended `miner run` (no network, so before any
+Twitch answer) in 0.08 s with exit 130 and removed `miner.lock`.
 
 ## 5. Scaffold (verified 2026-10-29)
 

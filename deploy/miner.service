@@ -1,0 +1,64 @@
+# A system unit for running the miner without Docker. README.md "Run it with systemd" sets it up:
+# node 26 at /usr/bin/node, the bundle at /opt/miner/bin.mjs, a `miner` system user, and the
+# token in /etc/miner/miner.env (TOKEN=…, root-owned, mode 600). systemd reads that file as root
+# before dropping to the user, so the miner can't read it back. Node runs directly, not under
+# `varlock run`, which doesn't forward SIGINT.
+[Unit]
+Description=miner, a headless Twitch drops miner
+Documentation=https://github.com/teyd/miner
+Wants=network-online.target
+After=network-online.target
+# The backoff below spaces restarts out; no start limit on top of it.
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=miner
+Group=miner
+EnvironmentFile=/etc/miner/miner.env
+Environment=DATA_DIR=/var/lib/miner
+# journald keeps and rotates stderr, so no file copy. Pretty lines read better in journalctl.
+Environment=LOG_FILE=false
+Environment=LOG_FORMAT=pretty
+StateDirectory=miner
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/miner
+ExecStart=/usr/bin/node /opt/miner/bin.mjs run
+
+# SIGINT and SIGTERM both stop the miner cleanly, with exit code 130.
+KillSignal=SIGINT
+TimeoutStopSec=30s
+SuccessExitStatus=130
+# A crash restarts after 10 s, growing to 15 min. A crash leaves $DATA_DIR/miner.lock behind,
+# and the next start takes it over because its pid is gone. Exit 2 is an invalid config.json:
+# restarting won't fix that.
+Restart=on-failure
+RestartSec=10s
+RestartSteps=6
+RestartMaxDelaySec=15min
+RestartPreventExitStatus=2
+
+# The miner only needs the network and its state directory. No MemoryDenyWriteExecute: V8's JIT
+# needs writable executable memory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

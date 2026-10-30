@@ -1,0 +1,21 @@
+# Run with `docker compose up -d`; README.md walks through it. TOKEN comes from a file named
+# .env next to this one (`TOKEN=…`, chmod 600), which compose reads on its own.
+services:
+  miner:
+    build: .
+    image: miner:local
+    restart: unless-stopped
+    environment:
+      TOKEN: ${TOKEN:?put TOKEN=<your token> in .env next to compose.yaml}
+      # LOG_FORMAT: pretty   # readable lines instead of JSON
+      # LOG_LEVEL: Debug
+    volumes:
+      # Create ./data before the first start, owned by uid 1000:
+      # mkdir data && sudo chown 1000:1000 data
+      - ./data:/data
+    # Docker's default json-file driver never rotates; this keeps at most 50 MB of logs.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"

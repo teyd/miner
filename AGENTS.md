@@ -66,6 +66,10 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   fast-check generates and shrinks; `world.ts` is the twin's Twitch rules with sources; `http.ts` serves the reads
   at wire level under the real `Twitch.layer`; `actuator.ts` the typed mutations; `sim.ts` is the loop (step, persist, check, execute) under `TestClock`; `invariants.ts` checks every
   step. Each seed runs twice and the trace digests must match. A failure prints a capsule to replay.
+- `README.md` is the user's tutorial (token, config, running, logs, what needs a person). Change it
+  with any user-visible change. `Dockerfile` and `compose.yaml` build and run the image (node alpine
+  plus `dist/bin.mjs`, uid 1000, `/data`); `deploy/miner.service` is the systemd unit. Both stop on
+  SIGINT or SIGTERM with exit 130. The image's `HEALTHCHECK` runs `miner status`.
 - Not built yet: config reload while running, replay of recordings.
 - `docs/history/10-plan-roadmap.md`: the running plan (waves A–E) and how every step is built, reviewed and merged.
 - `docs/decisions.md`: settled answers. Read it before proposing anything. Don't reopen a decision without new evidence.

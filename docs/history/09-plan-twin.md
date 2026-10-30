@@ -506,13 +506,40 @@ not in the past; a lost answer is rechecked at `+CLAIM_RECHECK` by the inventory
 
 ## 10. Results (2026-10-30)
 
-- `pnpm check`: exit 0; 17 test files, 180 tests, `vp test` about 7 s wall time. The slowest are
-  seeds 1–20 (2.3 s) and the two shrinking runs of 30 attempts (1.5 s each).
-- `pnpm start sim --seeds 200`: `200 seeds, 200 passed, 0 failed`, exit 0, 15.5 s.
-  `pnpm start sim --seed 201 --seeds 1000`: all passed, 84 s.
+- `pnpm check`: exit 0; 17 test files, 184 tests, `vp test` about 16 s wall time. The slowest are
+  the default-sweep test (seeds 1–100 at 2 h horizons, about 7.5 s), seeds 1–20 (2.3 s) and the
+  two shrinking runs of 30 attempts (1.5 s each).
+- Review P2 (the sweep rarely earned: 8/100 seeds watched, 4/100 claimed): `scenarioArbitrary` now
+  puts an opportunity first in every world, a linked started campaign on a drops-enabled channel
+  of its game, live for the first hour, with drops of at most 45 minutes. The settings always
+  want it: its game joins a non-empty game list last, and the exclude list never names its
+  channel. Everything else stays random, so faults, newer campaigns and schedule changes can still
+  block it. `miner sim` prints how many seeds earned watch minutes and claimed a drop (`watched`
+  and `claimed` in `--json`), so a sweep that earns nothing shows.
+- `pnpm start sim` (seeds 1–100, full horizons): `100 seeds, 100 passed, 0 failed; 99 earned watch
+  minutes, 88 claimed a drop`, 23 s. `pnpm start sim --seeds 200`: 200 passed, 198 watched,
+  177 claimed, 43 s. At 2 h horizons seeds 1–100 give 99 watched and 86 claimed; `sim.test.ts`
+  requires at least 75 to both watch and claim. `pnpm dev sim --seeds 1` with the empty
+  `MINER_SIM_*` values of `.env.schema` exits 0, and so does the bundle run with all three set to
+  empty strings and no flags (seeds 1–100).
+- The biased sweep found one checker bug (seed 3, `Idle`): invariant 3 counted a schedule change
+  that keeps the channel as it was (`up` while live) as heard, though the twin sends no frame for
+  it. Only live or game changes count now (`invariants.ts`, with a test). The core itself runs
+  discovery only on a catalog read, so a campaign that becomes minable again when inventory shows
+  a precondition claimed waits up to `CATALOG_INTERVAL` for its channels. That stays within the
+  discovery bound and is left as is.
+- Review P2 (`ONLINE_DELAY + 1 min` branch of invariant 3 untested): `invariants.test.ts` now
+  observes a core that knows the campaign and the live channel; idling is legal at the bound and
+  `Idle` a second past it.
+- Review P2 (a `WatchTick` racing a switch in the same step credited nothing): the twin's tick now
+  credits the session that was current when the request left and keeps the newer session
+  (`actuator.ts`, with a test).
+- Before these fixes: `pnpm start sim --seeds 200` passed in 15.5 s and
+  `pnpm start sim --seed 201 --seeds 1000` all passed in 84 s, on worlds that mostly had nothing
+  to earn.
 - Bundle (`ls -l dist/bin.mjs`): 1,306,126 bytes on `dev` when this plan was written; 1,313,976 bytes
   for `dev` (`ad5719d`) rebuilt with this branch's toolchain; 1,838,865 bytes with the twin, `miner
-  sim` and fast-check (+524,889 bytes, +40 %).
+  sim` and fast-check (+524,889 bytes, +40 %); 1,841,689 bytes after the review fixes.
 - Core fixes the sim found (each with a `step.test.ts` regression, no new `State` field):
   1. §7: a claim recheck is an inventory read on `deadlines.inventory`; `nextDeadline` no longer
      reads claim intents, and `Started` sets `recheckAt` to `now + CLAIM_RECHECK`, so a read right

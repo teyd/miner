@@ -98,7 +98,7 @@ store      state.json (atomic) · token file (0600) · journal (gzip JSONL, roll
 ## What we reuse vs build
 
 - Reuse: Effect (`effect/http`, `effect/socket`, `TestClock`, `Random`, Schema), fast-check,
-  pino, `node:sqlite` only if needed. TDM (MIT) as the behaviour reference.
+  pino (replaced by Effect `Logger`, decision 29), `node:sqlite` only if needed. TDM (MIT) as the behaviour reference.
 - Build: the Twitch seam, the twin, the reducer, the recorder and replay, the CLI.
 
 ## Open questions

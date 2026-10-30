@@ -9,6 +9,8 @@ export interface MemoryFiles {
   readonly layer: Layer.Layer<FileSystem.FileSystem>;
   /** While set, every write fails as a full disk would. */
   failWrites: boolean;
+  /** The next write stores the first half of its bytes, then fails, as a crash mid-write would. */
+  tearNextWrite: boolean;
 }
 
 const fail = (method: string, path: string, tag: "NotFound" | "Unknown" = "NotFound") =>
@@ -23,11 +25,16 @@ const concat = (a: Uint8Array, b: Uint8Array): Uint8Array => {
 
 export const memoryFileSystem = (): MemoryFiles => {
   const files = new Map<string, Uint8Array>();
-  const flags = { failWrites: false };
+  const flags = { failWrites: false, tearNextWrite: false };
   const write = (method: string, path: string, data: Uint8Array, append: boolean) =>
     Effect.suspend(() => {
       if (flags.failWrites) return Effect.fail(fail(method, path, "Unknown"));
       const before = append ? (files.get(path) ?? new Uint8Array()) : new Uint8Array();
+      if (flags.tearNextWrite) {
+        flags.tearNextWrite = false;
+        files.set(path, concat(before, data.subarray(0, data.length >> 1)));
+        return Effect.fail(fail(method, path, "Unknown"));
+      }
       files.set(path, concat(before, data));
       return Effect.void;
     });
@@ -105,6 +112,12 @@ export const memoryFileSystem = (): MemoryFiles => {
     },
     set failWrites(value: boolean) {
       flags.failWrites = value;
+    },
+    get tearNextWrite() {
+      return flags.tearNextWrite;
+    },
+    set tearNextWrite(value: boolean) {
+      flags.tearNextWrite = value;
     },
   };
 };

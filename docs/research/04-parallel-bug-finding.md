@@ -103,6 +103,53 @@ The recordings are then ready by the time the twin needs calibrating.
   just-mining's triage fixture shows real leak shapes (signed URLs in messages, headers in
   fields, token fragments in redirects). Use them as test _inputs_, not as a design.
 
+### 3a. Recording size, measured (2026-10-30)
+
+Open question P3. Inputs: read-only copies of the two recordings of 2026-10-30 (shadow runs
+14:07–17:42 UTC, 389 entries; the first live run 15:19–15:56 UTC, 342 entries), replayed through
+the recorder's encoder. Scripts were throwaway; the numbers below are their output.
+
+Where the bytes are (live run, 37 min, plain JSON 2,555 KiB, per-line gzip 464 KiB):
+`DropCampaignDetails` 900 KiB, `Inventory` 868 KiB (9 reads), `DirectoryPage_Game` 502 KiB,
+`ViewerDropsDashboard` 99 KiB; PubSub frames and HLS ticks are under 3 % together.
+
+**No large answer repeats byte for byte.** Whole-body deduplication finds 0 of 9 inventory reads,
+0 of 16 catalog batches and 0 of 55 directory pages equal to an earlier one (only `hls` and
+`validate` repeat, 10 KiB). Twitch reorders the inventory's campaign list between reads, the
+directory carries live viewer counts, and catalog batches group campaigns differently. A JSON
+diff against the previous answer of the same operation and variables saves nothing either: the
+reordering makes positional diffs as big as the body.
+
+**What does repeat is the parts:** the same campaign object, drop, game or channel inside
+different answers. Storing every object or array whose JSON is at least 256 characters once per
+file, and writing `{"$same": "<first 16 hex of its SHA-256>"}` for it afterwards:
+
+| Per-line gzip unless noted                | before    | parts once | plain JSON, parts once |
+| ----------------------------------------- | --------- | ---------- | ---------------------- |
+| shadow file, 14:07–17:42 (two runs)       | 1,054 KiB | 584 KiB    | 2,857 KiB              |
+| live run, 37 min, one start               | 464 KiB   | 377 KiB    | 1,796 KiB              |
+| steady state, 17:08–17:42 (file warm)     | 805 KiB/h | 282 KiB/h  | 1,015 KiB/h            |
+| same, `DropCampaignDetails` / `Inventory` | 302 / 195 | 10 / 40    |                        |
+
+Threshold: 128 characters writes 1 % less than 256, 1,024 a fifth more. The first catalog read
+of a file costs what it did (about 1 MiB), then the hourly re-reads cost almost nothing; the
+directory (viewer counts) is most of what is left. A day is about 7 MiB instead of about 19 MiB.
+Encoding costs about 3 ms per answer, and remembering 16,384 parts about 1 MiB of heap.
+
+**gzip stays.** On the compacted lines it still saves 3.6x (1,015 vs 282 KiB/h): plain
+compacted JSON would be larger than today's gzip. Whole-file gzip would save 17 % more (482 vs
+584 KiB) but loses the "a crash costs one line" property; per-line zstd (Node 26 `zlib`) is the
+same as per-line gzip (582 vs 584 KiB), and whole-file zstd's lead over gzip shrinks from 37 % to
+20 % once parts are stored once. Readability is the same either way: `zless`, `zgrep` and
+`zcat … | jq` read a recording directly, and `miner journal cat <file>` prints it with every
+answer whole.
+
+A reference only points at a line the same process wrote to the same file and saw succeed, so
+a failed or torn write, a day roll or a restart after a crash can't leave one dangling (for the process: writes aren't fsynced, so a disk that loses an append can still orphan one, which `journal cat` reports with exit 1) (property
+test in `src/twitch/journal.test.ts`). Measuring also found that a torn gzip member followed by
+more members (a crash, then a restart appending to the same day) made `gunzip` stop at the tear
+without an error; the reader now inflates member by member.
+
 ## 4. Lane C — shadow (read-only) live runs
 
 Only the _actuator_ contends: playlist/segment `HEAD`s and spade/watch events, plus claims.

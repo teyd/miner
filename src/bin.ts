@@ -27,6 +27,10 @@ miner.pipe(
       Effect.sync(() => {
         process.exitCode = 1;
       }),
+    JournalUnreadable: () =>
+      Effect.sync(() => {
+        process.exitCode = 1;
+      }),
     SimTraceInvalid: () =>
       Effect.sync(() => {
         process.exitCode = 2;

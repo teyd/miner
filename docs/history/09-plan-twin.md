@@ -503,3 +503,20 @@ not in the past; a lost answer is rechecked at `+CLAIM_RECHECK` by the inventory
 - The idle bound has a second tier of one hour. It catches a miner that never watches, not one that
   is slow to discover new channels. Tightening it needs periodic directory reads in the core, which
   is a core design change and not this PR.
+
+## 10. Results (2026-10-30)
+
+- `pnpm check`: exit 0; 17 test files, 180 tests, `vp test` about 7 s wall time. The slowest are
+  seeds 1–20 (2.3 s) and the two shrinking runs of 30 attempts (1.5 s each).
+- `pnpm start sim --seeds 200`: `200 seeds, 200 passed, 0 failed`, exit 0, 15.5 s.
+  `pnpm start sim --seed 201 --seeds 1000`: all passed, 84 s.
+- Bundle (`ls -l dist/bin.mjs`): 1,306,126 bytes on `dev` when this plan was written; 1,313,976 bytes
+  for `dev` (`ad5719d`) rebuilt with this branch's toolchain; 1,838,865 bytes with the twin, `miner
+  sim` and fast-check (+524,889 bytes, +40 %).
+- Core fixes the sim found (each with a `step.test.ts` regression, no new `State` field):
+  1. §7: a claim recheck is an inventory read on `deadlines.inventory`; `nextDeadline` no longer
+     reads claim intents, and `Started` sets `recheckAt` to `now + CLAIM_RECHECK`, so a read right
+     after a restart cannot settle a claim whose flag inventory shows seconds late.
+  2. A credited drop from a campaign newer than the core's catalog keeps the watch confirmed and
+     moves the catalog read to within `CATALOG_RETRY`, instead of the channel stalling into `avoid`.
+  3. A credited drop from a campaign the settings exclude is not adopted as the watch target.

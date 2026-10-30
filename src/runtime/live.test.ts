@@ -81,7 +81,8 @@ const tokenAt = (now: number) => {
  * Twitch: usher opens its session, each media playlist read credits the watch, and a claim lands,
  * so the next inventory shows them.
  */
-const liveHttp = (twin: Twin) => {
+const liveHttp = (twin: Twin, claimsToKill = 0) => {
+  let kill = claimsToKill;
   const stub = stubPlayback({}, twinHttp(twin));
   const http = HttpClient.make((request) =>
     Effect.gen(function* () {
@@ -95,6 +96,10 @@ const liveHttp = (twin: Twin) => {
           : [];
       const name = sent[0]?.operationName;
       if (name === "PlaybackAccessToken") stub.state.token = tokenAt(now);
+      if (name === "DropsPage_ClaimDropRewards" && kill > 0) {
+        kill -= 1;
+        return yield* Effect.die(new Error("the claim's fiber died before Twitch saw it"));
+      }
       if (name === "DropsPage_ClaimDropRewards") {
         const id = sent[0]!.variables.input!.dropInstanceID as DropInstanceId;
         twin.world = World.claim(twin.world, id, now).world;
@@ -112,9 +117,9 @@ const liveHttp = (twin: Twin) => {
   return { http, requests: stub.requests };
 };
 
-const liveRun = (twin: Twin, files: MemoryFiles, hours: number) =>
+const liveRun = (twin: Twin, files: MemoryFiles, hours: number, claimsToKill = 0) =>
   Effect.gen(function* () {
-    const { http, requests } = liveHttp(twin);
+    const { http, requests } = liveHttp(twin, claimsToKill);
     const services = liveLayer(DIR).pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -149,6 +154,25 @@ const lines = (files: MemoryFiles): ReadonlyArray<string> =>
     );
 
 describe("run with the live actuator", () => {
+  // A claim fiber that dies sent nothing the core heard back: left "sent", the intent blocked
+  // the drop forever (review of #25). Reported unknown, inventory settles it and it goes again.
+  it.effect(
+    "reports a claim whose fiber died as unknown, so inventory settles it and it is sent once more",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(SIM_EPOCH);
+        const twin = makeWorld();
+        const files = memoryFileSystem();
+        yield* liveRun(twin, files, 1, 1);
+        assert.isTrue(twin.world.claimed.has("c0-d0" as DropId));
+        const saved = decodeState(
+          new TextDecoder().decode(files.files.get(`${DIR}/${LIVE_STATE}`)!),
+        );
+        assert.lengthOf([...saved.claims.values()], 0);
+      }),
+    30_000,
+  );
+
   it.effect(
     "watches over HLS every 20 s, claims the complete drop once, and saves state.json",
     () =>

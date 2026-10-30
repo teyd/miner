@@ -197,6 +197,10 @@ describe("seeds found by longer sweeps", () => {
     [4664, "a doomed campaign left for one that can finish, after a restart"],
     // An inventory read without the drop settled a lost claim and the claim went out again.
     [4647, "a claim settled by an inventory read that omitted its drop"],
+    // Twitch credited another wanted campaign and the core followed it: not a flip.
+    [23266, "a switch that follows Twitch's credit"],
+    // A new target on the same channel restarted the stall clock, holding a dead channel.
+    [22972, "a channel that never credits, its target changing"],
   ];
   for (const [seed, name] of found) {
     it.effect(

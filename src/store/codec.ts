@@ -77,7 +77,8 @@ export const decodeState = (text: string): State => {
 
 type Check = (value: unknown) => boolean;
 
-const isNumber: Check = (v) => typeof v === "number" && !Number.isNaN(v);
+// `canonical` writes Infinity as null, which the next load would refuse.
+const isNumber: Check = (v) => typeof v === "number" && Number.isFinite(v);
 const isString: Check = (v) => typeof v === "string";
 const optional =
   (check: Check): Check =>
@@ -126,7 +127,7 @@ const progressOf = record({
  * and by kind elsewhere. A file that parses but lacks them is refused like any unreadable state:
  * starting from a half state would forget claims in flight.
  */
-const fields: Record<string, Check> = {
+const fields: { readonly [K in keyof State]-?: Check } = {
   settings: record({ goals: arrayOf(isObject) }),
   auth: oneOf("unknown", "valid", "needs-login"),
   catalog: optional(arrayOf(isObject)),

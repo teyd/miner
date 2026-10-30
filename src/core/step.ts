@@ -496,7 +496,9 @@ const watching = (s: State, target: Target, channelId: ChannelId, now: Millis): 
     campaignId: target.campaign.id,
     dropId: target.drop.id,
     credited: false,
-    confirmedAt: now,
+    // A new target on the same channel keeps the channel's last confirmation: otherwise a target
+    // changing every < STALL_AFTER would hold a channel that never credits (seed 22972).
+    confirmedAt: keep?.confirmedAt ?? now,
     confirmedMinutes: minutes,
     estimatedMinutes: minutes,
     lastCurrentDropRead: keep?.lastCurrentDropRead,

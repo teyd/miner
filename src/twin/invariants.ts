@@ -577,6 +577,8 @@ const flipWithoutCause = (
     changedBetween(world, next, from, o.now) ||
     (c.lastCatalogChangeAt !== undefined && c.lastCatalogChangeAt > last.at) ||
     [...world.claimed.values()].some((at) => at > from) ||
+    // Twitch credited a wanted campaign: the core follows the credit (seed 23266).
+    [...c.lastWantedCredit.values()].some((at) => at > from) ||
     world.campaigns.some((x) =>
       [x.startsAt, ...x.drops.map((d) => d.startsAt)].some((t) => from < t && t <= o.now),
     );

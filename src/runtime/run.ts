@@ -71,7 +71,21 @@ export const run = (config: Config) =>
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.void
-              : Effect.logError(`runtime: ${command._tag} failed`, cause),
+              : Effect.andThen(
+                  Effect.logError(`runtime: ${command._tag} failed`, cause),
+                  // A claim that died may still have reached Twitch: report it unknown, so the
+                  // next inventory read settles it, instead of leaving it "sent" forever.
+                  command._tag === "Claim"
+                    ? Queue.offer(
+                        events,
+                        Event.ClaimResult({
+                          campaignId: command.campaignId,
+                          dropId: command.dropId,
+                          outcome: "unknown",
+                        }),
+                      )
+                    : Effect.void,
+                ),
           ),
           Effect.asVoid,
         ),

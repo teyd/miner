@@ -64,10 +64,20 @@ const sweep = (first: number, count: number, json: boolean, options: SeedOptions
     const results = yield* runSeeds(first, count, options);
     const failures = results.flatMap((r) => (r._tag === "Failed" ? [r.capsule] : []));
     const passed = results.length - failures.length;
+    // A sweep that never earns checks little: show how many seeds watched and claimed.
+    const watched = results.filter((r) => r._tag === "Passed" && r.creditedMinutes > 0).length;
+    const claimed = results.filter((r) => r._tag === "Passed" && r.claimsApplied > 0).length;
     if (json) {
       yield* Console.log(
         JSON.stringify(
-          { ok: failures.length === 0, seeds: { first, count }, passed, failures },
+          {
+            ok: failures.length === 0,
+            seeds: { first, count },
+            passed,
+            watched,
+            claimed,
+            failures,
+          },
           null,
           2,
         ),
@@ -76,7 +86,10 @@ const sweep = (first: number, count: number, json: boolean, options: SeedOptions
       for (const capsule of failures) {
         yield* Console.log(`seed ${capsule.seed}: ${describe(capsule.violation)}`);
       }
-      yield* Console.log(`${count} seeds, ${passed} passed, ${failures.length} failed`);
+      yield* Console.log(
+        `${count} seeds, ${passed} passed, ${failures.length} failed; ` +
+          `${watched} earned watch minutes, ${claimed} claimed a drop`,
+      );
       for (const capsule of failures) {
         yield* Console.log(`\nseed ${capsule.seed} capsule:`);
         yield* Console.log(JSON.stringify(capsule, null, 2));

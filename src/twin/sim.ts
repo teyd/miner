@@ -40,6 +40,9 @@ export interface RunResult {
   readonly digest: string;
   readonly steps: number;
   readonly restarts: number;
+  /** Minutes the twin credited, and claims it applied: zero for both means nothing was earned. */
+  readonly creditedMinutes: number;
+  readonly claimsApplied: number;
   readonly violation: Violation | undefined;
   /** The last trace lines. */
   readonly tail: ReadonlyArray<string>;
@@ -132,6 +135,8 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
     let restart: { readonly saved: string | undefined; readonly resumed: State } | undefined;
     let steps = 0;
     let restarts = 0;
+    let creditedMinutes = 0;
+    let claimsApplied = 0;
     let lastEdgeAt = SIM_EPOCH;
     let found: Violation | undefined;
 
@@ -142,6 +147,8 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
 
     const observe = (record: Parameters<typeof checkStep>[1]["step"]) => {
       const activity = drainActivity(twin);
+      creditedMinutes += activity.credits.length;
+      claimsApplied += activity.calls.filter((c) => c.kind === "claim" && c.applied).length;
       if (activity.requests.length + activity.calls.length + activity.credits.length > 0) {
         trace(now, "twin", activity);
       }
@@ -258,12 +265,26 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
       now = yield* Clock.currentTimeMillis;
     }
     yield* Fiber.interruptAll([...inFlight.values()].map((f) => f.fiber));
-    return { digest: digest.hex(), steps, restarts, violation: found, tail: [...digest.tail] };
+    return {
+      digest: digest.hex(),
+      steps,
+      restarts,
+      creditedMinutes,
+      claimsApplied,
+      violation: found,
+      tail: [...digest.tail],
+    };
   }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Random.withSeed(capped.latencySeed));
 };
 
 export type SeedResult =
-  | { readonly _tag: "Passed"; readonly seed: number; readonly digest: string }
+  | {
+      readonly _tag: "Passed";
+      readonly seed: number;
+      readonly digest: string;
+      readonly creditedMinutes: number;
+      readonly claimsApplied: number;
+    }
   | {
       readonly _tag: "Failed";
       readonly capsule: Capsule;
@@ -317,7 +338,13 @@ export const runProperty = (
     });
     const details = yield* Effect.promise(() => fc.check(property, { seed, numRuns: 1 }));
     if (!details.failed || details.counterexample === null || first === undefined) {
-      return { _tag: "Passed", seed, digest: first?.result.digest ?? "" } as const;
+      return {
+        _tag: "Passed",
+        seed,
+        digest: first?.result.digest ?? "",
+        creditedMinutes: first?.result.creditedMinutes ?? 0,
+        claimsApplied: first?.result.claimsApplied ?? 0,
+      } as const;
     }
     const shrunk = capHorizon(details.counterexample[0], options);
     const capsule = yield* capsuleOf(seed, shrunk, options);

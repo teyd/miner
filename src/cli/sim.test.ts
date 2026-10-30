@@ -74,7 +74,10 @@ describe("miner sim", () => {
   it.effect("runs a range of seeds and prints the summary", () =>
     Effect.gen(function* () {
       yield* Command.runWith(miner, { version: "0" })(["sim", "--seed", "1", "--seeds", "2"]);
-      assert.include(yield* output, "2 seeds, 2 passed, 0 failed");
+      assert.include(
+        yield* output,
+        "2 seeds, 2 passed, 0 failed; 2 earned watch minutes, 2 claimed a drop",
+      );
     }).pipe(Effect.provide([NodeServices.layer, TestConsole.layer])),
   );
 
@@ -99,6 +102,8 @@ describe("miner sim", () => {
         ok: true,
         seeds: { first: 1, count: 1 },
         passed: 1,
+        watched: 1,
+        claimed: 1,
         failures: [],
       });
     }).pipe(Effect.provide([NodeServices.layer, TestConsole.layer])),

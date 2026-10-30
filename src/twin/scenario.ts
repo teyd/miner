@@ -181,8 +181,17 @@ const faultArbitrary: fc.Arbitrary<Fault> = fc.oneof(
   }),
 );
 
-/** Generates scenarios within the Schema's bounds; fast-check shrinks them towards fewer things. */
-export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc.record({
+const dropArbitrary = (requiredMinutes: fc.Arbitrary<number>) =>
+  fc.record({
+    requiredMinutes,
+    after: fc.option(intArb("game"), { nil: null }),
+    benefit: fc.constantFrom(...BENEFITS),
+  });
+
+const changeArbitrary = (atMinute: fc.Arbitrary<number>) =>
+  fc.record({ atMinute, to: fc.constantFrom(...CHANGES) });
+
+const randomScenario: fc.Arbitrary<Scenario> = fc.record({
   latencySeed: fc.integer({ min: 0, max: 1_000_000 }),
   horizonMinutes: intArb("horizonMinutes"),
   inventoryLagMinutes: intArb("inventoryLagMinutes"),
@@ -198,14 +207,7 @@ export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc.record({
       durationMinutes: intArb("durationMinutes"),
       linked: fc.boolean(),
       allowList: listArb(intArb("index"), "short"),
-      drops: listArb(
-        fc.record({
-          requiredMinutes: intArb("requiredMinutes"),
-          after: fc.option(intArb("game"), { nil: null }),
-          benefit: fc.constantFrom(...BENEFITS),
-        }),
-        "drops",
-      ),
+      drops: listArb(dropArbitrary(intArb("requiredMinutes")), "drops"),
     }),
     "campaigns",
   ),
@@ -217,12 +219,60 @@ export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc.record({
       // One channel in five refuses playback, so most worlds have something to watch.
       refuses: fc.integer({ min: 0, max: 4 }).map((n) => n === 4),
       liveAtStart: fc.boolean(),
-      changes: listArb(
-        fc.record({ atMinute: intArb("atMinute"), to: fc.constantFrom(...CHANGES) }),
-        "changes",
-      ),
+      changes: listArb(changeArbitrary(intArb("atMinute")), "changes"),
     }),
     "channels",
   ),
   faults: listArb(faultArbitrary, "faults"),
 });
+
+/**
+ * A linked campaign that has started, and a drops-enabled channel streaming its game from the
+ * start for at least an hour, with drops short enough to complete in the shortest horizon.
+ * Random worlds alone line these up rarely (4 claims in 100 seeds), which left the sweep
+ * checking worlds with nothing to earn.
+ */
+const opportunityArbitrary = fc.record({
+  game: intArb("game"),
+  startMinute: fc.integer({ min: BOUNDS.startMinute[0], max: 0 }),
+  durationMinutes: fc.integer({ min: 240, max: BOUNDS.durationMinutes[1] }),
+  drops: listArb(dropArbitrary(fc.integer({ min: 1, max: 45 })), "drops"),
+  viewers: intArb("viewers"),
+  changes: listArb(changeArbitrary(fc.integer({ min: 60, max: BOUNDS.atMinute[1] })), "changes"),
+});
+
+/**
+ * Generates scenarios within the Schema's bounds; fast-check shrinks them towards fewer things.
+ * Campaign 0 on channel 0 is always an opportunity the settings want. The rest is random, so
+ * faults, newer campaigns and schedule changes may still stand in its way.
+ */
+export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
+  .tuple(randomScenario, opportunityArbitrary)
+  .map(([s, o]): Scenario => {
+    const { game, startMinute, durationMinutes, drops, viewers, changes } = o;
+    const campaign = { game, startMinute, durationMinutes, linked: true, allowList: [], drops };
+    const channel = {
+      game,
+      viewers,
+      dropsEnabled: true,
+      refuses: false,
+      liveAtStart: true,
+      changes,
+    };
+    const channels = [channel, ...s.channels.slice(0, BOUNDS.channels[1] - 1)];
+    const games = s.settings.games;
+    return {
+      ...s,
+      settings: {
+        ...s.settings,
+        // The opportunity's game joins the priority list last, so the list keeps its order.
+        games:
+          games.length === 0 || games.includes(game)
+            ? games
+            : [...games.slice(0, BOUNDS.short[1] - 1), game],
+        exclude: s.settings.exclude.filter((k) => k % channels.length !== 0),
+      },
+      campaigns: [campaign, ...s.campaigns.slice(0, BOUNDS.campaigns[1] - 1)],
+      channels,
+    };
+  });

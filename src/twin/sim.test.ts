@@ -4,7 +4,15 @@ import type { Command } from "../core/protocol.ts";
 import { nextDeadline } from "../core/state.ts";
 import { step } from "../core/step.ts";
 import { Capsule, scenarioArbitrary, type Fault, type Scenario } from "./scenario.ts";
-import { runProperty, runScenario, runSeed, runTwice, type Core, type SeedResult } from "./sim.ts";
+import {
+  runProperty,
+  runScenario,
+  runSeed,
+  runSeeds,
+  runTwice,
+  type Core,
+  type SeedResult,
+} from "./sim.ts";
 
 /** One linked campaign on one live channel, with a 10-minute drop and a 30-minute one. */
 const base: Scenario = {
@@ -167,6 +175,27 @@ describe("seeds", () => {
         }
       }),
     60_000,
+  );
+});
+
+describe("the default sweep", () => {
+  // Generated worlds always hold an opportunity (scenario.ts); faults, newer campaigns and
+  // schedule changes may still block it. Seeds 1-100 measured 99 watching and 86 claiming.
+  it.effect(
+    "watches and claims in at least 75 of seeds 1-100 with 2 h horizons",
+    () =>
+      Effect.gen(function* () {
+        const results = yield* runSeeds(1, 100, { maxHorizonMinutes: 120 });
+        assert.deepStrictEqual(
+          results.map(kindOf),
+          results.map(() => "passed"),
+        );
+        const earned = results.filter(
+          (r) => r._tag === "Passed" && r.creditedMinutes > 0 && r.claimsApplied > 0,
+        );
+        assert.isAtLeast(earned.length, 75);
+      }),
+    120_000,
   );
 });
 

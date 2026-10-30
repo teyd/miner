@@ -66,7 +66,7 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
 
 - `pnpm install`. pnpm switches itself to the pinned 12.16.1 and installs Node 26.13.0 into
   `node_modules/.bin` (`devEngines` in `package.json`). Scripts run on that Node, whatever `node` is on PATH.
-- `pnpm check` is the gate: `vp check` (format, lint, typecheck) and then `vp test`. CI runs exactly this
+- Commits pass the secret guard's hooks (Shipping). `pnpm check` is the gate: `vp check` (format, lint, typecheck) and then `vp test`. CI runs exactly this
   plus `pnpm build`. Done means exit 0.
 - `pnpm exec vp check --fix` formats and applies lint fixes. `pnpm exec vp test <file>` runs one test file.
 - `pnpm build` bundles everything into `dist/bin.mjs` (`vp pack`). One file, no `node_modules` at runtime,
@@ -124,7 +124,8 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   person in a browser would cause.
 - Never log out or revoke a token. Getting a new one needs a human in a browser.
 - Never auto-retry a claim. A lost answer may still have succeeded, so read state first.
-- Tokens, signed playlist URLs (`sig`, `token`, `hdnts`) and `Authorization` headers never reach logs, fixtures or commits.
+- Tokens, signed playlist URLs (`sig`, `token`, `hdnts`, `dna`), the `USER-IP` of a playlist, the `auth-token` cookie and
+  `Authorization` headers never reach logs, fixtures or commits. The secret guard (Shipping) blocks their shapes.
 - Never read, print or copy `.env.local` or any `.env.*` file. To check the token is set, run
   `pnpm exec varlock load`, which masks it. A new variable goes into `.env.schema` first, marked `@sensitive`
   if it's a secret.
@@ -137,5 +138,19 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   and installs. Otherwise `scripts/worktree.sh <type>/<task>` creates `.worktrees/<task>` from `dev` and
   runs the setup. Branch names are free-form (squash merge). Remove the worktree with whatever made it
   (`git worktree remove`, or the tool's delete) after merge.
+- The secret guard. `pnpm install` installs git hooks with lefthook (`lefthook.yml`; `prepare` skips it outside git).
+  pre-commit runs gitleaks on the staged changes (`.gitleaks.toml`: the default rules plus Twitch's shapes), refuses
+  `data/`, `*.jsonl[.gz]` recordings and `.env*` other than `.env.schema`, and greps the staged files for the
+  literal `TOKEN` from `.env.local` through Varlock (it prints only the file name, and skips without a `TOKEN`).
+  commit-msg checks the message the same way, pre-push scans the whole history, and CI's `secrets` job scans it
+  again. Hooks live in the shared `.git/hooks`, so they cover every worktree; one on a branch without
+  `lefthook.yml` passes with a note. gitleaks comes from `mise.toml` (`mise install`); without mise or a
+  `gitleaks` on PATH the commit fails. Full scan: `scripts/hooks/gitleaks.sh git --redact -v .`. Always pass
+  `--redact`, or gitleaks prints the secret it found.
+- On a hit: never `--no-verify` past it, never `gitleaks:allow` (ignored), and never allowlist a real secret.
+  Remove it from the change. A real secret that was ever committed, even locally and amended away, is burned:
+  rotate it (only teyd can: a new Twitch token needs a browser login), then rewrite the history before any push.
+  A false positive gets an allowlist entry in `.gitleaks.toml` scoped to one path and the fake value, as the
+  existing ones are; fake secrets in tests contain the word `SECRET`.
 - PRs target `dev`. Squash merge. The PR title becomes the commit: `feat(scope): …`, `fix(scope): …`, `docs: …`.
 - The PR body gives the user-visible change first, then design notes with file paths, then the commands you ran and their output.

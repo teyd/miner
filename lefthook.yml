@@ -1,0 +1,26 @@
+# Git hooks, installed by `pnpm install` (package.json `prepare`). They keep secrets out of commits;
+# AGENTS.md (Shipping) says what to do on a hit. `--ignore-gitleaks-allow`: exceptions live in
+# .gitleaks.toml, where review sees them, not in `gitleaks:allow` comments.
+pre-commit:
+  parallel: true
+  commands:
+    gitleaks:
+      run: scripts/hooks/gitleaks.sh git --pre-commit --staged --redact --no-banner -v --ignore-gitleaks-allow .
+    paths:
+      run: scripts/hooks/staged-paths.sh
+    token:
+      run: scripts/hooks/token.sh
+
+commit-msg:
+  parallel: true
+  commands:
+    gitleaks:
+      run: scripts/hooks/gitleaks.sh stdin --redact --no-banner -v --ignore-gitleaks-allow < {1}
+    token:
+      run: scripts/hooks/token.sh {1}
+
+# The whole history, about 0.2 s: catches a commit made with --no-verify before it goes public.
+pre-push:
+  commands:
+    gitleaks:
+      run: scripts/hooks/gitleaks.sh git --redact --no-banner -v --ignore-gitleaks-allow .

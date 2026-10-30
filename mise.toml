@@ -1,0 +1,3 @@
+# Tools outside npm. `mise install` fetches them; the git hooks and CI read the gitleaks version here.
+[tools]
+gitleaks = "8.30.1"

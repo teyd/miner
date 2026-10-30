@@ -24,3 +24,23 @@ jobs:
           cache: true
       - run: vp run check
       - run: vp run build
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # The pinned binary, not gitleaks-action: the action scans only the commits of the push or PR,
+      # and wants a licence once the repo belongs to an organisation. The version is mise.toml's.
+      - name: gitleaks, whole history
+        env:
+          VERSION: 8.30.1
+          SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          grep -qx "gitleaks = \"$VERSION\"" mise.toml
+          curl -fsSL -o "$RUNNER_TEMP/gitleaks.tgz" "https://github.com/gitleaks/gitleaks/releases/download/v$VERSION/gitleaks_${VERSION}_linux_x64.tar.gz"
+          echo "$SHA256  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner -v --ignore-gitleaks-allow .

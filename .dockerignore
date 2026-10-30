@@ -1,0 +1,10 @@
+# The build needs package.json, the lockfile, the sources and the build config. Never secrets.
+**/node_modules
+dist/
+coverage/
+data/
+.git/
+.worktrees/
+.env
+.env.*
+*.log

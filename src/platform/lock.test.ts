@@ -12,8 +12,8 @@ describe("lockDataDir", () => {
     Effect.gen(function* () {
       const dir = fresh();
       const scope = yield* Scope.make();
-      yield* Scope.provide(lockDataDir(dir), scope);
-      assert.strictEqual(readFileSync(join(dir, LOCK_FILE), "utf8"), `${process.pid}\n`);
+      yield* Scope.provide(lockDataDir(dir, undefined, "box"), scope);
+      assert.strictEqual(readFileSync(join(dir, LOCK_FILE), "utf8"), `${process.pid} box\n`);
       yield* Scope.close(scope, Exit.void);
       assert.isFalse(existsSync(join(dir, LOCK_FILE)));
     }),
@@ -23,7 +23,7 @@ describe("lockDataDir", () => {
     Effect.gen(function* () {
       const dir = fresh();
       writeFileSync(join(dir, LOCK_FILE), "424242\n");
-      const error = yield* Effect.flip(Effect.scoped(lockDataDir(dir, () => true)));
+      const error = yield* Effect.flip(Effect.scoped(lockDataDir(dir, () => true, "box")));
       assert.strictEqual(error._tag, "DataDirLocked");
       assert.strictEqual(error.pid, 424242);
       assert.strictEqual(readFileSync(join(dir, LOCK_FILE), "utf8"), "424242\n");
@@ -32,20 +32,38 @@ describe("lockDataDir", () => {
 
   it.effect("takes over a stale lock: a dead process, our own pid, or garbage", () =>
     Effect.gen(function* () {
-      for (const content of ["424242\n", `${process.pid}\n`, "not a pid"]) {
+      for (const content of ["424242\n", `${process.pid}\n`, `${process.pid} box\n`, "not a pid"]) {
         const dir = fresh();
         writeFileSync(join(dir, LOCK_FILE), content);
         yield* Effect.scoped(
           Effect.andThen(
-            lockDataDir(dir, () => false),
+            lockDataDir(dir, () => false, "box"),
             () =>
               Effect.sync(() =>
-                assert.strictEqual(readFileSync(join(dir, LOCK_FILE), "utf8"), `${process.pid}\n`),
+                assert.strictEqual(
+                  readFileSync(join(dir, LOCK_FILE), "utf8"),
+                  `${process.pid} box\n`,
+                ),
               ),
           ),
         );
         assert.isFalse(existsSync(join(dir, LOCK_FILE)));
       }
+    }),
+  );
+
+  // Two containers on one ./data are both pid 1 (review of #23): the pid alone can't tell them apart.
+  it.effect("refuses a lock from another host even with our pid, and releases only its own", () =>
+    Effect.gen(function* () {
+      const dir = fresh();
+      writeFileSync(join(dir, LOCK_FILE), `${process.pid} other-container\n`);
+      const error = yield* Effect.flip(Effect.scoped(lockDataDir(dir, () => false, "box")));
+      assert.strictEqual(error._tag, "DataDirLocked");
+      assert.strictEqual(error.host, "other-container");
+      assert.strictEqual(
+        readFileSync(join(dir, LOCK_FILE), "utf8"),
+        `${process.pid} other-container\n`,
+      );
     }),
   );
 });

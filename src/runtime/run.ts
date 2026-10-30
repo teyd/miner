@@ -7,6 +7,7 @@ import { step } from "../core/step.ts";
 import { canonical } from "../store/codec.ts";
 import { Store } from "../store/Store.ts";
 import { emptyMemory, execute, type Memory } from "./execute.ts";
+import { forwardFrames } from "./listen.ts";
 import { toSettings } from "./settings.ts";
 
 /**
@@ -31,14 +32,15 @@ export const countAt = (
 /**
  * The runtime: one scheduler fiber that owns the state. It takes the next event, or a `Tick` when
  * `nextDeadline(state)` comes first, steps the core, saves the new state, and only then starts
- * the step's commands. Commands run on their own fibers and come back as events, so a slow read
- * never delays the scheduler; the deadlines live in `State`, so there are no other timers
+ * the step's commands. Commands run on their own fibers and come back as events, PubSub frames
+ * arrive as events too, so a slow read never delays the scheduler; the deadlines live in `State`, so there are no other timers
  * (critique 08 §6.1).
  */
 export const run = (config: Config) =>
   Effect.gen(function* () {
     const store = yield* Store;
     const events = yield* Queue.unbounded<Event>();
+    yield* forwardFrames(events);
     const commands = yield* FiberSet.make<void>();
     const memory = yield* Ref.make<Memory>(emptyMemory);
     const settingsFor = (state: State, event: Event) =>

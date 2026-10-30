@@ -10,6 +10,7 @@ const recorder = () => {
   const journal = Journal.of({
     record: () => Effect.void,
     intent: (command, detail) => Effect.sync(() => intents.push({ command, detail })),
+    frame: () => Effect.void,
   });
   return { intents, actuator: shadowActuator(journal) };
 };

@@ -87,6 +87,24 @@
       "input": { "headers": { "cookie": "unique_id=abc; auth-token=COOKIESECRET; other=1" } }
     },
     {
+      "shape": "PubSub LISTEN frame as sent, the token in data.auth_token",
+      "input": {
+        "type": "LISTEN",
+        "nonce": "n0",
+        "data": { "topics": ["user-drop-events.1"], "auth_token": "LISTENSECRET" }
+      }
+    },
+    {
+      "shape": "PubSub LISTEN frame held as its wire text, logged or recorded as a string",
+      "input": "{\"type\":\"LISTEN\",\"nonce\":\"n1\",\"data\":{\"topics\":[\"video-playback-by-id.2\"],\"auth_token\":\"WIRESECRET\"}}"
+    },
+    {
+      "shape": "socket error quoting an UNLISTEN frame inside a message",
+      "input": {
+        "msg": "pubsub send failed: {\"type\":\"UNLISTEN\",\"data\":{\"topics\":[],\"auth_token\":\"UNLISTENSECRET\"}}"
+      }
+    },
+    {
       "shape": "camel-cased secret key at depth",
       "input": [{ "session": { "accessToken": "CAMELSECRET", "expiresIn": 3600 } }]
     }

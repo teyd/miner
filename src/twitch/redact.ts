@@ -5,11 +5,13 @@ const SECRET_KEYS = new Set([
   "token",
   "access_token",
   "accesstoken",
+  // PubSub LISTEN and UNLISTEN carry the OAuth token here.
+  "auth_token",
   "signature",
   "sig",
   "hdnts",
 ]);
-const NAMES = "sig|token|hdnts|signature|auth|access_token|accesstoken";
+const NAMES = "sig|token|hdnts|signature|auth|auth_token|access_token|accesstoken";
 /** `name=value` or URL-encoded `name%3Dvalue`, wherever it sits in a string. */
 const PARAM_SECRET = new RegExp(
   String.raw`(?:\b|(?<=%3F|%26|%23))(${NAMES})(=|%3D)[^&#\s"']*`,

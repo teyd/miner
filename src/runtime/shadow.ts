@@ -3,7 +3,9 @@ import { Store } from "../store/Store.ts";
 import { Actuator, WatchFailure } from "../twitch/Actuator.ts";
 import { Journal, type Limits } from "../twitch/journal.ts";
 import { paced } from "../twitch/pace.ts";
+import { PubSub } from "../twitch/PubSub.ts";
 import { Credentials, Twitch } from "../twitch/Twitch.ts";
+import { withListening } from "./listen.ts";
 
 /**
  * The actuator of `miner run --shadow` (research 04 §4, lane C): it records and logs what the
@@ -34,9 +36,9 @@ export const shadowActuator = (journal: Journal["Service"]): Actuator["Service"]
 export const SHADOW_STATE = "state.shadow.json";
 
 /**
- * Everything `run` needs in shadow mode, over a given HTTP client and credentials: the real
- * `Twitch` client, paced and recording into `$DATA_DIR/recordings`, the shadow actuator, and
- * the state file.
+ * Everything `run` needs in shadow mode, over a given HTTP client, PubSub connector and
+ * credentials: the real `Twitch` client, paced and recording into `$DATA_DIR/recordings`, the
+ * real PubSub (listening is read-only, research 04 §4), the shadow actuator, and the state file.
  */
 export const shadowLayer = (dataDir: string, limits?: Limits) => {
   const journal = Layer.unwrap(
@@ -46,11 +48,14 @@ export const shadowLayer = (dataDir: string, limits?: Limits) => {
     }),
   );
   const twitch = Twitch.layer.pipe(Layer.provide(Layer.merge(paced(), journal)));
-  const actuator = Layer.effect(
-    Actuator,
-    Effect.gen(function* () {
-      return shadowActuator(yield* Journal);
-    }),
-  ).pipe(Layer.provide(journal));
-  return Layer.mergeAll(twitch, actuator, Store.file(`${dataDir}/${SHADOW_STATE}`));
+  const pubsub = PubSub.layer.pipe(Layer.provide(Layer.merge(twitch, journal)));
+  const actuator = withListening(
+    Layer.effect(
+      Actuator,
+      Effect.gen(function* () {
+        return shadowActuator(yield* Journal);
+      }),
+    ).pipe(Layer.provide(journal)),
+  ).pipe(Layer.provide(pubsub));
+  return Layer.mergeAll(twitch, pubsub, actuator, Store.file(`${dataDir}/${SHADOW_STATE}`));
 };

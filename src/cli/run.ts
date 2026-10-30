@@ -1,3 +1,4 @@
+import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { Console, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
@@ -7,6 +8,7 @@ import { Gzip } from "../platform/Gzip.ts";
 import { run as runtime } from "../runtime/run.ts";
 import { unmapped } from "../runtime/settings.ts";
 import { SHADOW_STATE, shadowLayer } from "../runtime/shadow.ts";
+import { Connector } from "../twitch/PubSub.ts";
 import { Credentials } from "../twitch/Twitch.ts";
 import { ConfigInvalid } from "./config.ts";
 
@@ -55,7 +57,14 @@ export const run = Command.make(
       `shadow run: state in ${path.join(dir, SHADOW_STATE)}, recordings in ${path.join(dir, "recordings")}`,
     );
     const services = shadowLayer(dir).pipe(
-      Layer.provide(Layer.mergeAll(FetchHttpClient.layer, Credentials.layer, Gzip.layer)),
+      Layer.provide(
+        Layer.mergeAll(
+          FetchHttpClient.layer,
+          Credentials.layer,
+          Gzip.layer,
+          Connector.webSocket.pipe(Layer.provide(NodeSocket.layerWebSocketConstructor)),
+        ),
+      ),
     );
     return yield* runtime(loaded.config).pipe(
       Effect.provide(services),

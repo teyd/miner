@@ -16,7 +16,8 @@ export const HEARTBEAT_SECONDS = 30;
 export const STALE_SECONDS = 90;
 /**
  * Starting for longer than this means Twitch can't be reached: the token check and the first
- * catalog read take seconds, and failed reads retry within 5 minutes.
+ * catalog read take seconds. A failed token check only repeats at the hourly validation, so a
+ * network outage at start reads as discovery broken until then.
  */
 export const STARTUP_GRACE_SECONDS = 600;
 
@@ -142,7 +143,8 @@ export const StatusFile = Schema.Struct({
       description: "Claims sent and not yet settled.",
     }),
     claimedThisRun: Schema.Array(Claimed).annotate({
-      description: "Drops this process claimed (or settled as claimed) since it started.",
+      description:
+        "The newest 50 drops this process claimed (or settled as claimed) since it started.",
     }),
   }),
   reads: Schema.Struct({

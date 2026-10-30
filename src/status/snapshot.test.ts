@@ -115,6 +115,13 @@ describe("snapshot", () => {
     assert.deepStrictEqual(Schema.decodeUnknownSync(StatusFile)(json), s);
   });
 
+  it("still encodes when Twitch gives a drop fractional minutes", () => {
+    const odd = campaign("c1", { drops: [{ ...c1.drops[0]!, requiredMinutes: 60.5 }] });
+    const s = at({ ...running, catalog: [odd] });
+    assert.strictEqual(s.watch.state === "watching" && s.watch.requiredMinutes, 60);
+    assert.doesNotThrow(() => encodeStatusFile(s));
+  });
+
   it("changes only when something but the heartbeat and the read times changes", () => {
     const a = at(running);
     const facts = { ...startFacts(T0), reads: { ...startFacts(T0).reads, inventory: T0 + 5 } };

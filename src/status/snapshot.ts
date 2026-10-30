@@ -117,9 +117,15 @@ const watchOf = (state: State): StatusFile["watch"] => {
     campaign: { id: w.campaignId, name: campaign?.name ?? null },
     drop: { id: w.dropId, name: found?.drop.name ?? null },
     minutes: Math.max(0, Math.floor(state.progress.get(w.dropId)?.minutes ?? 0)),
-    requiredMinutes: found?.drop.requiredMinutes ?? null,
+    // The wire decodes minutes as any finite number; the schema wants a count, and an encode
+    // failure here would silently freeze status.json.
+    requiredMinutes:
+      found === undefined ? null : Math.max(0, Math.floor(found.drop.requiredMinutes)),
   };
 };
+
+/** The newest claims shown per list, so a run of weeks keeps the document small. */
+export const CLAIMS_SHOWN = 50;
 
 /** The status document for `state` at `now`. Pure: the runtime adds nothing but the IO. */
 export const snapshot = (input: {
@@ -143,13 +149,13 @@ export const snapshot = (input: {
     catalog: { status: state.catalogStatus, campaigns: state.catalog?.length ?? 0 },
     watch: watchOf(state),
     claims: {
-      inFlight: [...state.claims.values()].map((c) => ({
+      inFlight: [...state.claims.values()].slice(-CLAIMS_SHOWN).map((c) => ({
         campaignId: c.campaignId,
         dropId: c.dropId,
         drop: dropName(state, c.dropId),
         status: c.status,
       })),
-      claimedThisRun: facts.claimed.map((c) => ({
+      claimedThisRun: facts.claimed.slice(-CLAIMS_SHOWN).map((c) => ({
         campaignId: c.campaignId,
         dropId: c.dropId,
         drop: dropName(state, c.dropId),

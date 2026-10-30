@@ -51,13 +51,23 @@ export class Connector extends Context.Service<
   Connector,
   { readonly connect: Effect.Effect<Connection, PubSubLost, Scope.Scope> }
 >()("miner/twitch/PubSub/Connector") {
-  /** The edge over an Effect WebSocket; the constructor comes from the IO shell. */
+  /**
+   * The edge over an Effect WebSocket; the constructor comes from the IO shell. One `Socket` per
+   * connection: an Effect `Socket` writes to the websocket it opened last, so connections sharing
+   * one sent every PING and LISTEN down the newest socket (live shadow run, 2026-10-30).
+   */
   static readonly webSocket: Layer.Layer<Connector, never, Socket.WebSocketConstructor> =
     Layer.effect(
       Connector,
-      Effect.map(
-        Socket.makeWebSocket(PUBSUB_URL, { openTimeout: Duration.millis(PUBSUB_OPEN_TIMEOUT_MS) }),
-        (socket) => Connector.of({ connect: webSocketConnection(socket) }),
+      Effect.map(Socket.WebSocketConstructor, (constructor) =>
+        Connector.of({
+          connect: Socket.makeWebSocket(PUBSUB_URL, {
+            openTimeout: Duration.millis(PUBSUB_OPEN_TIMEOUT_MS),
+          }).pipe(
+            Effect.provideService(Socket.WebSocketConstructor, constructor),
+            Effect.flatMap(webSocketConnection),
+          ),
+        }),
       ),
     );
 }

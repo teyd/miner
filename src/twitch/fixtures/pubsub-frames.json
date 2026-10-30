@@ -1,5 +1,5 @@
 {
-  "source": "Live frames from wss://pubsub-edge.twitch.tv/v1, recorded 2026-10-30 (miner probe, Android token, 12 channels, 8 minutes), channel ids replaced. Frames marked `shape` were not seen live in that window: drop-progress is a real payload from just-mining's log of 2026-10-29 (user id replaced), the others follow TDM twitch.py (2026-10-28).",
+  "source": "Live frames from wss://pubsub-edge.twitch.tv/v1, recorded 2026-10-30 (miner probe, Android token, 12 channels, 8 minutes), channel ids replaced. stream-up, stream-down and broadcast_settings_update were seen live in a 10-minute shadow run the same day (13 title-only settings updates, 4 category changes) and match these shapes field for field. Frames under `shapes` were not seen live: drop-progress is a real payload from just-mining's log of 2026-10-29 (user id replaced), the others follow TDM twitch.py (2026-10-28).",
   "live": [
     {
       "name": "PONG",
@@ -16,6 +16,21 @@
     {
       "name": "commercial",
       "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"video-playback-by-id.100000012\",\"message\":\"{\\\"type\\\":\\\"commercial\\\",\\\"server_time\\\":1793370551.557389,\\\"length\\\":60,\\\"scheduled\\\":true}\"}}"
+    },
+    {
+      "name": "stream-up",
+      "source": "live, miner run --shadow 2026-10-30, channel ids, login and titles replaced",
+      "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"video-playback-by-id.100000001\",\"message\":\"{\\\"server_time\\\":1793372640,\\\"play_delay\\\":0,\\\"type\\\":\\\"stream-up\\\"}\"}}"
+    },
+    {
+      "name": "stream-down",
+      "source": "live, miner run --shadow 2026-10-30, channel ids, login and titles replaced",
+      "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"video-playback-by-id.100000001\",\"message\":\"{\\\"server_time\\\":1793372640,\\\"type\\\":\\\"stream-down\\\"}\"}}"
+    },
+    {
+      "name": "broadcast_settings_update",
+      "source": "live, miner run --shadow 2026-10-30, channel ids, login and titles replaced",
+      "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"broadcast-settings-update.100000001\",\"message\":\"{\\\"channel_id\\\":\\\"100000001\\\",\\\"type\\\":\\\"broadcast_settings_update\\\",\\\"channel\\\":\\\"chan1\\\",\\\"old_status\\\":\\\"Old title\\\",\\\"status\\\":\\\"New title\\\",\\\"old_game\\\":\\\"Just Chatting\\\",\\\"game\\\":\\\"Fortnite\\\",\\\"old_game_id\\\":509658,\\\"game_id\\\":33214}\"}}"
     }
   ],
   "shapes": [
@@ -28,21 +43,6 @@
       "name": "drop-claim",
       "source": "TDM twitch.py:1239-1260",
       "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"user-drop-events.900000001\",\"message\":\"{\\\"type\\\":\\\"drop-claim\\\",\\\"data\\\":{\\\"drop_instance_id\\\":\\\"900000001#67c68932-c292-11f1-b553-0a58a9feac02#c0ffee\\\",\\\"drop_id\\\":\\\"67c68932-c292-11f1-b553-0a58a9feac02\\\",\\\"channel_id\\\":\\\"144618155\\\"}}\"}}"
-    },
-    {
-      "name": "stream-up",
-      "source": "TDM twitch.py:1129-1152",
-      "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"video-playback-by-id.100000001\",\"message\":\"{\\\"server_time\\\":1793370000.5,\\\"play_delay\\\":0,\\\"type\\\":\\\"stream-up\\\"}\"}}"
-    },
-    {
-      "name": "stream-down",
-      "source": "TDM twitch.py:1129-1152",
-      "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"video-playback-by-id.100000001\",\"message\":\"{\\\"server_time\\\":1793370000.5,\\\"type\\\":\\\"stream-down\\\"}\"}}"
-    },
-    {
-      "name": "broadcast_settings_update",
-      "source": "TDM twitch.py:1155-1166",
-      "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"broadcast-settings-update.100000001\",\"message\":\"{\\\"channel_id\\\":\\\"100000001\\\",\\\"type\\\":\\\"broadcast_settings_update\\\",\\\"channel\\\":\\\"chan1\\\",\\\"old_status\\\":\\\"Old title\\\",\\\"status\\\":\\\"New title\\\",\\\"old_game\\\":\\\"Just Chatting\\\",\\\"game\\\":\\\"Fortnite\\\",\\\"old_game_id\\\":509658,\\\"game_id\\\":33214}\"}}"
     },
     {
       "name": "RECONNECT",

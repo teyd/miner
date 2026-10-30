@@ -1,5 +1,4 @@
 import {
-  SPECIAL_GAMES,
   type Campaign,
   type CampaignId,
   type Channel,
@@ -11,25 +10,37 @@ import {
   type Progress,
   type Settings,
 } from "../core/model.ts";
-import { SLACK_HYSTERESIS } from "../core/plan.ts";
 
 /**
  * Decision 28 written a second time, from its text and the review that refined it, for the
- * simulator to judge the core's picks by. It shares no code with `plan.ts` or `rules.ts`: a bug
- * copied into both would hide itself. Only `SLACK_HYSTERESIS`, a tuning value, is the core's.
+ * simulator to judge the core's picks by. It imports no code and no constant from `core/`: a bug
+ * copied into both would hide itself.
  *
  * - The miner works on the first goal with something to do now: one of its campaigns has a drop
  *   it wants that earns now, on a live channel the goal may watch and that credits the campaign.
  * - Something that can still finish comes before anything that can't, whatever the goal
- *   (a doomed goal must not starve the ones below it).
+ *   (a doomed goal must not starve the ones below it; research 07, 2026-10-30).
  * - Within a goal: listed games in list order (`"all"` treats every game alike), then `order`.
  *   `ending-soonest` by the campaign's end. `least-slack` by the least time to spare of a drop
  *   that earns now and can finish; the watched campaign keeps its place until another has
- *   `SLACK_HYSTERESIS` less.
+ *   `HYSTERESIS` less. A campaign that can't finish anything waits behind those that can, and
+ *   among themselves such campaigns go by end, soonest first, whatever the order.
  * - A goal wants a drop whose reward type it lists for the game (an item only from a linked
  *   campaign unless `linkedOnly` is off), and every unclaimed drop such a drop waits on.
  *   `excludeGames` leaves games out of `"all"`; `excludeChannels` keeps the goal off channels.
  */
+
+/**
+ * The watched campaign keeps its place until another has this much less to spare. Source: the
+ * `order` description in `src/config/schema.ts` ("until another has 30 minutes less to spare").
+ */
+export const HYSTERESIS: Millis = 30 * 60_000;
+
+/**
+ * Games whose campaigns earn on any channel, whatever it streams. Source: TDM `utils.py:422`
+ * (`Game.SPECIAL_GAME_IDS`), with "IRL" added 2026-05-31.
+ */
+const ANY_CHANNEL_GAMES: ReadonlySet<string> = new Set(["509663", "509672"]);
 
 /** What the core knew when it picked: its catalog, progress, channels and avoided channels. */
 export interface View {
@@ -77,16 +88,21 @@ interface Entry {
   readonly campaign: CampaignId;
   readonly feasible: boolean;
   readonly game: number;
-  /** `undefined`: nothing to compare (a campaign that can't finish has no slack to rank by). */
-  readonly key: number | undefined;
-  readonly order: DropsGoal["order"];
+  /** Smaller goes first: slack or end for what can finish, the end for what can't. */
+  readonly key: number;
+  /** The key is slack, so the watched campaign's margin applies. */
+  readonly slack: boolean;
 }
 
 const minutesDone = (view: View, id: DropId) => view.progress.get(id)?.minutes ?? 0;
 const isClaimed = (view: View, id: DropId) => view.progress.get(id)?.claimed === true;
 
-/** Earns now: window open, unclaimed, unfinished, and every drop it waits on claimed. */
+/**
+ * Earns now: a drop that takes minutes, window open, unclaimed, unfinished, and every drop it
+ * waits on claimed. A 0-minute drop earns nothing by watching (the wire decodes any number).
+ */
 const earnsNow = (view: View, drop: Drop): boolean =>
+  drop.requiredMinutes > 0 &&
   drop.startsAt <= view.now &&
   view.now < drop.endsAt &&
   !isClaimed(view, drop.id) &&
@@ -101,7 +117,7 @@ const spare = (view: View, drop: Drop): Millis =>
 const watchable = (view: View, goal: DropsGoal, campaign: Campaign, channel: Channel): boolean => {
   if (channel.live === undefined) return false;
   if (goal.excludeChannels.includes(channel.id) || view.avoid.has(channel.id)) return false;
-  const plays = channel.gameId === campaign.game.id || SPECIAL_GAMES.has(campaign.game.id);
+  const plays = channel.gameId === campaign.game.id || ANY_CHANNEL_GAMES.has(campaign.game.id);
   const listed =
     campaign.allowedChannels.length > 0
       ? campaign.allowedChannels.includes(channel.id)
@@ -109,36 +125,27 @@ const watchable = (view: View, goal: DropsGoal, campaign: Campaign, channel: Cha
   return plays && listed;
 };
 
+/** The drops a goal wants from a campaign that earn now. */
+const earning = (view: View, goal: DropsGoal, campaign: Campaign): ReadonlyArray<Drop> =>
+  view.now < campaign.startsAt || view.now >= campaign.endsAt
+    ? []
+    : goalDrops(goal, campaign, (id) => isClaimed(view, id)).filter((d) => earnsNow(view, d));
+
 const entries = (settings: Settings, view: View): ReadonlyArray<Entry> =>
   settings.goals.flatMap((goal, index) =>
     view.catalog.flatMap((campaign): ReadonlyArray<Entry> => {
-      if (view.now < campaign.startsAt || view.now >= campaign.endsAt) return [];
-      const earning = goalDrops(goal, campaign, (id) => isClaimed(view, id)).filter((d) =>
-        earnsNow(view, d),
-      );
-      if (earning.length === 0) return [];
+      const drops = earning(view, goal, campaign);
+      if (drops.length === 0) return [];
       if (![...view.channels.values()].some((ch) => watchable(view, goal, campaign, ch))) {
         return [];
       }
-      const finishing = earning.filter((d) => spare(view, d) >= 0);
+      const finishing = drops.filter((d) => spare(view, d) >= 0);
+      const feasible = finishing.length > 0;
       const game =
         goal.games === "all" ? 0 : goal.games.findIndex((g) => g.id === campaign.game.id);
-      const key =
-        goal.order === "ending-soonest"
-          ? campaign.endsAt
-          : finishing.length === 0
-            ? undefined
-            : Math.min(...finishing.map((d) => spare(view, d)));
-      return [
-        {
-          goal: index,
-          campaign: campaign.id,
-          feasible: finishing.length > 0,
-          game,
-          key,
-          order: goal.order,
-        },
-      ];
+      const slack = feasible && goal.order === "least-slack";
+      const key = slack ? Math.min(...finishing.map((d) => spare(view, d))) : campaign.endsAt;
+      return [{ goal: index, campaign: campaign.id, feasible, game, key, slack }];
     }),
   );
 
@@ -147,28 +154,77 @@ const beats = (a: Entry, b: Entry, watched: CampaignId | undefined): boolean => 
   if (a.feasible !== b.feasible) return a.feasible;
   if (a.goal !== b.goal) return a.goal < b.goal;
   if (a.game !== b.game) return a.game < b.game;
-  if (a.key === undefined || b.key === undefined) return false;
-  const margin = (e: Entry) =>
-    e.order === "least-slack" && e.campaign === watched ? SLACK_HYSTERESIS : 0;
+  if (a.slack !== b.slack) return false;
+  const margin = (e: Entry) => (e.slack && e.campaign === watched ? HYSTERESIS : 0);
   return a.key - margin(a) < b.key - margin(b);
 };
 
 /**
- * The campaigns decision 28 allows a new watch to be for, given what the core knew. `watched`
- * lists the campaigns that may hold the `least-slack` margin (the one watched before the step,
- * and one a credit adopted during it); none holding it is allowed too.
+ * The goals and campaigns decision 28 ranks first, given what the core knew. `holders` are the
+ * campaigns that may hold the `least-slack` margin: the one watched when the core planned (and
+ * one a credit adopted during the step). With none watched, nothing holds it.
  */
+const firstRanked = (
+  settings: Settings,
+  view: View,
+  holders: ReadonlyArray<CampaignId>,
+): ReadonlyArray<Entry> => {
+  const all = entries(settings, view);
+  const out: Array<Entry> = [];
+  for (const holder of holders.length === 0 ? [undefined] : holders) {
+    for (const e of all) {
+      if (!all.some((other) => beats(other, e, holder)) && !out.includes(e)) out.push(e);
+    }
+  }
+  return out;
+};
+
+/** The campaigns decision 28 allows a watch to be for. */
 export const allowedPicks = (
   settings: Settings,
   view: View,
-  watched: ReadonlyArray<CampaignId>,
-): ReadonlySet<CampaignId> => {
-  const all = entries(settings, view);
-  const allowed = new Set<CampaignId>();
-  for (const holder of [undefined, ...watched]) {
-    for (const e of all) {
-      if (!all.some((other) => beats(other, e, holder))) allowed.add(e.campaign);
-    }
-  }
-  return allowed;
+  holders: ReadonlyArray<CampaignId>,
+): ReadonlySet<CampaignId> => new Set(firstRanked(settings, view, holders).map((e) => e.campaign));
+
+/**
+ * Watching `channelId` for `campaignId` is allowed: the campaign ranks first for a goal that may
+ * watch the channel, and the channel credits the campaign. Without `campaignId`, any campaign
+ * ranked first will do (Twitch picks what a stream credits when several campaigns share it).
+ */
+export const allowedWatch = (
+  settings: Settings,
+  view: View,
+  holders: ReadonlyArray<CampaignId>,
+  campaignId: CampaignId | undefined,
+  channelId: ChannelId,
+): boolean => {
+  const channel = view.channels.get(channelId);
+  if (channel === undefined) return false;
+  return firstRanked(settings, view, holders).some((e) => {
+    const campaign = view.catalog.find((x) => x.id === e.campaign);
+    return (
+      campaign !== undefined &&
+      (campaignId === undefined || e.campaign === campaignId) &&
+      watchable(view, settings.goals[e.goal]!, campaign, channel)
+    );
+  });
+};
+
+/**
+ * Some goal that may watch the channel wants a drop of the campaign that earns now and can still
+ * finish. A watch whose campaign has none left has a cause to move.
+ */
+export const canFinishOn = (
+  settings: Settings,
+  view: View,
+  campaignId: CampaignId,
+  channelId: ChannelId,
+): boolean => {
+  const campaign = view.catalog.find((x) => x.id === campaignId);
+  if (campaign === undefined) return false;
+  return settings.goals.some(
+    (goal) =>
+      !goal.excludeChannels.includes(channelId) &&
+      earning(view, goal, campaign).some((d) => spare(view, d) >= 0),
+  );
 };

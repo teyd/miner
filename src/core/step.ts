@@ -21,6 +21,7 @@ import { Command, readKey, type ChannelRead, type Event } from "./protocol.ts";
 import { canEarn, channelCanEarn, isClaimable, wantedDrops } from "./rules.ts";
 import {
   CATALOG_INTERVAL,
+  CATALOG_OPENING_GAP,
   CATALOG_RETRY,
   CLAIM_RECHECK,
   CURRENT_DROP_RECHECK,
@@ -172,16 +173,18 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
       for (const read of event.progress)
         progress.set(read.dropId, merge(progress.get(read.dropId), read));
       const claims = new Map(s.claims);
+      const shown = new Map(event.progress.map((p) => [p.dropId, p]));
       for (const [key, intent] of claims) {
-        const p = progress.get(intent.dropId);
-        // A lost claim answer is resolved here: claimed means done. Still unclaimed in a read
-        // taken after the recheck time means it failed, so dropping the intent lets the claim
-        // pass send it again, informed. An earlier read may just lag the claim.
+        // Only the drop as this read shows it settles an intent, never the merged picture: a
+        // read that omits the drop (inventory lag) proves nothing, and dropping the intent then
+        // would send the claim again (twin seed 4647). Claimed means done. Still unclaimed in a
+        // read taken after the recheck time means the lost claim failed, so dropping the intent
+        // lets the claim pass send it again, informed. An earlier read may just lag the claim.
+        const p = shown.get(intent.dropId);
+        if (p === undefined) continue;
         const settled =
           intent.status === "unknown" && intent.recheckAt !== undefined && now >= intent.recheckAt;
-        if (p?.claimed === true || (settled && p !== undefined)) {
-          claims.delete(key);
-        }
+        if (p.claimed || settled) claims.delete(key);
       }
       const next = {
         ...s,
@@ -543,7 +546,7 @@ const follow = (s: State, now: Millis, rank: Rank): Handled => {
 
 /**
  * When the next drop a goal wants opens its window. Discovery only reads channels for what can
- * earn at the catalog read, so the catalog is read again then (at most every `CATALOG_RETRY`):
+ * earn at the catalog read, so the catalog is read again then (at most every `CATALOG_OPENING_GAP`):
  * otherwise a drop opening between hourly reads waits up to an hour for its channels.
  */
 const nextOpening = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis): Millis => {
@@ -556,7 +559,7 @@ const nextOpening = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis):
       .filter((d) => wanted.has(d.id) && d.startsAt > now)
       .map((d) => d.startsAt);
   });
-  return starts.length === 0 ? Infinity : Math.max(now + CATALOG_RETRY, Math.min(...starts));
+  return starts.length === 0 ? Infinity : Math.max(now + CATALOG_OPENING_GAP, Math.min(...starts));
 };
 
 /** Ask for the channels that can credit the minable campaigns: the directory or the allow-list. */

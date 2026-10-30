@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import type { DropsGoal, Settings } from "../core/model.ts";
-import { compareNumbers, SLACK_HYSTERESIS, type Pick, type Rank } from "../core/plan.ts";
+import { compareNumbers, minable, SLACK_HYSTERESIS, type Pick, type Rank } from "../core/plan.ts";
 import type { Command } from "../core/protocol.ts";
 import { canEarn, isActive, minutesOf, slackOf, wantedDrops } from "../core/rules.ts";
 import { nextDeadline } from "../core/state.ts";
@@ -186,6 +186,28 @@ describe("seeds", () => {
       }),
     60_000,
   );
+});
+
+describe("seeds found by longer sweeps", () => {
+  // CI runs seeds 1-20; these came from sweeps of 1000 and stay fixed regressions.
+  const found: ReadonlyArray<readonly [number, string]> = [
+    // The doomed campaign's drop runs out of time and the core rightly moves to one that can
+    // finish: WatchFlip took it for a switch without a cause.
+    [2011, "a doomed campaign left for one that can finish"],
+    [4664, "a doomed campaign left for one that can finish, after a restart"],
+    // An inventory read without the drop settled a lost claim and the claim went out again.
+    [4647, "a claim settled by an inventory read that omitted its drop"],
+  ];
+  for (const [seed, name] of found) {
+    it.effect(
+      `seed ${seed}: ${name}`,
+      () =>
+        Effect.gen(function* () {
+          assert.strictEqual(kindOf(yield* runSeed(seed)), "passed");
+        }),
+      60_000,
+    );
+  }
 });
 
 describe("the default sweep", () => {
@@ -404,6 +426,37 @@ const camp = (
   drops,
 });
 
+/**
+ * A core that never leaves a campaign it watches while that can earn: it plans and discovers like
+ * the real one, but drops every switch. (Planting it in the ranking would also hide the better
+ * campaign from discovery, so the core would never see it.)
+ */
+const sticky: Core = {
+  nextDeadline,
+  step: (state, event, now) => {
+    const result = step(state, event, now);
+    const [w, next] = [state.watch, result.state.watch];
+    if (w._tag !== "Watching" || next._tag !== "Watching" || next.campaignId === w.campaignId) {
+      return result;
+    }
+    return {
+      state: { ...result.state, watch: w },
+      commands: result.commands.flatMap((c): ReadonlyArray<Command> =>
+        c._tag === "Watch" ? [] : c._tag === "WatchTick" ? [{ ...c, channelId: w.channelId }] : [c],
+      ),
+    };
+  },
+};
+
+/** Ranks the campaigns that can't finish by their end, latest first. */
+const doomLast: Rank = (input) => {
+  const all = minable(input);
+  const doomed = all
+    .filter((p) => !p.feasible)
+    .toSorted((a, b) => compareNumbers(b.campaign.endsAt, a.campaign.endsAt));
+  return [...all.filter((p) => p.feasible), ...doomed];
+};
+
 describe("the twin's goal oracle catches planted planner bugs (WrongPick)", () => {
   const planted: ReadonlyArray<readonly [string, Scenario, Core]> = [
     [
@@ -454,6 +507,50 @@ describe("the twin's goal oracle catches planted planner bugs (WrongPick)", () =
       twoGames([listing(0), listing(1)], [camp(0, 60, [item(240)]), camp(1, 600, [item(30)])]),
       { nextDeadline, step: stepWith(oldRank({ futureDrops: false, blindToDoom: true })) },
     ],
+    [
+      "least-slack without the switching margin",
+      // Game 0 has 190 min to spare, game 1 200: game 0 is watched and keeps its slack while
+      // game 1's shrinks a minute a minute, overtaking it after 10 minutes, not 40.
+      twoGames(
+        [{ ...DEFAULT_GOAL_SPEC, order: "least-slack" }],
+        [camp(0, 300, [item(100)]), camp(1, 300, [item(90)])],
+      ),
+      { nextDeadline, step: stepWith((input) => minable({ ...input, watching: undefined })) },
+    ],
+    [
+      "an excluded channel watched",
+      // The goal excludes the busier channel; a planner blind to it watches it anyway.
+      {
+        ...twoGames(
+          [{ ...DEFAULT_GOAL_SPEC, exclude: [0] }],
+          [camp(0, 600, [item(30)]), camp(0, 600, [item(30)])],
+        ),
+        channels: [base.channels[0]!, { ...base.channels[0]!, viewers: 20 }],
+      },
+      misreads((goals) => goals.map((g) => ({ ...g, excludeChannels: [] }))),
+    ],
+    [
+      "never switching to a better campaign",
+      // Game 1's drop opens at +5 min, in a campaign that ends first: ending-soonest moves to it.
+      twoGames(
+        [DEFAULT_GOAL_SPEC],
+        [
+          camp(0, 600, [item(30)]),
+          camp(1, 200, [{ ...item(30), window: { startMinute: 15, durationMinutes: 100 } }]),
+        ],
+      ),
+      sticky,
+    ],
+    [
+      "campaigns that can't finish ranked latest end first",
+      // Neither can finish: the one ending sooner goes first, under least-slack too (an
+      // ending-soonest oracle ranked them by end already).
+      twoGames(
+        [{ ...DEFAULT_GOAL_SPEC, order: "least-slack" }],
+        [camp(0, 70, [item(240)]), camp(1, 130, [item(240)])],
+      ),
+      { nextDeadline, step: stepWith(doomLast) },
+    ],
   ];
   for (const [name, scenario, core] of planted) {
     it.effect(name, () =>
@@ -473,7 +570,7 @@ describe("the twin's goal oracle catches planted planner bugs (WrongPick)", () =
         nextDeadline,
         step: stepWith(oldRank({ futureDrops: true, blindToDoom: true })),
       };
-      for (const [, scenario] of planted.slice(-2)) {
+      for (const [, scenario] of planted.filter(([name]) => name.includes("reverted"))) {
         assert.strictEqual((yield* runTwice(scenario, { core: old })).violation?.kind, "WrongPick");
       }
     }),

@@ -116,4 +116,29 @@ describe("decodeState", () => {
     assert.throws(() => decodeState(canonical(populated)), /not a saved miner state/);
     assert.throws(() => decodeState("{"));
   });
+
+  it("refuses a file that parses but isn't a whole state, whatever its version", () => {
+    assert.throws(() => decodeState('{"version":2,"state":{}}'), /not a saved miner state/);
+    assert.throws(() => decodeState('{"version":3,"state":{}}'), /not a saved miner state/);
+    assert.throws(() => decodeState('{"version":3,"state":[]}'), /not a saved miner state/);
+    const saved = JSON.parse(encodeState(populated)) as { state: Record<string, unknown> };
+    for (const key of Object.keys(saved.state)) {
+      const { [key]: _, ...rest } = saved.state;
+      const text = JSON.stringify({ state: rest, version: 3 });
+      assert.throws(() => decodeState(text), /not a saved miner state/, key);
+    }
+    // A claim intent missing its status could be resent: refused, not guessed at.
+    const claims = saved.state["claims"] as { $map: Array<[string, Record<string, unknown>]> };
+    const broken = claims.$map.map(([k, v]): [string, unknown] => [k, { ...v, status: "lost" }]);
+    const text = JSON.stringify({
+      state: { ...saved.state, claims: { $map: broken } },
+      version: 3,
+    });
+    assert.throws(() => decodeState(text), /`claims`/);
+  });
+
+  it("keeps claim intents exactly through the version 2 migration", () => {
+    const decoded = decodeState(version2());
+    assert.strictEqual(canonical(decoded.claims), canonical(populated.claims));
+  });
 });

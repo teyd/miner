@@ -141,6 +141,38 @@ describe("start-up", () => {
     assert.strictEqual(d.state.deadlines.catalog, T0 + 20 * MINUTE + HOUR);
   });
 
+  it("reads the catalog at most four times an hour, however many drops open", () => {
+    // A drop opens every 5 minutes for 4 hours, in two games: each catalog read also reads
+    // their directories, so the rate of both is bounded by the catalog's.
+    const opening = (name: string, g: string) =>
+      campaign(name, {
+        game: game(g),
+        endsAt: T0 + 6 * HOUR,
+        drops: Array.from({ length: 48 }, (_, i) =>
+          drop(`${name}-${i}`, { startsAt: T0 + (i + 1) * 5 * MINUTE, endsAt: T0 + 6 * HOUR }),
+        ),
+      });
+    const campaigns = [opening("x", "gx"), opening("y", "gy")];
+    const d = driver();
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    const catalogReads: Array<Millis> = [T0];
+    let directoryReads = reads(d.send(Event.CatalogRead({ campaigns }))).length;
+    while (d.now < T0 + 4 * HOUR) {
+      const commands = d.send(Event.Tick(), nextDeadline(d.state) ?? d.now + HOUR);
+      if (!tags(commands).includes("ReadCatalog")) continue;
+      catalogReads.push(d.now);
+      const started = reads(d.send(Event.CatalogRead({ campaigns })));
+      directoryReads += started.length;
+      for (const r of started) d.send(read([], readKey(r)));
+    }
+    for (const at of catalogReads) {
+      assert.isAtMost(catalogReads.filter((t) => t >= at && t < at + HOUR).length, 4);
+    }
+    assert.isAtMost(directoryReads, 2 * catalogReads.length);
+    assert.isAtLeast(catalogReads.length, 4 * 4 - 1);
+  });
+
   it("stops waiting for a read that failed", () => {
     const top = campaign("top", { game: game("top") });
     const low = campaign("low", { game: game("low") });
@@ -470,6 +502,26 @@ describe("claims", () => {
     assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [unclaimed] }))), 0);
     assert.include(tags(d.send(Event.Tick(), T0 + CLAIM_RECHECK)), "ReadInventory");
     assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [unclaimed] }))), 1);
+  });
+
+  it("keeps a lost claim's intent when the recheck read doesn't show the drop at all", () => {
+    // Twin seed 4647: the merged progress still knew the drop, so a read that omitted it
+    // settled the intent and the claim went out again.
+    const d = startedWatching([c], [channel("a")]);
+    d.send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }));
+    d.send(Event.ClaimResult({ campaignId: c.id, dropId: did("c-d1"), outcome: "unknown" }));
+    d.send(Event.Tick(), T0 + CLAIM_RECHECK);
+    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [] }))), 0);
+    assert.strictEqual(d.state.claims.get("c/c-d1")?.status, "unknown");
+    const unclaimed = progress(c, "c-d1", { minutes: 60, instanceId: iid("i1") });
+    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [unclaimed] }))), 1);
+  });
+
+  it("keeps a claim in flight when a read omits its drop", () => {
+    const d = startedWatching([c], [channel("a")]);
+    d.send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }));
+    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [] }), T0 + HOUR)), 0);
+    assert.strictEqual(d.state.claims.get("c/c-d1")?.status, "sent");
   });
 
   it("treats a lost claim as done when inventory shows it claimed", () => {

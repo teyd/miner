@@ -17,7 +17,7 @@ import {
 } from "../core/model.ts";
 import type { Command, Event } from "../core/protocol.ts";
 import { canonical, decodeState, encodeState } from "../store/codec.ts";
-import { allowedPicks, goalDrops } from "./oracle.ts";
+import { allowedPicks, allowedWatch, canFinishOn, goalDrops, type View } from "./oracle.ts";
 import { SIM_EPOCH, type Violation } from "./scenario.ts";
 import { TWIN_TIMEOUT, type Activity } from "./twin.ts";
 import {
@@ -123,7 +123,8 @@ export interface Checker {
         readonly campaignId: CampaignId | undefined;
       }
     | undefined;
-  readonly lastCatalogReadAt: Millis | undefined;
+  /** The last catalog read that changed the core's catalog. */
+  readonly lastCatalogChangeAt: Millis | undefined;
   /** The last catalog or channel read that gave up: the core's picture missed its answer. */
   readonly lastReadFailureAt: Millis | undefined;
   /** The core's last `Subscribe` since a restart. */
@@ -151,7 +152,7 @@ export const initialChecker: Checker = {
   lastObservedAt: SIM_EPOCH,
   lastSaved: undefined,
   lastWatch: undefined,
-  lastCatalogReadAt: undefined,
+  lastCatalogChangeAt: undefined,
   lastReadFailureAt: undefined,
   lastSubscribe: undefined,
 };
@@ -249,6 +250,9 @@ export const checkStep = (
       heard: new Set(),
       lastWatch: undefined,
       lastSubscribe: undefined,
+      // What a previous run read or failed to read is no news to this one, which reads again.
+      lastCatalogChangeAt: undefined,
+      lastReadFailureAt: undefined,
     };
   }
 
@@ -420,7 +424,12 @@ const checkCommands = (
     c = { ...c, claims };
   }
 
-  if (event._tag === "CatalogRead") c = { ...c, lastCatalogReadAt: o.now };
+  if (
+    event._tag === "CatalogRead" &&
+    (before.catalog === undefined || canonical(before.catalog) !== canonical(event.campaigns))
+  ) {
+    c = { ...c, lastCatalogChangeAt: o.now };
+  }
   if (event._tag === "ChannelsReadFailed" || event._tag === "CatalogUnavailable") {
     c = { ...c, lastReadFailureAt: o.now };
   }
@@ -431,7 +440,7 @@ const checkCommands = (
         const flip = flipWithoutCause(c, o, step, command.channelId);
         if (flip !== undefined) fail("WatchFlip", flip);
         const campaignId = after.watch._tag === "Watching" ? after.watch.campaignId : undefined;
-        const wrong = wrongPick(o, step, campaignId);
+        const wrong = wrongPick(o, step, campaignId, command.channelId);
         if (wrong !== undefined) fail("WrongPick", wrong);
         c = {
           ...c,
@@ -495,6 +504,12 @@ const checkCommands = (
     }
   }
 
+  // 7: a watch the core keeps must still be one decision 28 ranks first.
+  if (!commands.some((x) => x._tag === "Watch")) {
+    const held = wrongHold(o, step);
+    if (held !== undefined) fail("WrongPick", held);
+  }
+
   // 3b: avoid a channel only for a cause the twin agrees with.
   for (const id of after.avoid) {
     if (before.avoid.has(id)) continue;
@@ -548,10 +563,19 @@ const flipWithoutCause = (
     last.campaignId,
     step.before.watch._tag === "Watching" ? step.before.watch.campaignId : undefined,
   ].flatMap((id) => world.campaigns.filter((x) => x.id === id));
-  const oldDone = oldCampaigns.some((campaign) => !wanted(world, campaign, old, o.now));
+  // Done: nothing wanted left by twin truth, or, as far as the core knows, nothing wanted that
+  // earns now can still finish (the switch from a doomed campaign to one that can, seeds 2011
+  // and 4664).
+  const view = viewOf(o, step);
+  const oldDone = oldCampaigns.some(
+    (campaign) =>
+      !wanted(world, campaign, old, o.now) ||
+      (view.catalog.some((x) => x.id === campaign.id) &&
+        !canFinishOn(world.settings, view, campaign.id, old)),
+  );
   const news =
     changedBetween(world, next, from, o.now) ||
-    (c.lastCatalogReadAt !== undefined && c.lastCatalogReadAt > last.at) ||
+    (c.lastCatalogChangeAt !== undefined && c.lastCatalogChangeAt > last.at) ||
     [...world.claimed.values()].some((at) => at > from) ||
     world.campaigns.some((x) =>
       [x.startsAt, ...x.drops.map((d) => d.startsAt)].some((t) => from < t && t <= o.now),
@@ -560,37 +584,76 @@ const flipWithoutCause = (
   return `${old} at +${minutesSince(last.at)}m, then ${next} with no cause`;
 };
 
+const viewOf = (o: Observation, step: StepRecord): View => ({
+  catalog: step.after.catalog ?? [],
+  progress: step.after.progress,
+  channels: step.after.channels,
+  avoid: step.after.avoid,
+  now: o.now,
+});
+
+/**
+ * The campaigns that hold the `least-slack` margin when the core planned: the one watched before
+ * the step, and one a credit adopted during it. None when the core watched nothing.
+ */
+const holdersOf = (step: StepRecord): ReadonlyArray<CampaignId> => {
+  const { before, after, event } = step;
+  return [
+    ...(before.watch._tag === "Watching" ? [before.watch.campaignId] : []),
+    ...((event._tag === "DropProgress" || event._tag === "CurrentDropRead") &&
+    event.dropId !== undefined
+      ? (after.catalog ?? [])
+          .filter((x) => x.drops.some((d) => d.id === event.dropId))
+          .map((x) => x.id)
+      : []),
+  ];
+};
+
+const instead = (o: Observation, step: StepRecord): string => {
+  const allowed = allowedPicks(o.world.settings, viewOf(o, step), holdersOf(step));
+  return allowed.size === 0 ? "no goal wants anything" : [...allowed].join(", ");
+};
+
 /**
  * 7: a new watch is for a campaign decision 28 ranks first among what the core knew (`oracle.ts`,
- * written apart from the planner). It judges the ranking, not the data: the core's catalog,
- * progress and channels are the input, so a fault or a discovery still running can't excuse a
- * wrong pick. Returns the violation's detail.
+ * written apart from the planner), on a channel that goal may watch and that credits it. It judges
+ * the ranking, not the data: the core's catalog, progress and channels are the input, so a fault
+ * or a discovery still running can't excuse a wrong pick. Returns the violation's detail.
  */
 const wrongPick = (
   o: Observation,
   step: StepRecord,
   campaignId: CampaignId | undefined,
+  channelId: ChannelId,
 ): string | undefined => {
-  const { before, after, event } = step;
-  if (campaignId === undefined || after.catalog === undefined) return undefined;
-  const watched = [
-    ...(before.watch._tag === "Watching" ? [before.watch.campaignId] : []),
-    ...((event._tag === "DropProgress" || event._tag === "CurrentDropRead") &&
-    event.dropId !== undefined
-      ? after.catalog.filter((x) => x.drops.some((d) => d.id === event.dropId)).map((x) => x.id)
-      : []),
-  ];
-  const view = {
-    catalog: after.catalog,
-    progress: after.progress,
-    channels: after.channels,
-    avoid: after.avoid,
-    now: o.now,
-  };
-  const allowed = allowedPicks(o.world.settings, view, watched);
-  if (allowed.has(campaignId)) return undefined;
-  const instead = allowed.size === 0 ? "no goal wants anything" : [...allowed].join(", ");
-  return `watching for ${campaignId}, decision 28 ranks first: ${instead}`;
+  if (campaignId === undefined || step.after.catalog === undefined) return undefined;
+  const view = viewOf(o, step);
+  if (allowedWatch(o.world.settings, view, holdersOf(step), campaignId, channelId)) {
+    return undefined;
+  }
+  return `watching ${channelId} for ${campaignId}, decision 28 ranks first: ${instead(o, step)}`;
+};
+
+/**
+ * 7, for a watch the core keeps: after every step it must still be one decision 28 ranks first,
+ * or the core never moves to a better campaign. A discovery still running excuses holding on
+ * (the core may not switch on half a picture), and so does a credit Twitch chose: several
+ * campaigns can share a stream, and Twitch picks which one progresses, so a channel that credits
+ * a first-ranked campaign is right whatever it credits.
+ */
+const wrongHold = (o: Observation, step: StepRecord): string | undefined => {
+  const { after } = step;
+  const w = after.watch;
+  if (w._tag !== "Watching" || after.auth !== "valid" || after.catalog === undefined) {
+    return undefined;
+  }
+  if (after.discovery !== undefined) return undefined;
+  const view = viewOf(o, step);
+  const holders = holdersOf(step);
+  const settings = o.world.settings;
+  if (allowedWatch(settings, view, holders, w.campaignId, w.channelId)) return undefined;
+  if (w.credited && allowedWatch(settings, view, holders, undefined, w.channelId)) return undefined;
+  return `kept ${w.channelId} for ${w.campaignId}, decision 28 ranks first: ${instead(o, step)}`;
 };
 
 /**

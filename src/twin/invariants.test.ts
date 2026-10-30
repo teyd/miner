@@ -424,6 +424,49 @@ describe("invariant 6: no watch switch without a cause", () => {
     assert.deepStrictEqual(kinds([watchOn(ch0, at(1)), read, watchOn(ch1, at(5))]), []);
   });
 
+  it("gives no cause for a catalog read that changed nothing", () => {
+    const knowing: State = { ...known, catalog: world0.campaigns };
+    const same = observation(at(3), {
+      world: world0,
+      step: record(Event.CatalogRead({ campaigns: world0.campaigns }), [], knowing),
+    });
+    assert.deepStrictEqual(
+      kinds([watchOn(ch0, at(1), knowing), same, watchOn(ch1, at(5), knowing)]),
+      ["WatchFlip"],
+    );
+  });
+
+  it("forgets a previous run's read failures and catalog reads on a restart", () => {
+    const failed = observation(at(1), {
+      world: world0,
+      step: record(Event.ChannelsReadFailed({ read: "directory:g0" }), [], known),
+    });
+    const changed = observation(at(1), {
+      world: world0,
+      step: record(Event.CatalogRead({ campaigns: [] }), [], known),
+    });
+    const restart = { saved: undefined, resumed: known };
+    for (const before of [failed, changed]) {
+      const first = { ...watchOn(ch0, at(3)), restart };
+      assert.deepStrictEqual(kinds([before, first, watchOn(ch1, at(5))]), ["WatchFlip"]);
+    }
+  });
+
+  it("allows leaving a campaign that can no longer finish anything (seeds 2011, 4664)", () => {
+    // The twin still has minutes to give, but the drop ends before it can complete.
+    const [c] = world0.campaigns;
+    const doomed = {
+      ...c!,
+      drops: c!.drops.map((d) => ({ ...d, endsAt: at(5) + 30_000, requiredMinutes: 1 })),
+    };
+    const knowing: State = { ...known, catalog: [doomed] };
+    assert.deepStrictEqual(kinds([watchOn(ch0, at(1), knowing), watchOn(ch1, at(5), knowing)]), []);
+    const fine: State = { ...known, catalog: [c!] };
+    assert.deepStrictEqual(kinds([watchOn(ch0, at(1), fine), watchOn(ch1, at(5), fine)]), [
+      "WatchFlip",
+    ]);
+  });
+
   it("allows one once the old campaign has nothing left to earn", () => {
     const done = observation(at(70), {
       world: completed(),

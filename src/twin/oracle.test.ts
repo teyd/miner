@@ -1,8 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { campaign, channel, cid, drop, game, games, goal, progress, T0 } from "../core/fixtures.ts";
 import { HOUR, MINUTE, type Campaign, type Channel, type Settings } from "../core/model.ts";
-import { SLACK_HYSTERESIS } from "../core/plan.ts";
-import { allowedPicks, type View } from "./oracle.ts";
+import { allowedPicks, allowedWatch, HYSTERESIS, type View } from "./oracle.ts";
 
 const view = (
   catalog: ReadonlyArray<Campaign>,
@@ -72,8 +71,9 @@ describe("the goal oracle", () => {
     const b = campaign("b", { drops: [drop("b1", { requiredMinutes: 590 })] });
     const v = view([a, b], [channel("x")]);
     assert.deepStrictEqual(picks(slack, v), ["a"]);
-    assert.deepStrictEqual(picks(slack, v, ["b"]), ["a", "b"]);
-    const minutes = SLACK_HYSTERESIS / MINUTE;
+    // The watched campaign holds the margin: the plain optimum is no longer allowed beside it.
+    assert.deepStrictEqual(picks(slack, v, ["b"]), ["b"]);
+    const minutes = HYSTERESIS / MINUTE;
     const earned = new Map([[drop("b1").id, progress(b, "b1", { minutes })]]);
     assert.deepStrictEqual(picks(slack, { ...v, progress: earned }, ["b"]), ["a"]);
   });
@@ -89,5 +89,42 @@ describe("the goal oracle", () => {
       ["a"],
     );
     assert.deepStrictEqual(picks(settingsOf({ excludeChannels: [ch[0]!.id] }), view([a], ch)), []);
+  });
+
+  it("wants nothing from a drop that takes no minutes", () => {
+    const a = campaign("a", { drops: [drop("a0", { requiredMinutes: 0 })] });
+    const v = view([a], [channel("x")]);
+    assert.deepStrictEqual(picks({ goals: [goal()] }, v), []);
+    // The wire decodes any finite number, a negative minute count too: still nothing to earn.
+    const odd = new Map([[drop("a0").id, progress(a, "a0", { minutes: -1 })]]);
+    assert.deepStrictEqual(picks({ goals: [goal()] }, { ...v, progress: odd }), []);
+  });
+
+  it("ranks campaigns that can't finish by their end, soonest first, whatever the order", () => {
+    const late = campaign("late", {
+      endsAt: T0 + 3 * HOUR,
+      drops: [drop("l", { endsAt: T0 + 3 * HOUR, requiredMinutes: 600 })],
+    });
+    const soon = campaign("soon", {
+      endsAt: T0 + 2 * HOUR,
+      drops: [drop("s", { endsAt: T0 + 2 * HOUR, requiredMinutes: 600 })],
+    });
+    const v = view([late, soon], [channel("x")]);
+    assert.deepStrictEqual(picks(slack, v), ["soon"]);
+    assert.deepStrictEqual(picks({ goals: [goal()] }, v), ["soon"]);
+    // No margin for a doomed campaign: there is no slack to keep.
+    assert.deepStrictEqual(picks(slack, v, ["late"]), ["soon"]);
+  });
+
+  it("checks the channel: one the goal excludes, or one without drops, is no watch", () => {
+    const a = campaign("a");
+    const x = channel("x");
+    const off = channel("y", { dropsEnabled: false });
+    const v = view([a], [x, off]);
+    const settings = { goals: [goal()] };
+    assert.isTrue(allowedWatch(settings, v, [], cid("a"), x.id));
+    assert.isFalse(allowedWatch(settings, v, [], cid("a"), off.id));
+    const excluding = { goals: [goal({ excludeChannels: [x.id] })] };
+    assert.isFalse(allowedWatch(excluding, view([a], [x, channel("z")]), [], cid("a"), x.id));
   });
 });

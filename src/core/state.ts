@@ -19,6 +19,12 @@ export const WATCH_INTERVAL: Millis = 20_000;
 export const INVENTORY_INTERVAL: Millis = 5 * MINUTE;
 export const CATALOG_INTERVAL: Millis = HOUR;
 export const CATALOG_RETRY: Millis = 5 * MINUTE;
+/**
+ * A drop opening its window brings the catalog read, and the directory reads it starts, forward
+ * (`nextOpening`), at most this often: at most four catalog reads an hour, as a person reloading
+ * the drops page would, however many drops open in a row.
+ */
+export const CATALOG_OPENING_GAP: Millis = 15 * MINUTE;
 /** Twitch requires apps that hold a token to validate it hourly. */
 export const VALIDATE_INTERVAL: Millis = HOUR;
 /** `stream-up` arrives before stream data does (TDM `ONLINE_DELAY`, `constants.py:129`). */

@@ -54,6 +54,7 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   at wire level under the real `Twitch.layer`; `actuator.ts` the typed mutations; `sim.ts` is the loop (step, persist, check, execute) under `TestClock`; `invariants.ts` checks every
   step. Each seed runs twice and the trace digests must match. A failure prints a capsule to replay.
 - Not built yet: `status --json`, config reload while running, replay of recordings.
+- `docs/history/10-plan-roadmap.md`: the running plan (waves A–E) and how every step is built, reviewed and merged.
 - `docs/decisions.md`: settled answers. Read it before proposing anything. Don't reopen a decision without new evidence.
 - `docs/research/`: dated research with sources. `docs/history/`: proposals and their critiques.
 

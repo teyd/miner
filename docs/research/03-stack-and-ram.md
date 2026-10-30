@@ -7,7 +7,8 @@ on that date. RAM figures were measured on this machine (Linux 6.8, x64, Node 26
 
 - Every requested version exists and fits together: **Node 26.13.0 (LTS "Lithium" since
   2026-10-28)**, **Effect 4.1.0 (published 2026-10-29, today)**, **TypeScript 7.0.2**,
-  **Vite+ 1.4.0**, **pnpm 12.16.1**, **drizzle-orm 1.0.0-rc.5**, **pino 10.4.0**.
+  **Vite+ 1.4.0**, **pnpm 12.16.1**, **drizzle-orm 1.0.0-rc.5**. pino 10.4.0 was checked too, but
+  logging uses Effect's `Logger` instead (decision 29, §2b).
 - **No native addons are needed.** `@effect/sql-sqlite-node@4.1.0` and drizzle's
   `effect-sqlite-node` / `node-sqlite` drivers sit on Node's built-in `node:sqlite`.
 - **RAM: bundling is the big lever.** Effect + HTTP + pino + `node:sqlite`, idle:
@@ -32,7 +33,7 @@ on that date. RAM figures were measured on this machine (Linux 6.8, x64, Node 26
 | vite-plus               | **1.4.0**                   | ships vitest 5.0.5, oxlint 1.89.0, oxfmt 0.74.0, oxlint-tsgolint 7.0.2004, Rolldown-based vite core                                                                                |
 | drizzle-orm             | **1.0.0-rc.5** (2026-10-21) | has `effect-sqlite-node`, `node-sqlite`, `effect-schema`. Peers `effect >=4.0.0`, `@effect/sql-sqlite-node >=4.0.0`                                                                |
 | @effect/sql-drizzle     | 0.51.0                      | **stale, don't use**                                                                                                                                                               |
-| pino                    | 10.4.0                      |                                                                                                                                                                                    |
+| pino                    | 10.4.0                      | **not used**: Effect `Logger` instead (decision 29)                                                                                                                                |
 | fast-check              | 4.10.2                      | `fc.commands`, `fc.modelRun`/`asyncModelRun`/`scheduledModelRun`, `fc.scheduler`, all with shrinking                                                                               |
 | @types/node             | 26.6.6                      |                                                                                                                                                                                    |
 
@@ -72,9 +73,8 @@ and the steady state should be flat over days. Rules that follow:
 
 - Ship a single bundled entry (`vp build` / Rolldown, `platform: node`). No `node_modules`
   in the runtime image beyond what can't be bundled.
-- **No pino transports** (they run in a `thread-stream` worker thread, which is a second V8 isolate).
-  Write JSON to stdout synchronously and let Docker or journald handle rotation. Pretty printing
-  is a dev-only pipe (`| pino-pretty`).
+- **No logging worker threads** (pino transports run in a `thread-stream` worker, a second V8
+  isolate). Logging is Effect's `Logger`, written synchronously in-process (§2b).
 - Never download video: `HEAD` segments only (see 02 §4). Don't hold the whole catalog
   JSON, only the decoded fields we use.
 - `--jitless` saves ~5 MB more but costs CPU and is (unverified) untested with Effect at
@@ -82,6 +82,26 @@ and the steady state should be flat over days. Rules that follow:
   baseline.
 - A "RAM budget" test: run a simulated week (see 04) and assert heap after GC stays under
   a bound. Leaks show up as unbounded fibers, maps or caches, which the sim catches without waiting a week.
+
+## 2b. Logging (updated 2026-10-30, decision 29)
+
+The RAM rows above include pino; the miner doesn't ship it. Logging is Effect 4.1's `Logger` in
+`src/platform/logging.ts`, so log calls stay `Effect.log*` with `Effect.annotateLogs` and
+`Effect.withLogSpan` (pino's child bindings and timers), timestamps come from `Clock` (so the
+simulator's logs replay under `TestClock`), and there's no extra dependency.
+
+- **stderr, not stdout.** stdout is command output (`doctor --json`, `config schema`).
+- **Dev/prod is one switch, `LOG_FORMAT`.** Unset: `pretty` when stderr is a terminal, `json`
+  (one flat object per line, annotations as top-level keys, like pino) otherwise. `LOG_LEVEL`
+  sets the minimum level (default `Info`).
+- **Redaction** (pino's `redact`) is the journal's `redact` applied to every entry: message,
+  annotations, extra data and the pretty-printed cause.
+- **Rotation in-process.** Docker and journald rotate stderr, but the single binary and npx
+  installs (decision 18) have nobody to do it. So a JSON copy goes to `$DATA_DIR/logs/miner.log`,
+  rotated at 10 MiB with 5 old files kept (≤ 60 MB on disk). It's batched (1 s window,
+  `Logger.batched`), created on the first log line, and a failed write is dropped, never fatal.
+  `LOG_FILE=false` turns it off where a log driver already keeps stderr. Effect's own
+  `Logger.toFile` doesn't rotate, which is why this is ours. No gzip: 60 MB doesn't need it.
 
 ## 3. Persistence: do we need SQL at all?
 

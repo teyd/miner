@@ -20,6 +20,7 @@ import {
   MAX_UNCONFIRMED_MINUTES,
   ONLINE_DELAY,
   STALL_AFTER,
+  SUBSCRIBE_SETTLE,
   VALIDATE_INTERVAL,
   WATCHLIST_LIMIT,
   WATCH_INTERVAL,
@@ -76,6 +77,7 @@ const handle = (s: State, event: Event, now: Millis): Handled => {
             validate: now + VALIDATE_INTERVAL,
             tick: undefined,
             online: new Map(),
+            subscribe: undefined,
           },
         },
         [Command.ValidateToken()],
@@ -103,7 +105,7 @@ const handle = (s: State, event: Event, now: Millis): Handled => {
           auth: "needs-login",
           watch: { _tag: "Idle", reason: "needs-login" },
           subscriptions: [],
-          deadlines: { ...s.deadlines, tick: undefined, online: new Map() },
+          deadlines: { ...s.deadlines, tick: undefined, online: new Map(), subscribe: undefined },
         },
         [
           ...(s.watch._tag === "Watching" ? [Command.StopWatching()] : []),
@@ -427,11 +429,24 @@ const sendClaims = (s: State, now: Millis): Handled => {
   return commands.length === 0 ? [s, []] : [{ ...s, claims }, commands];
 };
 
+/**
+ * Follow the channels the plan wants. A change waits `SUBSCRIBE_SETTLE` from when it was first
+ * seen, so a burst of reads coalesces into one `Subscribe` of the set wanted at the deadline; a
+ * change that undoes itself before then sends nothing.
+ */
 const follow = (s: State, now: Millis): Handled => {
   if (s.auth !== "valid" || s.catalog === undefined) return [s, []];
   const desired = watchlist(planInput(s, s.catalog, now), WATCHLIST_LIMIT).toSorted();
-  if (sameMembers(desired, s.subscriptions)) return [s, []];
-  return [{ ...s, subscriptions: desired }, [Command.Subscribe({ channelIds: desired })]];
+  const pending = s.deadlines.subscribe;
+  const withDeadline = (subscribe: Millis | undefined): State =>
+    subscribe === pending ? s : { ...s, deadlines: { ...s.deadlines, subscribe } };
+  if (sameMembers(desired, s.subscriptions)) return [withDeadline(undefined), []];
+  if (pending === undefined) return [withDeadline(now + SUBSCRIBE_SETTLE), []];
+  if (now < pending) return [s, []];
+  return [
+    { ...withDeadline(undefined), subscriptions: desired },
+    [Command.Subscribe({ channelIds: desired })],
+  ];
 };
 
 /** Ask for the channels that can credit the minable campaigns: the directory or the allow-list. */

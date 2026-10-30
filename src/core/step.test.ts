@@ -9,6 +9,7 @@ import {
   nextDeadline,
   ONLINE_DELAY,
   STALL_AFTER,
+  SUBSCRIBE_SETTLE,
   WATCH_INTERVAL,
   type State,
 } from "./state.ts";
@@ -47,6 +48,12 @@ const startedWatching = (campaigns: ReadonlyArray<Campaign>, channels: ReadonlyA
   return d;
 };
 
+/** Lets a pending change of the followed channels go out. */
+const settle = (d: ReturnType<typeof driver>) => d.send(Event.Tick(), d.now + SUBSCRIBE_SETTLE);
+
+const subscribes = (commands: ReadonlyArray<Command>) =>
+  commands.flatMap((c) => (c._tag === "Subscribe" ? [c.channelIds] : []));
+
 const watchedChannel = (s: State) =>
   s.watch._tag === "Watching" ? s.watch.channelId : s.watch.reason;
 
@@ -58,11 +65,12 @@ describe("start-up", () => {
     const listed = campaign("listed", { allowedChannels: [chid("x")] });
     assert.deepStrictEqual(
       tags(d.send(Event.CatalogRead({ campaigns: [campaign("c"), listed] }))),
-      ["ReadDirectory", "ReadChannels", "Subscribe"],
+      ["ReadDirectory", "ReadChannels"],
     );
     const commands = d.send(Event.ChannelsRead({ channels: [channel("a")] }));
-    assert.deepStrictEqual(tags(commands), ["Watch", "Subscribe"]);
+    assert.deepStrictEqual(tags(commands), ["Watch"]);
     assert.strictEqual(watchedChannel(d.state), "a");
+    assert.deepStrictEqual(subscribes(settle(d)), [[chid("a"), chid("x")]]);
   });
 
   it("tells a broken catalog apart from an empty one", () => {
@@ -97,16 +105,18 @@ describe("switching", () => {
 
   it("doesn't hop to a busier channel of the same campaign", () => {
     const d = startedWatching([campaign("c")], [channel("a")]);
+    settle(d);
     assert.deepStrictEqual(
       tags(d.send(Event.ChannelsRead({ channels: [channel("b", { viewers: 9000 })] }))),
-      ["Subscribe"],
+      [],
     );
     assert.strictEqual(watchedChannel(d.state), "a");
   });
 
   it("stays subscribed to a channel that goes offline, to hear when it's back", () => {
     const d = startedWatching([campaign("c")], [channel("a"), channel("b")]);
-    d.send(Event.StreamDown({ channelId: chid("b") }));
+    settle(d);
+    assert.deepStrictEqual(tags(d.send(Event.StreamDown({ channelId: chid("b") }))), []);
     assert.deepStrictEqual(d.state.subscriptions, [chid("a"), chid("b")]);
   });
 
@@ -135,12 +145,14 @@ describe("switching", () => {
 describe("progress", () => {
   it("ticks every watch interval and wakes for it", () => {
     const d = startedWatching([campaign("c")], [channel("a")]);
+    settle(d);
     assert.strictEqual(nextDeadline(d.state), T0 + WATCH_INTERVAL);
     assert.deepStrictEqual(tags(d.send(Event.Tick(), T0 + WATCH_INTERVAL)), ["WatchTick"]);
   });
 
   it("asks which drop is credited once its estimate runs 15 minutes ahead of Twitch", () => {
     const d = startedWatching([campaign("c")], [channel("a")]);
+    settle(d);
     const ticks: Array<string> = [];
     for (let i = 1; i <= 45; i++)
       ticks.push(
@@ -327,6 +339,7 @@ describe("claims", () => {
     const d = startedWatching([c], [channel("a")]);
     d.send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }));
     d.send(Event.ClaimResult({ campaignId: c.id, dropId: did("c-d1"), outcome: "unknown" }));
+    settle(d);
     assert.strictEqual(d.state.deadlines.inventory, T0 + CLAIM_RECHECK);
     assert.strictEqual(nextDeadline(d.state), T0 + WATCH_INTERVAL);
     d.send(Event.Tick(), T0 + CLAIM_RECHECK);
@@ -367,9 +380,72 @@ describe("claims", () => {
   });
 });
 
+describe("following", () => {
+  const c = campaign("c");
+
+  it("sends nothing when a read leaves the followed set as it is", () => {
+    const d = startedWatching([c], [channel("a"), channel("b")]);
+    settle(d);
+    assert.deepStrictEqual(tags(d.send(Event.ChannelsRead({ channels: [channel("b")] }))), []);
+    assert.deepStrictEqual(tags(d.send(Event.CatalogRead({ campaigns: [c] }))), ["ReadDirectory"]);
+    assert.isUndefined(d.state.deadlines.subscribe);
+  });
+
+  it("coalesces a burst of reads into one Subscribe, at most SUBSCRIBE_SETTLE after the first", () => {
+    const d = startedWatching([c], [channel("a")]);
+    settle(d);
+    const start = d.now;
+    const sent: Array<ReadonlyArray<string>> = [];
+    for (const [i, id] of ["b", "c", "d"].entries()) {
+      // Each answer moves the set; none extends the wait.
+      const at = start + i * 4_000;
+      sent.push(...subscribes(d.send(Event.ChannelsRead({ channels: [channel(id)] }), at)));
+      assert.strictEqual(nextDeadline(d.state), start + SUBSCRIBE_SETTLE);
+    }
+    sent.push(...subscribes(d.send(Event.Tick(), start + SUBSCRIBE_SETTLE)));
+    assert.deepStrictEqual(sent, [[chid("a"), chid("b"), chid("c"), chid("d")]]);
+    assert.isUndefined(d.state.deadlines.subscribe);
+    assert.deepStrictEqual(subscribes(d.send(Event.Tick(), start + 2 * SUBSCRIBE_SETTLE)), []);
+  });
+
+  it("drops a change that undoes itself before it goes out", () => {
+    const d = startedWatching([c], [channel("a")]);
+    settle(d);
+    d.send(Event.ChannelsRead({ channels: [channel("b")] }));
+    assert.isDefined(d.state.deadlines.subscribe);
+    d.send(Event.GameChanged({ channelId: chid("b"), gameId: undefined }));
+    assert.isUndefined(d.state.deadlines.subscribe);
+    assert.deepStrictEqual(subscribes(settle(d)), []);
+  });
+
+  it("follows again, once, after a restart: the sockets died with the process", () => {
+    const d = startedWatching([c], [channel("a"), channel("b")]);
+    assert.deepStrictEqual(subscribes(settle(d)), [[chid("a"), chid("b")]]);
+    const restarted = driver(d.state);
+    restarted.send(Event.Started(), d.now + MINUTE);
+    assert.deepStrictEqual(restarted.state.subscriptions, []);
+    restarted.send(Event.TokenValid());
+    restarted.send(Event.CatalogRead({ campaigns: [c] }));
+    const commands = [
+      ...restarted.send(Event.ChannelsRead({ channels: [channel("a")] })),
+      ...restarted.send(Event.ChannelsRead({ channels: [channel("b")] })),
+      ...settle(restarted),
+    ];
+    assert.deepStrictEqual(subscribes(commands), [[chid("a"), chid("b")]]);
+  });
+
+  it("forgets a pending change on a refused token, and sends nothing never followed", () => {
+    const d = startedWatching([c], [channel("a")]);
+    assert.isDefined(d.state.deadlines.subscribe);
+    assert.deepStrictEqual(tags(d.send(Event.AuthFailed())), ["StopWatching"]);
+    assert.isUndefined(d.state.deadlines.subscribe);
+  });
+});
+
 describe("auth", () => {
   it("parks on a refused token: stops, unsubscribes, then does nothing", () => {
     const d = startedWatching([campaign("c")], [channel("a")]);
+    settle(d);
     assert.deepStrictEqual(tags(d.send(Event.AuthFailed())), ["StopWatching", "Subscribe"]);
     assert.strictEqual(watchedChannel(d.state), "needs-login");
     assert.deepStrictEqual(d.send(Event.Tick(), T0 + 2 * HOUR), []);

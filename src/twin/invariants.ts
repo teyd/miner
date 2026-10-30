@@ -3,6 +3,7 @@ import {
   INVENTORY_INTERVAL,
   ONLINE_DELAY,
   STALL_AFTER,
+  SUBSCRIBE_SETTLE,
   WATCH_INTERVAL,
   type State,
 } from "../core/state.ts";
@@ -91,6 +92,10 @@ export interface Checker {
   readonly lastWantedCredit: ReadonlyMap<ChannelId, Millis>;
   readonly lastObservedAt: Millis;
   readonly lastSaved: string | undefined;
+  /** The core's last `Subscribe` since a restart. */
+  readonly lastSubscribe:
+    | { readonly at: Millis; readonly channelIds: ReadonlyArray<ChannelId> }
+    | undefined;
 }
 
 export const initialChecker: Checker = {
@@ -110,6 +115,7 @@ export const initialChecker: Checker = {
   lastWantedCredit: new Map(),
   lastObservedAt: SIM_EPOCH,
   lastSaved: undefined,
+  lastSubscribe: undefined,
 };
 
 /** Whether the settings ask for this campaign, judged independently of the core's rules. */
@@ -193,6 +199,7 @@ export const checkStep = (
       watchSince: undefined,
       fairlyAvoided: new Set(),
       heard: new Set(),
+      lastSubscribe: undefined,
     };
   }
 
@@ -370,6 +377,22 @@ const checkCommands = (
       case "StopWatching":
         c = { ...c, watching: undefined };
         break;
+      case "Subscribe": {
+        // Churn: the same set twice without a restart, or a new set sooner than the settle time
+        // after the last (unsubscribing on a refused token goes out at once).
+        const last = c.lastSubscribe;
+        if (last !== undefined && canonical(last.channelIds) === canonical(command.channelIds)) {
+          fail("SubscribeChurn", `the same ${command.channelIds.length} channels again`);
+        } else if (
+          last !== undefined &&
+          command.channelIds.length > 0 &&
+          o.now - last.at < SUBSCRIBE_SETTLE
+        ) {
+          fail("SubscribeChurn", `a new set ${o.now - last.at} ms after the last`);
+        }
+        c = { ...c, lastSubscribe: { at: o.now, channelIds: command.channelIds } };
+        break;
+      }
       case "WatchTick":
         // 1: a tick for a channel the core never opened a session on.
         if (c.watching !== command.channelId) {

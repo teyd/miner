@@ -31,6 +31,13 @@ export const CLAIM_RECHECK: Millis = MINUTE;
 export const STALL_AFTER: Millis = 30 * MINUTE;
 /** Upper bound on followed channels (TDM fits 199 in 8 sockets of 50 topics). */
 export const WATCHLIST_LIMIT = 100;
+/**
+ * A change to the followed channels waits this long, so the burst of directory and channel reads
+ * after a catalog read ends in one `Subscribe`, not one per answer (the first shadow run sent six
+ * in 1.5 s, each moving 3 to 28 of 100 channels). Reads start 300 ms apart (`pace.ts`), so 10 s
+ * covers about 30 of them.
+ */
+export const SUBSCRIBE_SETTLE: Millis = 10_000;
 
 export interface Watching {
   readonly _tag: "Watching";
@@ -76,6 +83,8 @@ export interface Deadlines {
   readonly tick: Millis | undefined;
   /** Channels that sent `stream-up`, re-read once their stream data exists. */
   readonly online: ReadonlyMap<ChannelId, Millis>;
+  /** The followed channels differ from what the plan wants: send the plan's set then. */
+  readonly subscribe: Millis | undefined;
 }
 
 export interface State {
@@ -104,7 +113,14 @@ export const initial = (settings: Settings): State => ({
   watch: { _tag: "Idle", reason: "starting" },
   claims: new Map(),
   subscriptions: [],
-  deadlines: { validate: 0, catalog: 0, inventory: 0, tick: undefined, online: new Map() },
+  deadlines: {
+    validate: 0,
+    catalog: 0,
+    inventory: 0,
+    tick: undefined,
+    online: new Map(),
+    subscribe: undefined,
+  },
 });
 
 /** When the runtime must wake the core next, whatever events arrive. */
@@ -117,6 +133,13 @@ export const nextDeadline = (state: State): Millis | undefined => {
     case "unknown":
       return d.validate;
     case "valid":
-      return Math.min(d.validate, d.catalog, d.inventory, d.tick ?? Infinity, ...d.online.values());
+      return Math.min(
+        d.validate,
+        d.catalog,
+        d.inventory,
+        d.tick ?? Infinity,
+        d.subscribe ?? Infinity,
+        ...d.online.values(),
+      );
   }
 };

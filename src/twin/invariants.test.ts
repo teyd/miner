@@ -12,6 +12,7 @@ import {
   CATALOG_INTERVAL,
   CLAIM_RECHECK,
   ONLINE_DELAY,
+  SUBSCRIBE_SETTLE,
   WATCH_INTERVAL,
   initial,
   type ClaimIntent,
@@ -350,6 +351,30 @@ describe("the supporting checks", () => {
     const parked: State = { ...idle, auth: "needs-login" };
     const step = record(Event.Tick(), [Command.ReadInventory()], parked, parked);
     assert.include(kinds([observation(at(60), { step, state: parked })]), "ParkedButPolling");
+  });
+
+  it("flags a Subscribe of the same set, or one sooner than SUBSCRIBE_SETTLE after the last", () => {
+    const subscribe = (now: Millis, ...ids: ReadonlyArray<ChannelId>) =>
+      observation(now, {
+        step: record(Event.Tick(), [Command.Subscribe({ channelIds: ids })]),
+      });
+    const t = at(60);
+    assert.deepStrictEqual(
+      // Unsubscribing on a refused token goes out at once.
+      kinds([
+        subscribe(t, ch0),
+        subscribe(t + SUBSCRIBE_SETTLE, ch0, ch1),
+        subscribe(t + SUBSCRIBE_SETTLE + 1),
+      ]),
+      [],
+    );
+    assert.deepStrictEqual(kinds([subscribe(t, ch0), subscribe(t + MINUTE, ch0)]), [
+      "SubscribeChurn",
+    ]);
+    assert.deepStrictEqual(kinds([subscribe(t, ch0), subscribe(t + 1, ch1)]), ["SubscribeChurn"]);
+    // A restart drops the sockets: following the same set again is right.
+    const restart = { saved: undefined, resumed: watching };
+    assert.deepStrictEqual(kinds([subscribe(t, ch0), { ...subscribe(t + 1, ch0), restart }]), []);
   });
 
   it("s2: flags more than BUSY_STEPS steps at one instant", () => {

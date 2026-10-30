@@ -1,12 +1,12 @@
 import { Clock, Effect, Layer, Redacted } from "effect";
-import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import type { ChannelId } from "../core/model.ts";
 import { GQL_URL, VALIDATE_URL } from "../twitch/identity.ts";
 import { Journal } from "../twitch/journal.ts";
 import { Credentials, Twitch } from "../twitch/Twitch.ts";
 import * as Answers from "./answers.ts";
 import type { Operation } from "./scenario.ts";
-import { TWIN_TIMEOUT, latency, type Twin } from "./twin.ts";
+import { latency, type Twin } from "./twin.ts";
 import { isRevoked, windowFaultAt } from "./world.ts";
 
 interface Sent {
@@ -64,13 +64,9 @@ export const twinHttp = (twin: Twin): HttpClient.HttpClient =>
           ),
         );
       const fault = windowFaultAt(twin.world, operation, startedAt);
-      if (fault?.kind === "timeout") {
-        yield* Effect.sleep(TWIN_TIMEOUT);
-        yield* log("timeout");
-        return yield* new HttpClientError.HttpClientError({
-          reason: new HttpClientError.TransportError({ request, description: "twin timeout" }),
-        });
-      }
+      // A hung connection: no answer ever. The client's own `REQUEST_TIMEOUT` must give up.
+      if (fault?.kind === "timeout")
+        return yield* Effect.onInterrupt(Effect.never, () => log("timeout"));
       yield* latency;
       const now = yield* Clock.currentTimeMillis;
       const reply = (status: number, body: unknown) =>

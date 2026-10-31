@@ -21,7 +21,9 @@ import {
 export const SIM_EPOCH: Millis = 1_793_275_200_000;
 
 const BOUNDS = {
-  horizonMinutes: [60, 1440],
+  /** Up to a simulated week (`heap.ts`); the generator draws a day at most (`drawnHorizon`). */
+  horizonMinutes: [60, 10_080],
+  drawnHorizon: [60, 1440],
   inventoryLagMinutes: [0, 3],
   index: [0, 7],
   short: [0, 3],
@@ -30,8 +32,11 @@ const BOUNDS = {
   campaigns: [1, 4],
   goals: [1, 3],
   rewards: [1, 3],
-  /** A campaign with drops claimed before the run may have started days before it. */
-  startMinute: [-2880, 600],
+  /**
+   * A campaign with drops claimed before the run may have started days before it; one may open
+   * any day of a week's run.
+   */
+  startMinute: [-2880, 10_080],
   /** What the generator draws. */
   drawnStart: [-120, 600],
   durationMinutes: [30, 2880],
@@ -43,7 +48,9 @@ const BOUNDS = {
   channels: [1, 8],
   viewers: [1, 10_000],
   changes: [0, 6],
-  atMinute: [0, 1440],
+  atMinute: [0, 10_080],
+  /** What the generator draws. */
+  drawnAt: [0, 1440],
   /** Up to 8 drawn with the world, 2 derived (`refusalsOf`), and 4 of the wire (`wireArbitrary`). */
   faults: [0, 14],
   apiFaults: [0, 8],
@@ -342,21 +349,21 @@ export type Capsule = typeof Capsule.Type;
 const windowFault: fc.Arbitrary<Fault> = fc.record({
   kind: fc.constantFrom(...WINDOW_FAULTS),
   operation: fc.constantFrom(...API_OPERATIONS, "any" as const),
-  atMinute: intArb("atMinute"),
+  atMinute: intArb("drawnAt"),
   durationSeconds: intArb("durationSeconds"),
 });
 
 const faultArbitrary: fc.Arbitrary<Fault> = fc.oneof(
   windowFault,
-  fc.record({ kind: fc.constant("revoke-token" as const), atMinute: intArb("atMinute") }),
-  fc.record({ kind: fc.constant("lose-claim-answer" as const), atMinute: intArb("atMinute") }),
+  fc.record({ kind: fc.constant("revoke-token" as const), atMinute: intArb("drawnAt") }),
+  fc.record({ kind: fc.constant("lose-claim-answer" as const), atMinute: intArb("drawnAt") }),
   fc.oneof(
     // A `RECONNECT`: the connection listens again 1.67–2.335 s later (run4h, `RECONNECT_GAP`).
     {
       weight: 4,
       arbitrary: fc.record({
         kind: fc.constant("reconnect" as const),
-        atMinute: intArb("atMinute"),
+        atMinute: intArb("drawnAt"),
         gapMillis: fc.integer({ min: RECONNECT_GAP.min, max: RECONNECT_GAP.max }),
       }),
     },
@@ -365,14 +372,14 @@ const faultArbitrary: fc.Arbitrary<Fault> = fc.oneof(
       weight: 1,
       arbitrary: fc.record({
         kind: fc.constant("frames-down" as const),
-        atMinute: intArb("atMinute"),
+        atMinute: intArb("drawnAt"),
         durationSeconds: intArb("durationSeconds"),
       }),
     },
   ),
   fc.record({
     kind: fc.constant("crash" as const),
-    atMinute: intArb("atMinute"),
+    atMinute: intArb("drawnAt"),
     point: fc.constantFrom(...CRASH_POINTS),
   }),
 );
@@ -382,13 +389,13 @@ const wireFaultArbitrary: fc.Arbitrary<Fault> = fc.oneof(
   fc.record({
     kind: fc.constantFrom("http-5xx", "http-429", "timeout"),
     operation: fc.constantFrom(...WATCH_OPERATIONS),
-    atMinute: intArb("atMinute"),
+    atMinute: intArb("drawnAt"),
     durationSeconds: intArb("durationSeconds"),
   }),
-  fc.record({ kind: fc.constant("pubsub-reconnect" as const), atMinute: intArb("atMinute") }),
+  fc.record({ kind: fc.constant("pubsub-reconnect" as const), atMinute: intArb("drawnAt") }),
   fc.record({
     kind: fc.constant("pubsub-outage" as const),
-    atMinute: intArb("atMinute"),
+    atMinute: intArb("drawnAt"),
     durationSeconds: intArb("durationSeconds"),
   }),
 );
@@ -480,7 +487,7 @@ const goalArbitrary: fc.Arbitrary<GoalSpec> = fc.record({
 const randomScenario: fc.Arbitrary<Scenario> = fc
   .record({
     latencySeed: fc.integer({ min: 0, max: 1_000_000 }),
-    horizonMinutes: intArb("horizonMinutes"),
+    horizonMinutes: intArb("drawnHorizon"),
     // Measured `INVENTORY_LAG_MINUTES`; 1 for a read inside the minute, 2–3 for a worse Twitch.
     inventoryLagMinutes: fc.oneof(
       { weight: 7, arbitrary: fc.constant(INVENTORY_LAG_MINUTES) },
@@ -523,7 +530,7 @@ const randomScenario: fc.Arbitrary<Scenario> = fc
         // One channel in five refuses playback, so most worlds have something to watch.
         refuses: fc.integer({ min: 0, max: 4 }).map((n) => n === 4),
         liveAtStart: fc.boolean(),
-        changes: listArb(changeArbitrary(intArb("atMinute")), "changes"),
+        changes: listArb(changeArbitrary(intArb("drawnAt")), "changes"),
       }),
       "channels",
     ),
@@ -550,7 +557,7 @@ const opportunityArbitrary = fc.record({
   durationMinutes: fc.integer({ min: 240, max: BOUNDS.durationMinutes[1] }),
   drops: listArb(dropArbitrary(fc.integer({ min: 1, max: 45 })), "drops"),
   viewers: intArb("viewers"),
-  changes: listArb(changeArbitrary(fc.integer({ min: 60, max: BOUNDS.atMinute[1] })), "changes"),
+  changes: listArb(changeArbitrary(fc.integer({ min: 60, max: BOUNDS.drawnAt[1] })), "changes"),
   /** The goal that wants it, modulo the number of goals. */
   goal: intArb("short"),
 });
@@ -580,7 +587,7 @@ const rivalArbitrary = fc.option(
       )
       .map(([first, rest]) => [first, ...rest]),
     viewers: intArb("viewers"),
-    changes: listArb(changeArbitrary(fc.integer({ min: 60, max: BOUNDS.atMinute[1] })), "changes"),
+    changes: listArb(changeArbitrary(fc.integer({ min: 60, max: BOUNDS.drawnAt[1] })), "changes"),
     /** The goal it is for, modulo the number of goals; `null`: campaign 0's goal. */
     goal: fc.option(intArb("short"), { nil: null }),
     role: fc.constantFrom("wanted", "wanted", "excluded", "unlinked"),

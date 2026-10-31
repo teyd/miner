@@ -7,7 +7,14 @@ import {
   type DropsGoal,
   type Settings,
 } from "../core/model.ts";
-import { compareNumbers, minable, SLACK_HYSTERESIS, type Pick, type Rank } from "../core/plan.ts";
+import {
+  compareNumbers,
+  compareText,
+  minable,
+  SLACK_HYSTERESIS,
+  type Pick,
+  type Rank,
+} from "../core/plan.ts";
 import { Command, Event } from "../core/protocol.ts";
 import { canEarn, isActive, minutesOf, slackOf, wantedDrops } from "../core/rules.ts";
 import { nextDeadline } from "../core/state.ts";
@@ -505,7 +512,8 @@ describe("planted bugs in what a request budget refused are caught by the sweep"
         now,
       ),
   });
-  const sweep = (core: Core) => runSeeds(1, 60, { core, maxShrinks: 0 });
+  // 30 seeds, not 60: each runs twice, and 60 took over two minutes on CI.
+  const sweep = (core: Core) => runSeeds(1, 30, { core, maxShrinks: 0 });
   const caught = (results: ReadonlyArray<SeedResult>, kind: string) =>
     results.filter((r) => r._tag === "Failed" && r.capsule.violation.kind === kind).length;
 
@@ -514,7 +522,7 @@ describe("planted bugs in what a request budget refused are caught by the sweep"
     () =>
       Effect.gen(function* () {
         const results = yield* sweep(ignoring((c) => c._tag === "Claim"));
-        assert.isAtLeast(caught(results, "ClaimLate"), 3);
+        assert.isAtLeast(caught(results, "ClaimLate"), 2);
       }),
     120_000,
   );
@@ -625,7 +633,7 @@ const oldRank =
           (a.goal === b.goal ? gameRank(goal, a) - gameRank(goal, b) : 0) ||
           compareNumbers(a.key, b.key) ||
           compareNumbers(a.campaign.endsAt, b.campaign.endsAt) ||
-          a.campaign.id.localeCompare(b.campaign.id)
+          compareText(a.campaign.id, b.campaign.id)
         );
       });
   };

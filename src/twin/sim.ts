@@ -63,6 +63,14 @@ export interface RunOptions {
   readonly maxHorizonMinutes?: number;
   /** The miner's request budgets; the real ones by default. Tests plant `UNLIMITED`. */
   readonly limits?: { readonly gql?: Limits; readonly cdn?: Limits };
+  /**
+   * Runs between steps once virtual time reaches each multiple of `everyMinutes`, with the minutes
+   * since the start: `heap.ts` samples memory there. It must not touch the run.
+   */
+  readonly probe?: {
+    readonly everyMinutes: number;
+    readonly run: (minute: number) => Effect.Effect<void>;
+  };
 }
 
 export interface RunResult {
@@ -257,6 +265,8 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
     const afterPersist = crashes("after-persist");
 
     let now: Millis = SIM_EPOCH;
+    const probe = options?.probe;
+    let nextProbe: Millis = SIM_EPOCH + (probe?.everyMinutes ?? 0) * MINUTE;
     let state: State = initial(world0.settings);
     let saved: string | undefined;
     let inbox: Array<Queued> = [];
@@ -477,6 +487,10 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
       }
 
       observe(undefined);
+      if (probe !== undefined && now >= nextProbe) {
+        yield* probe.run(Math.floor((now - SIM_EPOCH) / MINUTE));
+        while (nextProbe <= now) nextProbe += probe.everyMinutes * MINUTE;
+      }
       if (found !== undefined || now >= horizon) break;
       const edgeAt = nextEdgeAt(twin);
       const candidates = [

@@ -138,8 +138,8 @@ docker compose logs -f
 `doctor` should print `token: ok, <your login> (user …)`, followed by how many campaigns and
 drops it can see.
 
-The image is `node:26-alpine` plus one 2 MB JavaScript file, about 250 MB on disk and 63 MB to
-download. Logs are JSON on stderr, so `docker logs` and log collectors can parse them. Uncomment
+The image is `node:26-alpine` plus one 0.8 MB JavaScript file, about 250 MB on disk and 63 MB to
+download. The miner runs in about 90 MB of RAM. Logs are JSON on stderr, so `docker logs` and log collectors can parse them. Uncomment
 `LOG_FORMAT: pretty` in [`compose.yaml`](compose.yaml) for the readable lines shown in
 section 4. `docker compose down` or `docker stop` stops the miner cleanly.
 
@@ -177,7 +177,9 @@ sudo systemctl enable --now miner
 journalctl -u miner -f
 ```
 
-The unit runs node directly as the `miner` user, with the token from `/etc/miner/miner.env`.
+The unit runs node directly as the `miner` user, with the token from `/etc/miner/miner.env`, and
+with flags that keep it near 85 MB of RAM instead of 130 (V8's interpreter only, and glibc giving
+freed memory back; [research 03 §2c](docs/research/03-stack-and-ram.md)).
 systemd reads that file as root, so the miner itself can't read it back. The unit is sandboxed:
 read-only system, no home directories, network and `/var/lib/miner` only. `journalctl` gets
 readable lines (`LOG_FORMAT=pretty`) and keeps them, so the JSON file copy is off. After a crash it
@@ -197,6 +199,13 @@ export DATA_DIR=~/miner-data
 node dist/bin.mjs config init
 node dist/bin.mjs doctor
 node dist/bin.mjs run          # Ctrl-C stops it
+```
+
+`run` holds about 130 MB of RAM started plainly. With the flags the unit and the image use,
+about 85–100 MB:
+
+```sh
+MALLOC_MMAP_THRESHOLD_=16384 node --optimize-for-size --no-opt --no-maglev --no-sparkplug dist/bin.mjs run
 ```
 
 On a terminal the log lines are readable and coloured. A JSON copy also goes to

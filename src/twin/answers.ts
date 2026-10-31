@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import type { ChannelId, Millis } from "../core/model.ts";
+import { compareText } from "../core/plan.ts";
 import { CLIENT_ID } from "../twitch/identity.ts";
 import {
   CampaignDetails,
@@ -136,7 +137,7 @@ export const directory = (world: World, slug: string, limit: number, now: Millis
                     liveAt(world, ch.id, now) &&
                     gameAt(world, ch.id, now) === game.id,
                 )
-                .toSorted((a, b) => b.viewers - a.viewers || a.login.localeCompare(b.login))
+                .toSorted((a, b) => b.viewers - a.viewers || compareText(a.login, b.login))
                 .slice(0, limit)
                 .map((ch) => ({
                   node: {

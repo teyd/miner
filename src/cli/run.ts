@@ -37,6 +37,7 @@ export const run = Command.make(
     ),
   },
   Effect.fn(function* ({ shadow }) {
+    // Before the services are built: the run is the miner's one long-lived process.
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const dir = path.resolve(yield* dataDir);

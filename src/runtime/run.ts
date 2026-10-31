@@ -43,7 +43,7 @@ export const countAt = (
  * The runtime: one scheduler fiber that owns the state. It takes the next event, or a `Tick` when
  * `nextDeadline(state)` comes first, steps the core, saves the new state, and only then starts
  * the step's commands. Commands run on their own fibers and come back as events, PubSub frames
- * arrive as events too, so a slow read never delays the scheduler; the deadlines live in `State`, so there are no other timers
+ * arrive as events too, so a slow read never delays the scheduler; the deadlines live in `State`, so there are no other timers besides the status heartbeat and the 10 s config poll
  * (critique 08 §6.1). The one other wake-up is the status heartbeat, which writes
  * `status.json` without stepping the core.
  *

@@ -14,22 +14,34 @@ export const RELOAD_EVERY: Millis = 10_000;
  * modification times (the tests' memory one) is fingerprinted by its content instead, so a
  * change is never missed, only read for.
  */
-const fingerprint = (fs: FileSystem.FileSystem, path: string): Effect.Effect<string> =>
+export const fingerprint = (fs: FileSystem.FileSystem, path: string): Effect.Effect<string> =>
   fs.stat(path).pipe(
     Effect.flatMap((info) =>
-      Option.match(info.mtime, {
-        onSome: (mtime) => Effect.succeed(`${mtime.getTime()}:${String(info.size)}`),
-        onNone: () =>
-          fs
-            .readFileString(path)
-            .pipe(Effect.map((text) => `content:${String(info.size)}:${text}`)),
-      }),
+      info.size > MAX_CONFIG_BYTES
+        ? Effect.succeed(`huge:${String(info.size)}`)
+        : Option.match(info.mtime, {
+            onSome: (mtime) => Effect.succeed(`${mtime.getTime()}:${String(info.size)}`),
+            onNone: () =>
+              fs
+                .readFileString(path)
+                .pipe(Effect.map((text) => `content:${String(info.size)}:${text}`)),
+          }),
     ),
     // Gone or unreadable is a state too: `load` says which when it changes.
     Effect.catch((e) => Effect.succeed(`error:${e.reason._tag}`)),
   );
 
+/** A real config is a few kilobytes; anything near this is not one, and is not parsed. */
+export const MAX_CONFIG_BYTES = 1 << 20;
+
 const line = (path: string, p: Problem) => `${path}#${p.pointer}: ${p.message}`;
+
+/** A file that is not a config can produce hundreds of problems; say the first few and how many. */
+const PROBLEMS_SHOWN = 5;
+const capped = (problems: ReadonlyArray<string>): ReadonlyArray<string> =>
+  problems.length <= PROBLEMS_SHOWN
+    ? problems
+    : [...problems.slice(0, PROBLEMS_SHOWN), `… and ${problems.length - PROBLEMS_SHOWN} more`];
 
 /**
  * `config.json` while the miner runs (decision 28: the file reloads). `poll` looks at the file
@@ -43,10 +55,12 @@ const line = (path: string, p: Problem) => `${path}#${p.pointer}: ${p.message}`;
 export const makeConfigWatch = (
   path: string,
   initial: Config,
+  /** The fingerprint `initial` was read at, so an edit in between is not taken as the baseline. */
+  baseline?: string,
 ): Effect.Effect<ConfigWatch, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    let seen = yield* fingerprint(fs, path);
+    let seen = baseline ?? (yield* fingerprint(fs, path));
     let current = initial;
     let notes = new Set(unmapped(initial));
     let facts: ConfigFacts = { reloadedAt: undefined, rejected: undefined };
@@ -65,7 +79,6 @@ export const makeConfigWatch = (
     const poll: Effect.Effect<boolean> = Effect.gen(function* () {
       const now = yield* fingerprint(fs, path);
       if (now === seen) return false;
-      seen = now;
       const loaded = yield* load(path).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.catch((e) =>
@@ -77,10 +90,14 @@ export const makeConfigWatch = (
         ),
       );
       if (loaded._tag === "Missing") {
+        seen = now;
         return yield* reject([`${path}: the file is gone; restart the miner to use the defaults`]);
       }
-      if (loaded._tag === "Invalid")
-        return yield* reject(loaded.problems.map((p) => line(path, p)));
+      if (loaded._tag === "Invalid") {
+        seen = now;
+        return yield* reject(capped(loaded.problems.map((p) => line(path, p))));
+      }
+      seen = now;
       if (facts.rejected !== undefined) {
         facts = { ...facts, rejected: undefined };
         yield* Effect.logInfo(`config: ${path} is valid again`);

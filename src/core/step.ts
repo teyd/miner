@@ -310,7 +310,17 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
       if (s.auth !== "valid" || s.catalog === undefined) return [s, []];
       const before = planInput({ ...s, settings: event.previous }, s.catalog, now);
       const wanted = new Set(rank(before).map(({ campaign }) => campaign.id));
-      return discoverUnreached(s, now, rank, (c) => !wanted.has(c.id));
+      // A campaign the new settings still want but no longer reach on a known channel (a new
+      // exclusion, a narrower reward type) needs its channels read too, or it waits for the next
+      // catalog read (review of C3, P2-4).
+      const nowWanted = new Set(
+        rank(planInput(s, s.catalog, now)).map(({ campaign }) => campaign.id),
+      );
+      const known = [...s.channels.values()];
+      const excluded = new Set(s.settings.goals.flatMap((g) => g.excludeChannels));
+      const unreachedNow = (c: Campaign) =>
+        nowWanted.has(c.id) && !known.some((ch) => channelCanEarn(c, ch, [...excluded], s.avoid));
+      return discoverUnreached(s, now, rank, (c) => !wanted.has(c.id) || unreachedNow(c));
     }
   }
 };

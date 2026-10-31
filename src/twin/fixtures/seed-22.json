@@ -1,0 +1,205 @@
+{
+  "latencySeed": 0,
+  "horizonMinutes": 331,
+  "inventoryLagMinutes": 0,
+  "claimedFlagLagSeconds": 0,
+  "frameGaps": [2],
+  "claimFrames": false,
+  "settings": {
+    "goals": [
+      {
+        "games": null,
+        "rewards": ["item"],
+        "excludeGames": [],
+        "exclude": [],
+        "linkedOnly": false,
+        "order": "ending-soonest"
+      },
+      {
+        "games": null,
+        "rewards": ["item", "badge"],
+        "excludeGames": [],
+        "exclude": [],
+        "linkedOnly": true,
+        "order": "ending-soonest"
+      }
+    ]
+  },
+  "campaigns": [
+    {
+      "game": 2,
+      "startMinute": -34,
+      "durationMinutes": 1799,
+      "linked": true,
+      "allowList": [],
+      "drops": [
+        {
+          "requiredMinutes": 20,
+          "after": 0,
+          "benefit": "BADGE"
+        },
+        {
+          "requiredMinutes": 26,
+          "after": 0,
+          "benefit": "EMOTE"
+        },
+        {
+          "requiredMinutes": 17,
+          "after": 1,
+          "benefit": "BADGE"
+        }
+      ]
+    },
+    {
+      "game": 0,
+      "startMinute": -23,
+      "durationMinutes": 1850,
+      "linked": false,
+      "allowList": [],
+      "drops": [
+        {
+          "requiredMinutes": 23,
+          "after": 0,
+          "benefit": "DIRECT_ENTITLEMENT"
+        },
+        {
+          "requiredMinutes": 62,
+          "after": 0,
+          "benefit": "DIRECT_ENTITLEMENT"
+        },
+        {
+          "requiredMinutes": 9,
+          "after": 1,
+          "benefit": "DIRECT_ENTITLEMENT"
+        }
+      ]
+    },
+    {
+      "game": 0,
+      "startMinute": 40,
+      "durationMinutes": 278,
+      "linked": false,
+      "creditsUnlinked": false,
+      "allowList": [3, 7, 6],
+      "drops": [
+        {
+          "requiredMinutes": 144,
+          "after": 0,
+          "benefit": "EMOTE",
+          "window": {
+            "startMinute": 332,
+            "durationMinutes": 1041
+          }
+        },
+        {
+          "requiredMinutes": 147,
+          "after": 0,
+          "benefit": "DIRECT_ENTITLEMENT"
+        },
+        {
+          "requiredMinutes": 110,
+          "after": 1,
+          "benefit": "DIRECT_ENTITLEMENT"
+        }
+      ],
+      "claimedBefore": 0
+    },
+    {
+      "game": 1,
+      "startMinute": 596,
+      "durationMinutes": 1546,
+      "linked": false,
+      "creditsUnlinked": false,
+      "allowList": [],
+      "drops": [
+        {
+          "requiredMinutes": 183,
+          "after": null,
+          "benefit": "DIRECT_ENTITLEMENT",
+          "window": {
+            "startMinute": 343,
+            "durationMinutes": 1271
+          }
+        }
+      ],
+      "claimedBefore": 0
+    }
+  ],
+  "channels": [
+    {
+      "game": 2,
+      "viewers": 4,
+      "dropsEnabled": true,
+      "refuses": false,
+      "liveAtStart": true,
+      "changes": [
+        {
+          "atMinute": 1377,
+          "to": "down"
+        },
+        {
+          "atMinute": 250,
+          "to": "game-0"
+        },
+        {
+          "atMinute": 1178,
+          "to": "down"
+        },
+        {
+          "atMinute": 462,
+          "to": "up"
+        }
+      ]
+    },
+    {
+      "game": 0,
+      "viewers": 9982,
+      "dropsEnabled": true,
+      "refuses": false,
+      "liveAtStart": true,
+      "changes": [
+        {
+          "atMinute": 1150,
+          "to": "down"
+        },
+        {
+          "atMinute": 1428,
+          "to": "up"
+        }
+      ]
+    },
+    {
+      "game": 2,
+      "viewers": 9999,
+      "dropsEnabled": false,
+      "refuses": false,
+      "liveAtStart": true,
+      "changes": [
+        {
+          "atMinute": 469,
+          "to": "up"
+        },
+        {
+          "atMinute": 811,
+          "to": "down"
+        },
+        {
+          "atMinute": 1359,
+          "to": "up"
+        }
+      ]
+    }
+  ],
+  "faults": [
+    {
+      "kind": "lose-claim-answer",
+      "atMinute": 948
+    },
+    {
+      "kind": "null-catalog",
+      "operation": "DirectoryPage_Game",
+      "atMinute": 648,
+      "durationSeconds": 783
+    }
+  ]
+}

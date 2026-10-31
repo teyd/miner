@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { CLAIM_GRACE, HOUR, MINUTE, type ChannelId, type DropId } from "../core/model.ts";
 import { WATCH_INTERVAL } from "../core/state.ts";
+import { CLAIMED_FLAG_LAG_MAX, FRAME_GAPS } from "./calibration.ts";
 import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Scenario } from "./scenario.ts";
 import {
   GAMES,
@@ -15,6 +16,7 @@ import {
   inventoryView,
   minutesAt,
   openSession,
+  sessionDrop,
   tick,
   type World,
 } from "./world.ts";
@@ -46,6 +48,7 @@ const world = (
   campaigns: ReadonlyArray<CampaignSpec>,
   channels: ReadonlyArray<ChannelSpec> = [channelSpec()],
   lag = 0,
+  extra: Partial<Scenario> = {},
 ): World =>
   buildWorld({
     latencySeed: 1,
@@ -55,6 +58,7 @@ const world = (
     campaigns,
     channels,
     faults: [],
+    ...extra,
   });
 
 const ch = (i: number) => `ch${i}` as ChannelId;
@@ -181,14 +185,22 @@ describe("world", () => {
     assert.isUndefined(creditedCampaign(disabled, ch(0), T));
   });
 
-  it("completes a drop with an instance id, a drop-claim frame and a current-drop answer", () => {
-    const w = world([campaignSpec()]);
-    const { world: watched, frames } = watchFor(w, ch(0), 2);
+  it("completes a drop with an instance id and a current-drop answer, and no drop-claim frame", () => {
+    const { world: watched, frames } = watchFor(world([campaignSpec()]), ch(0), 2);
     assert.deepStrictEqual(
       frames.map((f) => f.event._tag),
-      ["DropProgress", "DropProgress", "DropClaimable"],
+      ["DropProgress", "DropProgress"],
     );
-    const claimable = frames.at(-1)?.event;
+    assert.strictEqual(
+      inventoryView(watched, T + 2 * MINUTE)[0]?.drops[0]?.instanceId,
+      instanceOf(drop("c0-d0")),
+    );
+    const asked = watchFor(
+      world([campaignSpec()], [channelSpec()], 0, { claimFrames: true }),
+      ch(0),
+      2,
+    );
+    const claimable = asked.frames.at(-1)?.event;
     assert.strictEqual(
       claimable?._tag === "DropClaimable" ? claimable.instanceId : "",
       instanceOf(drop("c0-d0")),
@@ -220,18 +232,29 @@ describe("world", () => {
     assert.strictEqual(claim(world([spec]), instance, T + MINUTE).outcome, "rejected");
   });
 
-  it("shows inventory minutes late by the lag, and the claimed flag 10 s after the claim", () => {
-    const w = world([campaignSpec()], [channelSpec()], 2);
-    const watched = watchFor(w, ch(0), 2).world;
+  it("shows inventory minutes late by the lag, and the claimed flag late by the scenario's lag", () => {
+    const two = campaignSpec({
+      drops: [
+        { requiredMinutes: 2, after: null, benefit: "DIRECT_ENTITLEMENT" },
+        { requiredMinutes: 60, after: null, benefit: "DIRECT_ENTITLEMENT" },
+      ],
+    });
+    const watched = watchFor(world([two], [channelSpec()], 2), ch(0), 2).world;
     const done = T + 2 * MINUTE;
     const at = (now: number) => inventoryView(watched, now)[0]?.drops[0];
     assert.isUndefined(at(done));
     assert.strictEqual(at(done + 2 * MINUTE)?.minutes, 2);
     assert.strictEqual(at(done + 2 * MINUTE)?.instanceId, instanceOf(drop("c0-d0")));
-    const claimed = claim(watched, instanceOf(drop("c0-d0")), done + 2 * MINUTE).world;
-    const view = (now: number) => inventoryView(claimed, now)[0]?.drops[0]?.claimed;
-    assert.isFalse(view(done + 2 * MINUTE + CLAIMED_FLAG_LAG - 1));
-    assert.isTrue(view(done + 2 * MINUTE + CLAIMED_FLAG_LAG));
+    for (const [lag, extra] of [
+      [CLAIMED_FLAG_LAG, {}],
+      [CLAIMED_FLAG_LAG_MAX, { claimedFlagLagSeconds: CLAIMED_FLAG_LAG_MAX / 1000 }],
+    ] as const) {
+      const w = watchFor(world([two], [channelSpec()], 2, extra), ch(0), 2).world;
+      const claimed = claim(w, instanceOf(drop("c0-d0")), done + 2 * MINUTE).world;
+      const view = (now: number) => inventoryView(claimed, now)[0]?.drops[0]?.claimed;
+      assert.isFalse(view(done + 2 * MINUTE + lag - 1));
+      assert.isTrue(view(done + 2 * MINUTE + lag));
+    }
   });
 
   it("sends stream frames only for subscribed channels, a second after the change", () => {
@@ -296,5 +319,184 @@ describe("rewards received before the run, and Twitch crediting one drop only", 
     assert.deepStrictEqual(awardsAt(claimed, T + 3 * MINUTE + CLAIMED_FLAG_LAG), [
       { benefitId: "c0-d0-b", at: T + 3 * MINUTE },
     ]);
+  });
+});
+
+/** Rules measured on the 2026-10-30 recordings (`calibration.ts`, research 04 §2b). */
+describe("calibrated rules", () => {
+  const apex = campaignSpec({
+    drops: [
+      { requiredMinutes: 15, after: null, benefit: "DIRECT_ENTITLEMENT" },
+      { requiredMinutes: 60, after: null, benefit: "DIRECT_ENTITLEMENT" },
+    ],
+  });
+  const progress = (frames: ReadonlyArray<{ readonly event: { readonly _tag: string } }>) =>
+    frames.flatMap((f) =>
+      f.event._tag === "DropProgress"
+        ? [f.event as unknown as { dropId: string; minutes: number }]
+        : [],
+    );
+
+  it("progresses every earnable drop of the campaign each minute (APEX Pack and Holospray)", () => {
+    const watched = watchFor(world([apex]), ch(0), 9).world;
+    assert.strictEqual(minutesAt(watched, drop("c0-d0"), T + HOUR), 9);
+    assert.strictEqual(minutesAt(watched, drop("c0-d1"), T + HOUR), 9);
+  });
+
+  it("frames only the drop closest to done, on its gap schedule and at completion", () => {
+    const gaps = { frameGaps: [3, 5] };
+    const { frames } = watchFor(world([apex], [channelSpec()], 0, gaps), ch(0), 25);
+    assert.deepStrictEqual(
+      progress(frames).map((f) => [f.dropId, f.minutes]),
+      [
+        // 3, then 5 later, then 3; completion at 15 is framed whatever the schedule says.
+        ["c0-d0", 3],
+        ["c0-d0", 8],
+        ["c0-d0", 11],
+        ["c0-d0", 15],
+        // Holospray's frames start once APEX Pack is done, at 3 + 15 = 18 and 18 + 5.
+        ["c0-d1", 18],
+        ["c0-d1", 23],
+      ],
+    );
+    assert.strictEqual(sessionDrop(world([apex]), world([apex]).campaigns[0]!, T)?.id, "c0-d0");
+  });
+
+  it("frames about one minute in four with the measured gaps", () => {
+    const long = campaignSpec({
+      drops: [{ requiredMinutes: 240, after: null, benefit: "DIRECT_ENTITLEMENT" }],
+    });
+    const cycle = FRAME_GAPS.reduce((a, b) => a + b, 0);
+    const w = world([long], [channelSpec()], 0, { frameGaps: FRAME_GAPS });
+    const { frames } = watchFor(w, ch(0), cycle);
+    // One frame per measured gap: 46 frames in 176 minutes.
+    assert.deepStrictEqual([progress(frames).length, cycle], [FRAME_GAPS.length, 176]);
+  });
+
+  it("drops a campaign from the inventory once every drop shows claimed", () => {
+    const one = campaignSpec({
+      drops: [{ requiredMinutes: 2, after: null, benefit: "DIRECT_ENTITLEMENT" }],
+    });
+    const watched = watchFor(world([one]), ch(0), 2).world;
+    const claimed = claim(watched, instanceOf(drop("c0-d0")), T + 2 * MINUTE).world;
+    assert.strictEqual(inventoryView(claimed, T + 2 * MINUTE).length, 1);
+    assert.strictEqual(inventoryView(claimed, T + 2 * MINUTE + CLAIMED_FLAG_LAG).length, 0);
+  });
+
+  it("never shows an unlinked item claimed, though the claim went through", () => {
+    const item = campaignSpec({ linked: false, creditsUnlinked: true });
+    const watched = watchFor(world([item]), ch(0), 2).world;
+    const first = claim(watched, instanceOf(drop("c0-d0")), T + 2 * MINUTE);
+    assert.strictEqual(first.outcome, "claimed");
+    const shown = inventoryView(first.world, T + 3 * HOUR)[0]?.drops[0];
+    assert.deepStrictEqual([shown?.claimed, shown?.instanceId], [false, instanceOf(drop("c0-d0"))]);
+    assert.strictEqual(
+      claim(first.world, instanceOf(drop("c0-d0")), T + HOUR).outcome,
+      "already-claimed",
+    );
+  });
+
+  it("holds drops claimed before the run, which list no campaign until it earns again", () => {
+    const three = campaignSpec({
+      startMinute: -300,
+      drops: [
+        { requiredMinutes: 60, after: null, benefit: "BADGE" },
+        { requiredMinutes: 120, after: null, benefit: "BADGE" },
+        { requiredMinutes: 240, after: null, benefit: "BADGE" },
+      ],
+    });
+    // Witchspire had a drop left and still wasn't listed: only `gameEventDrops` names the
+    // claimed one, until a credited minute lists the campaign.
+    const partly = world([{ ...three, claimedBefore: 1 }]);
+    assert.deepStrictEqual(inventoryView(partly, T), []);
+    assert.deepStrictEqual(awardsAt(partly, T), [{ benefitId: "c0-d0-b", at: T - 4 * HOUR }]);
+    const watched = watchFor(partly, ch(0), 1).world;
+    assert.deepStrictEqual(
+      inventoryView(watched, T + HOUR)[0]?.drops.map((d) => [d.minutes, d.claimed]),
+      [
+        [60, true],
+        [1, false],
+        [1, false],
+      ],
+    );
+    assert.strictEqual(claim(partly, instanceOf(drop("c0-d0")), T).outcome, "already-claimed");
+    const spent = world([{ ...three, claimedBefore: 3 }]);
+    assert.deepStrictEqual(inventoryView(spent, T), []);
+    assert.isUndefined(creditedCampaign(spent, ch(0), T));
+  });
+
+  it("claims before the run only what could be earned by then, after the drop started", () => {
+    const drops = [
+      { requiredMinutes: 60, after: null, benefit: "BADGE" as const },
+      { requiredMinutes: 240, after: null, benefit: "BADGE" as const },
+      { requiredMinutes: 10, after: 1, benefit: "BADGE" as const },
+    ];
+    // Started 100 minutes before the run: the 60-minute drop fits, the 240 one can't, and the
+    // 10-minute one waits for it.
+    const recent = world([campaignSpec({ startMinute: -100, drops, claimedBefore: 3 })]);
+    assert.deepStrictEqual([...recent.claimed], [[drop("c0-d0"), T - 40 * MINUTE]]);
+    // Claimed a day before the run at the earliest, never before it was earned.
+    const old = world([campaignSpec({ startMinute: -2880, drops, claimedBefore: 1 })]);
+    assert.deepStrictEqual([...old.claimed], [[drop("c0-d0"), T - 24 * HOUR]]);
+    // A campaign that hasn't started has no history, and lists nothing before it starts.
+    const future = world([campaignSpec({ startMinute: 60, drops, claimedBefore: 3 })]);
+    assert.deepStrictEqual([...future.claimed], []);
+    const early: World = { ...future, claimed: new Map([[drop("c0-d0"), T]]) };
+    assert.deepStrictEqual(inventoryView(early, T + 59 * MINUTE), []);
+    assert.lengthOf(inventoryView(early, T + 60 * MINUTE), 1);
+  });
+
+  it("reports a spent campaign's longest drop past its requirement (Golden Stamp, 263 of 240)", () => {
+    const witchspire = campaignSpec({
+      startMinute: -600,
+      durationMinutes: 900,
+      linked: false,
+      drops: [
+        { requiredMinutes: 60, after: null, benefit: "BADGE" },
+        { requiredMinutes: 240, after: null, benefit: "BADGE" },
+      ],
+      claimedBefore: 2,
+    });
+    const { world: watched, frames } = watchFor(world([witchspire]), ch(0), 23);
+    assert.deepStrictEqual(frames, []);
+    assert.deepStrictEqual(currentDropView(watched, ch(0), T + 23 * MINUTE), {
+      dropId: drop("c0-d1"),
+      minutes: 263,
+    });
+  });
+
+  it("credits a hidden campaign beside the listed one, framed, and lists it nowhere", () => {
+    const hidden = campaignSpec({
+      startMinute: -60,
+      drops: [{ requiredMinutes: 240, after: null, benefit: "DIRECT_ENTITLEMENT" }],
+      hidden: true,
+    });
+    const w = world([apex, hidden]);
+    assert.strictEqual(creditedCampaign(w, ch(0), T)?.id, "c0");
+    const { world: watched, frames } = watchFor(w, ch(0), 6);
+    assert.strictEqual(minutesAt(watched, drop("c1-d0"), T + HOUR), 6);
+    assert.strictEqual(minutesAt(watched, drop("c0-d0"), T + HOUR), 6);
+    assert.includeMembers(
+      progress(frames).map((f) => f.dropId),
+      ["c0-d0", "c1-d0"],
+    );
+    assert.deepStrictEqual(
+      inventoryView(watched, T + HOUR).map((c) => c.campaign.id),
+      ["c0"],
+    );
+  });
+
+  it("keeps crediting a hidden campaign once the listed one is spent", () => {
+    const hidden = campaignSpec({
+      startMinute: -60,
+      drops: [{ requiredMinutes: 900, after: null, benefit: "DIRECT_ENTITLEMENT" }],
+      hidden: true,
+    });
+    // The listed drop completes at 2 minutes; nothing listed is left to earn after it.
+    const w = world([campaignSpec(), hidden]);
+    const { world: watched } = watchFor(w, ch(0), 6);
+    assert.isUndefined(creditedCampaign(watched, ch(0), T + 6 * MINUTE));
+    assert.strictEqual(minutesAt(watched, drop("c0-d0"), T + HOUR), 2);
+    assert.strictEqual(minutesAt(watched, drop("c1-d0"), T + HOUR), 6);
   });
 });

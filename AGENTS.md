@@ -63,7 +63,9 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   Effect `Socket` writes to the websocket it opened last, so never share one). `frames.ts` decodes frames into
   core events; `events` feeds the run loop (`forwardFrames`). Listening is read-only, so `--shadow` listens too.
 - `src/twin/`: the simulator (plan `docs/history/09-plan-twin.md`). A `Scenario` (`scenario.ts`) is plain data that
-  fast-check generates and shrinks; `world.ts` is the twin's Twitch rules with sources; `http.ts` serves the reads
+  fast-check generates and shrinks; `world.ts` is the twin's Twitch rules with sources; `calibration.ts` the timings
+  measured on the 2026-10-30 recordings (research 04 §2b), which `calibration.test.ts` derives again from the relabelled
+  `fixtures/calibration-2026-10-30.json`, and which scenarios draw from; `http.ts` serves the reads
   at wire level under the real `Twitch.layer`; `actuator.ts` the typed mutations; `sim.ts` is the loop (step, persist, check, execute) under `TestClock`; `invariants.ts` checks every
   step. Each seed runs twice and the trace digests must match. A failure prints a capsule to replay.
 - `README.md` is the user's tutorial (token, config, running, logs, what needs a person). Change it

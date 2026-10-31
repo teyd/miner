@@ -19,6 +19,7 @@ import {
 } from "../core/model.ts";
 import { Event } from "../core/protocol.ts";
 import { WATCH_INTERVAL } from "../core/state.ts";
+import { CREDIT_SECONDS } from "./calibration.ts";
 import { SIM_EPOCH, type Fault, type GoalSpec, type Operation, type Scenario } from "./scenario.ts";
 
 /**
@@ -35,8 +36,34 @@ export const GAMES: ReadonlyArray<Game> = [
 
 export const ACCOUNT = { userId: "1", login: "twin" } as const;
 
-/** Inventory shows a claim this long after it happened (the core's "seconds", `CLAIM_RECHECK`). */
+/**
+ * Inventory shows a claim this long after it happened, when the scenario doesn't say: the core's
+ * "seconds" (`CLAIM_RECHECK`). Measured at most 5 minutes (`CLAIMED_FLAG_LAG_MAX`).
+ */
 export const CLAIMED_FLAG_LAG: Millis = 10_000;
+
+/** When drops claimed before the run were claimed: a day before it starts, at the earliest. */
+const BEFORE_RUN: Millis = SIM_EPOCH - 24 * 60 * MINUTE;
+
+/**
+ * Drops claimed before the run: of the first `claimedBefore`, those that could have been earned
+ * and claimed by then (started, their minutes watched from the start, preconditions claimed),
+ * claimed when earned or a day before the run, whichever is later (Witchspire, run4h).
+ */
+const claimedBeforeRun = (
+  campaign: Campaign,
+  count: number,
+): ReadonlyArray<{ readonly drop: Drop; readonly at: Millis }> => {
+  const claimed: Array<{ readonly drop: Drop; readonly at: Millis }> = [];
+  for (const drop of campaign.drops.slice(0, count)) {
+    const earned = drop.startsAt + drop.requiredMinutes * MINUTE;
+    const preconditions = drop.preconditions.every((id) => claimed.some((x) => x.drop.id === id));
+    if (earned < SIM_EPOCH && preconditions) {
+      claimed.push({ drop, at: Math.max(earned, BEFORE_RUN) });
+    }
+  }
+  return claimed;
+};
 
 interface Phase {
   readonly at: Millis;
@@ -69,6 +96,15 @@ export interface World {
   readonly channels: ReadonlyArray<ChannelModel>;
   readonly settings: Settings;
   readonly inventoryLag: Millis;
+  readonly claimedFlagLag: Millis;
+  /** Campaigns Twitch credits but lists nowhere (`hidden`). */
+  readonly hidden: ReadonlySet<CampaignId>;
+  /** Credited minutes between two progress frames of a campaign, used in turn (`frameGaps`). */
+  readonly frameGaps: ReadonlyArray<number>;
+  /** Twitch sends `drop-claim` frames (`claimFrames`). */
+  readonly claimFrames: boolean;
+  /** Every credited drop frames, not only the session drop (`framesAll`). */
+  readonly framesAll: boolean;
   readonly faults: ReadonlyArray<Fault>;
   /** Credited minutes per drop, as a history so inventory can lag it. */
   readonly minutes: ReadonlyMap<
@@ -86,6 +122,12 @@ export interface World {
   readonly creditsOnly: ReadonlyMap<CampaignId, DropId>;
   /** `creditsOnly` campaigns that credit their drop only while it can earn (`creditsMoveOn`). */
   readonly creditsMoveOn: ReadonlySet<CampaignId>;
+  /** Credited minutes each campaign has left before its next progress frame. */
+  readonly framesIn: ReadonlyMap<CampaignId, number>;
+  /** How many gaps of `frameGaps` have been used. */
+  readonly frameCursor: number;
+  /** Minutes watched on a campaign with nothing left to earn, which only the session counter shows. */
+  readonly overtime: ReadonlyMap<CampaignId, number>;
   readonly revokedAt: Millis | undefined;
   readonly session: Session | undefined;
   readonly subscriptions: ReadonlySet<ChannelId>;
@@ -206,6 +248,11 @@ export const buildWorld = (scenario: Scenario): World => {
         for (const b of drop.benefits) awardedElsewhere.set(b.id, drop.startsAt);
       }
     }
+    for (const { drop, at } of claimedBeforeRun(campaign, spec.claimedBefore ?? 0)) {
+      if (claimed.has(drop.id)) continue;
+      claimed.set(drop.id, at);
+      minutes.set(drop.id, [{ at, minutes: drop.requiredMinutes }]);
+    }
   }
   return {
     campaigns,
@@ -217,12 +264,27 @@ export const buildWorld = (scenario: Scenario): World => {
     channels,
     settings: { goals: scenario.settings.goals.map((goal) => goalOf(goal, n)) },
     inventoryLag: scenario.inventoryLagMinutes * MINUTE,
+    claimedFlagLag:
+      scenario.claimedFlagLagSeconds === undefined
+        ? CLAIMED_FLAG_LAG
+        : scenario.claimedFlagLagSeconds * 1000,
+    hidden: new Set(
+      scenario.campaigns.flatMap((spec, i) =>
+        spec.hidden === true ? [`c${i}` as CampaignId] : [],
+      ),
+    ),
+    frameGaps: scenario.frameGaps ?? [1],
+    claimFrames: scenario.claimFrames ?? false,
+    framesAll: scenario.framesAll ?? false,
     faults: scenario.faults,
     minutes,
     claimed,
     awardedElsewhere,
     creditsOnly,
     creditsMoveOn,
+    framesIn: new Map(),
+    frameCursor: 0,
+    overtime: new Map(),
     revokedAt: revokes.length === 0 ? undefined : Math.min(...revokes),
     session: undefined,
     subscriptions: new Set(),
@@ -380,6 +442,10 @@ export const creditedDrops = (
  * research 02 §3: Twitch progresses one campaign per stream, which one is undocumented).
  */
 export const creditedCampaign = (world: World, id: ChannelId, now: Millis): Campaign | undefined =>
+  creditable(world, id, now).filter((c) => !world.hidden.has(c.id))[0];
+
+/** Active campaigns this channel can credit now, newest first. */
+const creditable = (world: World, id: ChannelId, now: Millis): ReadonlyArray<Campaign> =>
   world.campaigns
     .filter(
       (c) =>
@@ -388,6 +454,52 @@ export const creditedCampaign = (world: World, id: ChannelId, now: Millis): Camp
         accountEarns(world, c) &&
         channelCredits(world, c, id, now) &&
         creditedDrops(world, c, now).length > 0,
+    )
+    .toSorted((a, b) => b.startsAt - a.startsAt || a.id.localeCompare(b.id));
+
+/**
+ * Campaigns Twitch credits on this channel besides the one `creditedCampaign` names, and lists in
+ * no answer: a 900-minute drop moved in step with the Apex campaign on its channel, in neither the
+ * dashboard nor the inventory (run4h, 2026-10-30).
+ */
+export const hiddenCampaigns = (
+  world: World,
+  id: ChannelId,
+  now: Millis,
+): ReadonlyArray<Campaign> =>
+  world.hidden.size === 0 ? [] : creditable(world, id, now).filter((c) => world.hidden.has(c.id));
+
+/**
+ * The drop a campaign's frames and session counter name: of its credited drops (`creditedDrops`),
+ * the one closest
+ * to done, first in the campaign on a tie (APEX Pack 15 framed while Holospray 60 moved silently,
+ * then Holospray; run4h, 2026-10-30).
+ */
+export const sessionDrop = (world: World, campaign: Campaign, now: Millis): Drop | undefined => {
+  const credited = new Set(creditedDrops(world, campaign, now));
+  return campaign.drops
+    .map((d, i) => ({ d, i, left: d.requiredMinutes - minutesAt(world, d.id, now) }))
+    .filter(({ d }) => credited.has(d))
+    .toSorted((a, b) => a.left - b.left || a.i - b.i)[0]?.d;
+};
+
+const doneAt = (world: World, drop: Drop, now: Millis): boolean =>
+  world.claimed.has(drop.id) || minutesAt(world, drop.id, now) >= drop.requiredMinutes;
+
+/**
+ * A campaign the channel would credit if anything were left to earn: every drop claimed or
+ * complete. Twitch's session counter keeps counting on it (`currentDropView`).
+ */
+const spentCampaign = (world: World, id: ChannelId, now: Millis): Campaign | undefined =>
+  world.campaigns
+    .filter(
+      (c) =>
+        !world.hidden.has(c.id) &&
+        c.startsAt <= now &&
+        now < c.endsAt &&
+        accountEarns(world, c) &&
+        channelCredits(world, c, id, now) &&
+        c.drops.every((d) => doneAt(world, d, now)),
     )
     .toSorted((a, b) => b.startsAt - a.startsAt || a.id.localeCompare(b.id))[0];
 
@@ -421,8 +533,8 @@ export interface Ticked {
 /**
  * One watch tick. It credits the time since the last credit, at most one interval, so ticks that
  * bunch up after a delay earn no more than the wall time they cover (TDM `channel.py:432-487`;
- * exact accounting is lane-D E1, inference). Every 60 s of credit is one minute for every
- * earnable drop of the credited campaign.
+ * exact accounting is lane-D E1, inference). Every `CREDIT_SECONDS` of credit is one minute for
+ * every earnable drop of the credited campaign (measured, `calibration.ts`).
  */
 export const tick = (world: World, channelId: ChannelId, now: Millis): Ticked => {
   const fail = (result: TickResult): Ticked => ({ world, result, frames: [], credits: [] });
@@ -444,12 +556,12 @@ export const tick = (world: World, channelId: ChannelId, now: Millis): Ticked =>
   };
   const frames: Array<Frame> = [];
   const credits: Array<Credit> = [];
-  while (carry >= 60) {
-    carry -= 60;
+  while (carry >= CREDIT_SECONDS) {
+    carry -= CREDIT_SECONDS;
     const minute = creditMinute(next, channelId, now);
     next = minute.world;
     frames.push(...minute.frames);
-    if (minute.credit !== undefined) credits.push(minute.credit);
+    credits.push(...minute.credits);
   }
   return {
     world: { ...next, session: { ...next.session!, carrySeconds: carry } },
@@ -459,31 +571,72 @@ export const tick = (world: World, channelId: ChannelId, now: Millis): Ticked =>
   };
 };
 
-/** One credited minute, with its `drop-progress` and `drop-claim` frames (TDM `twitch.py:1239-1297`). */
+/**
+ * One credited minute for every drop the credited campaign credits (`creditedDrops`) and those of
+ * any hidden one (APEX Pack and Holospray moved together, run4h). Each campaign frames its session drop when its
+ * countdown runs out or the drop completes (`calibration.ts`, `FRAME_GAPS`); with nothing listed
+ * to earn, the minute goes to a spent campaign's session counter, with no frame, and hidden
+ * campaigns still earn theirs. With `framesAll`, every credited drop frames with it. `drop-claim`
+ * frames only
+ * when the scenario asks (none in 4.6 h live). TDM `twitch.py:1239-1297`.
+ */
 const creditMinute = (world: World, channelId: ChannelId, now: Millis) => {
-  const campaign = creditedCampaign(world, channelId, now);
-  if (campaign === undefined) return { world, frames: [], credit: undefined };
-  const minutes = new Map(world.minutes);
-  const frames: Array<Frame> = [];
-  const dropIds: Array<DropId> = [];
-  for (const drop of creditedDrops(world, campaign, now)) {
-    const total = minutesAt(world, drop.id, now) + 1;
-    minutes.set(drop.id, [...(minutes.get(drop.id) ?? []), { at: now, minutes: total }]);
-    dropIds.push(drop.id);
-    frames.push({
-      at: now + 1_000,
-      event: Event.DropProgress({ dropId: drop.id, minutes: total }),
-    });
-    if (total >= drop.requiredMinutes && !world.claimed.has(drop.id)) {
-      const instanceId = instanceOf(drop.id);
-      frames.push({ at: now + 1_000, event: Event.DropClaimable({ dropId: drop.id, instanceId }) });
+  const visible = creditedCampaign(world, channelId, now);
+  let next = world;
+  if (visible === undefined) {
+    const spent = spentCampaign(world, channelId, now);
+    if (spent !== undefined) {
+      const overtime = new Map(world.overtime);
+      overtime.set(spent.id, (overtime.get(spent.id) ?? 0) + 1);
+      next = { ...world, overtime };
     }
   }
-  return {
-    world: { ...world, minutes },
-    frames,
-    credit: { at: now, channelId, campaignId: campaign.id, dropIds },
-  };
+  const frames: Array<Frame> = [];
+  const credits: Array<Credit> = [];
+  // Hidden campaigns earn on their own, whether or not a listed one has anything left.
+  const credited = [
+    ...(visible === undefined ? [] : [visible]),
+    ...hiddenCampaigns(world, channelId, now),
+  ];
+  for (const campaign of credited) {
+    const framed = sessionDrop(world, campaign, now);
+    const minutes = new Map(next.minutes);
+    const dropIds: Array<DropId> = [];
+    for (const drop of creditedDrops(world, campaign, now)) {
+      const total = minutesAt(world, drop.id, now) + 1;
+      minutes.set(drop.id, [...(minutes.get(drop.id) ?? []), { at: now, minutes: total }]);
+      dropIds.push(drop.id);
+    }
+    next = { ...next, minutes };
+    credits.push({ at: now, channelId, campaignId: campaign.id, dropIds });
+    if (framed === undefined) continue;
+    // The session drop, and with `framesAll` every other drop credited this minute.
+    const shown = next.framesAll
+      ? [framed, ...campaign.drops.filter((d) => d !== framed && dropIds.includes(d.id))]
+      : [framed];
+    const complete = (d: Drop) => minutesAt(next, d.id, now) >= d.requiredMinutes;
+    let cursor = next.frameCursor;
+    const gap = () => next.frameGaps[cursor++ % next.frameGaps.length] ?? 1;
+    const left = (next.framesIn.get(campaign.id) ?? gap()) - 1;
+    const due = left <= 0 || shown.some(complete);
+    const framesIn = new Map(next.framesIn);
+    framesIn.set(campaign.id, due ? gap() : left);
+    next = { ...next, framesIn, frameCursor: cursor };
+    if (!due) continue;
+    for (const drop of shown) {
+      frames.push({
+        at: now + 1_000,
+        event: Event.DropProgress({ dropId: drop.id, minutes: minutesAt(next, drop.id, now) }),
+      });
+      if (complete(drop) && next.claimFrames && !next.claimed.has(drop.id)) {
+        frames.push({
+          at: now + 1_000,
+          event: Event.DropClaimable({ dropId: drop.id, instanceId: instanceOf(drop.id) }),
+        });
+      }
+    }
+  }
+  return { world: next, frames, credits };
 };
 
 export type ClaimOutcome = "claimed" | "already-claimed" | "rejected" | "auth";
@@ -515,11 +668,14 @@ export const claim = (
 };
 
 /** Whether a claim of this drop at `now` is legal by twin truth (for invariant 2b). */
-export const claimableAt = (world: World, dropId: DropId, now: Millis): boolean => {
+export const claimableAt = (world: World, dropId: DropId, now: Millis): boolean =>
+  !world.claimed.has(dropId) && completeAt(world, dropId, now);
+
+/** Complete and within its claim window, claimed or not. */
+export const completeAt = (world: World, dropId: DropId, now: Millis): boolean => {
   const found = findDrop(world, dropId);
   return (
     found !== undefined &&
-    !world.claimed.has(dropId) &&
     minutesAt(world, dropId, now) >= found.drop.requiredMinutes &&
     now < found.campaign.endsAt + CLAIM_GRACE
   );
@@ -538,11 +694,31 @@ export interface InventoryCampaign {
 }
 
 /**
- * What the Inventory read shows: campaigns with progress or a claim, until their claim window
- * closes. A drop received before the run doesn't list its campaign: Twitch left Witchspire out
- * of `dropCampaignsInProgress` the day after its drops were claimed (live run, 2026-10-30), and
- * only `gameEventDrops` named them. Minutes lag by `inventoryLag` and the claimed flag by
- * `CLAIMED_FLAG_LAG` (research 02 §3; the lag values are inference).
+ * Whether the Inventory read shows this drop claimed: `claimedFlagLag` after the claim, and never
+ * for an item of an unlinked campaign. Twitch answered `ELIGIBLE_FOR_ALL` to such a claim and still
+ * listed the drop unclaimed, with its instance id, 2.5 hours later (Marvel Rivals, run37min and
+ * run4h, 2026-10-30).
+ */
+const flagShown = (world: World, campaign: Campaign, drop: Drop, now: Millis): boolean =>
+  isClaimedAt(world, drop.id, now - world.claimedFlagLag) && showsClaim(campaign, drop);
+
+const showsClaim = (campaign: Campaign, drop: Drop): boolean =>
+  campaign.linked ||
+  drop.benefits.some((b) => b.distribution === "BADGE" || b.distribution === "EMOTE");
+
+/** Whether the Inventory read ever shows this drop claimed (`flagShown`). */
+export const claimShows = (world: World, dropId: DropId): boolean => {
+  const found = findDrop(world, dropId);
+  return found !== undefined && showsClaim(found.campaign, found.drop);
+};
+
+/**
+ * What the Inventory read shows: campaigns with progress or a claim made in the run, until their
+ * claim window closes or every drop shows claimed. A campaign left `dropCampaignsInProgress` at the
+ * first read after its last claim showed (Apex, Destiny and CFB, both recordings), and a drop
+ * received before the run doesn't list its campaign: Witchspire, claimed the day before, was in no
+ * read of run4h, and only `gameEventDrops` named its rewards (`awardsAt`). Minutes lag by `inventoryLag` (measured 0) and the claimed
+ * flag by `claimedFlagLag` (measured at most 5 minutes). Hidden campaigns are never listed.
  */
 export const inventoryView = (world: World, now: Millis): ReadonlyArray<InventoryCampaign> => {
   const seen = now - world.inventoryLag;
@@ -550,7 +726,14 @@ export const inventoryView = (world: World, now: Millis): ReadonlyArray<Inventor
   const shows = (d: Drop) =>
     !receivedBefore(d) && (minutesAt(world, d.id, seen) > 0 || world.claimed.has(d.id));
   return world.campaigns
-    .filter((c) => now < c.endsAt + CLAIM_GRACE && c.drops.some(shows))
+    .filter(
+      (c) =>
+        !world.hidden.has(c.id) &&
+        c.startsAt <= now &&
+        now < c.endsAt + CLAIM_GRACE &&
+        c.drops.some(shows) &&
+        !c.drops.every((d) => flagShown(world, c, d, now)),
+    )
     .map((campaign) => ({
       campaign,
       drops: campaign.drops.map((d) => {
@@ -559,7 +742,7 @@ export const inventoryView = (world: World, now: Millis): ReadonlyArray<Inventor
           dropId: d.id,
           minutes,
           instanceId: minutes >= d.requiredMinutes ? instanceOf(d.id) : undefined,
-          claimed: isClaimedAt(world, d.id, now - CLAIMED_FLAG_LAG),
+          claimed: flagShown(world, campaign, d, now),
         };
       }),
     }));
@@ -567,7 +750,10 @@ export const inventoryView = (world: World, now: Millis): ReadonlyArray<Inventor
 
 /**
  * `gameEventDrops`: every reward received, one entry per benefit with its last award, claims
- * showing after `CLAIMED_FLAG_LAG` like the claimed flag. Shape: the live Inventory of 2026-10-30.
+ * showing after `claimedFlagLag` like the claimed flag, and never an unlinked item's: the four
+ * linked claims of 2026-10-30 first showed at the next read, 300 s on, and the Marvel Rivals
+ * Spray claimed unlinked never did (`awarded` in the calibration fixture). Shape: the live
+ * Inventory of 2026-10-30.
  */
 export const awardsAt = (
   world: World,
@@ -577,7 +763,7 @@ export const awardsAt = (
   for (const campaign of world.campaigns) {
     for (const drop of campaign.drops) {
       const at = world.claimed.get(drop.id);
-      if (at === undefined || at > now - CLAIMED_FLAG_LAG) continue;
+      if (at === undefined || !flagShown(world, campaign, drop, now)) continue;
       for (const b of drop.benefits) last.set(b.id, Math.max(at, last.get(b.id) ?? at));
     }
   }
@@ -612,7 +798,13 @@ export const earnedAt = (world: World, drop: Drop, at: Millis): boolean =>
   minutesAt(world, drop.id, at - 1) < drop.requiredMinutes &&
   drop.preconditions.every((id) => isClaimedAt(world, id, at));
 
-/** Source: TDM `twitch.py:996-1010`; the answer's shape is unverified, as `wire.ts` says. */
+/**
+ * `DropCurrentSessionContext` on the watched channel: the session drop of the campaign the channel
+ * credits (TDM `twitch.py:996-1010`). With nothing left to earn there, it names the spent
+ * campaign's longest drop with every minute watched since, past its requirement: it reported
+ * Golden Stamp, claimed the day before, at 263, then 278 … 352 of 240 minutes, 15 per 15-minute
+ * read, while the miner watched for Witchspire Logo (run4h, 2026-10-30).
+ */
 export const currentDropView = (
   world: World,
   channelId: ChannelId,
@@ -620,13 +812,20 @@ export const currentDropView = (
 ): { readonly dropId: DropId; readonly minutes: number } | undefined => {
   if (world.session?.channelId !== channelId) return undefined;
   const campaign = creditedCampaign(world, channelId, now);
-  const drop =
-    campaign === undefined
+  if (campaign !== undefined) {
+    const drop = sessionDrop(world, campaign, now);
+    return drop === undefined
       ? undefined
-      : creditedDrops(world, campaign, now).toSorted((a, b) => a.id.localeCompare(b.id))[0];
-  return drop === undefined
+      : { dropId: drop.id, minutes: minutesAt(world, drop.id, now) };
+  }
+  const spent = spentCampaign(world, channelId, now);
+  const longest = spent?.drops.reduce((a, b) => (b.requiredMinutes >= a.requiredMinutes ? b : a));
+  return spent === undefined || longest === undefined
     ? undefined
-    : { dropId: drop.id, minutes: minutesAt(world, drop.id, now) };
+    : {
+        dropId: longest.id,
+        minutes: minutesAt(world, longest.id, now) + (world.overtime.get(spent.id) ?? 0),
+      };
 };
 
 const windowEnd = (fault: { readonly atMinute: number; readonly durationSeconds: number }) =>
@@ -653,13 +852,18 @@ export const networkDownAt = (world: World, now: Millis): boolean =>
       f.kind === "timeout" && f.operation === "any" && at(f.atMinute) <= now && now < windowEnd(f),
   );
 
+/** PubSub drops frames: an outage, or a `RECONNECT` until the new connection listens. */
 export const framesDownAt = (world: World, now: Millis): boolean =>
-  world.faults.some((f) => f.kind === "frames-down" && at(f.atMinute) <= now && now < windowEnd(f));
+  faultWindows(world, ["frames-down", "reconnect"]).some((w) => w.from <= now && now < w.to);
 
-/** Start and end of every fault window, for wake-ups and the idle clock. */
+/** Start and end of every fault window (of these kinds), for wake-ups and the idle clock. */
 export const faultWindows = (
   world: World,
+  kinds?: ReadonlyArray<Fault["kind"]>,
 ): ReadonlyArray<{ readonly from: Millis; readonly to: Millis }> =>
-  world.faults.flatMap((f) =>
-    "durationSeconds" in f ? [{ from: at(f.atMinute), to: windowEnd(f) }] : [],
-  );
+  world.faults.flatMap((f) => {
+    if (kinds !== undefined && !kinds.includes(f.kind)) return [];
+    if ("durationSeconds" in f) return [{ from: at(f.atMinute), to: windowEnd(f) }];
+    if (f.kind === "reconnect") return [{ from: at(f.atMinute), to: at(f.atMinute) + f.gapMillis }];
+    return [];
+  });

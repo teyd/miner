@@ -1,7 +1,21 @@
 import { assert, describe, it } from "@effect/vitest";
 import fc from "fast-check";
 import { Schema } from "effect";
-import { Capsule, Scenario, scenarioArbitrary } from "./scenario.ts";
+import {
+  CHANNEL_FRAMES_PER_HOUR,
+  DOWN_BURST_SHARE,
+  FRAME_GAPS,
+  HIDDEN_DROP_MINUTES,
+  INVENTORY_LAG_MINUTES,
+  RECONNECT_GAP,
+} from "./calibration.ts";
+import {
+  CLAIM_FLAG_LAG_SWEPT,
+  Capsule,
+  FRAMES_ALL_SWEPT,
+  Scenario,
+  scenarioArbitrary,
+} from "./scenario.ts";
 import { isEligible } from "../core/rules.ts";
 import { buildWorld, channelIdOf } from "./world.ts";
 
@@ -85,5 +99,66 @@ describe("scenario", () => {
     };
     const text = JSON.stringify(capsule);
     assert.deepStrictEqual(Schema.decodeUnknownSync(Capsule)(JSON.parse(text)), capsule);
+  });
+
+  it("draws timings from the 2026-10-30 measurements (`calibration.ts`)", () => {
+    const scenarios = fc.sample(scenarioArbitrary, { seed: 11, numRuns: 1000 });
+    const share = (xs: ReadonlyArray<boolean>) => xs.filter(Boolean).length / xs.length;
+    const near = (actual: number, expected: number, tolerance: number) =>
+      assert.isAtMost(Math.abs(actual - expected), tolerance, `${actual} vs ${expected}`);
+    const gaps = scenarios.flatMap((s) => s.frameGaps ?? []);
+    for (const gap of gaps) assert.include(FRAME_GAPS, gap);
+    // The measured mean, 176 / 46 minutes, within sampling noise.
+    near(gaps.reduce((a, b) => a + b, 0) / gaps.length, 176 / 46, 0.2);
+    near(share(scenarios.map((s) => s.inventoryLagMinutes === INVENTORY_LAG_MINUTES)), 0.7, 0.05);
+    for (const s of scenarios) assert.isAtMost(s.claimedFlagLagSeconds ?? 0, CLAIM_FLAG_LAG_SWEPT);
+    // Core gap 5 (research 04 §2b): the sweep frames every credited drop until it is fixed.
+    for (const s of scenarios) assert.strictEqual(s.framesAll ?? false, FRAMES_ALL_SWEPT);
+    near(share(scenarios.map((s) => s.claimFrames === true)), 0.1, 0.03);
+    const hidden = scenarios.flatMap((s) => s.campaigns.filter((c) => c.hidden === true));
+    near(hidden.length / scenarios.length, 1 / 6, 0.04);
+    // The measured 900-minute drop half the time.
+    near(share(hidden.map((c) => c.drops[0]!.requiredMinutes === HIDDEN_DROP_MINUTES)), 0.5, 0.1);
+    // Campaigns claimed in full before the run, which only `gameEventDrops` names, are drawn too.
+    const histories = scenarios.flatMap((s) => s.campaigns.map((c) => c.claimedBefore ?? 0));
+    const full = scenarios.flatMap((s) =>
+      s.campaigns.filter((c) => (c.claimedBefore ?? 0) >= c.drops.length),
+    );
+    assert.isAbove(full.length, 0);
+    assert.isBelow(full.length, histories.filter((n) => n > 0).length);
+    const changes = scenarios.flatMap((s) => s.channels.flatMap((c) => c.changes));
+    const { streamUp, streamDown, gameChange } = CHANNEL_FRAMES_PER_HOUR;
+    near(
+      share(changes.map((c) => c.to.startsWith("game"))),
+      gameChange / (streamUp + streamDown + gameChange),
+      0.02,
+    );
+    // Downs in the same minute as a down on the channel before, beyond chance; other changes
+    // only by chance.
+    const snapped = (down: boolean) =>
+      scenarios.flatMap((s) =>
+        s.channels.slice(1).flatMap((c, i) => {
+          const downs = s.channels[i]!.changes.filter((x) => x.to === "down");
+          const before = new Set(downs.map((x) => x.atMinute));
+          return before.size === 0
+            ? []
+            : c.changes
+                .filter((x) => (x.to === "down") === down)
+                .map((x) => before.has(x.atMinute));
+        }),
+      );
+    near(share(snapped(true)), DOWN_BURST_SHARE, 0.05);
+    assert.isAtMost(share(snapped(false)), 0.01);
+    const reconnects = scenarios.flatMap((s) =>
+      s.faults.flatMap((f) => (f.kind === "reconnect" ? [f.gapMillis] : [])),
+    );
+    const outages = scenarios.flatMap((s) => s.faults.filter((f) => f.kind === "frames-down"));
+    near(reconnects.length / (reconnects.length + outages.length), 0.8, 0.05);
+    // Milliseconds across the measured range, not whole seconds.
+    assert.isAtLeast(Math.min(...reconnects), RECONNECT_GAP.min);
+    assert.isAtMost(Math.min(...reconnects), RECONNECT_GAP.min + 20);
+    assert.isAtMost(Math.max(...reconnects), RECONNECT_GAP.max);
+    assert.isAtLeast(Math.max(...reconnects), RECONNECT_GAP.max - 20);
+    assert.isAbove(new Set(reconnects).size, 100);
   });
 });

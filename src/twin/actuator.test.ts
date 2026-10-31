@@ -204,7 +204,7 @@ describe("twin actuator", () => {
       const up = yield* claimUnder({ kind: "lose-claim-answer", atMinute: 0 });
       assert.deepStrictEqual(
         up.twin.frames.map((f) => f.event._tag),
-        ["DropProgress", "DropClaimable"],
+        ["DropProgress"],
       );
       const down = yield* claimUnder({ kind: "frames-down", atMinute: 0, durationSeconds: 600 });
       assert.deepStrictEqual(down.twin.frames, []);

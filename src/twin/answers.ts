@@ -42,17 +42,19 @@ export const dashboard = (world: World, now: Millis, withheld: boolean) =>
     currentUser: {
       dropCampaigns: withheld
         ? null
-        : world.campaigns.map((c) => ({
-            id: c.id,
-            name: c.name,
-            status: status(c.startsAt, c.endsAt, now),
-            game: { id: c.game.id, displayName: c.game.name },
-          })),
+        : world.campaigns
+            .filter((c) => !world.hidden.has(c.id))
+            .map((c) => ({
+              id: c.id,
+              name: c.name,
+              status: status(c.startsAt, c.endsAt, now),
+              game: { id: c.game.id, displayName: c.game.name },
+            })),
     },
   });
 
 export const campaignDetails = (world: World, campaignId: string) => {
-  const c = world.campaigns.find((x) => x.id === campaignId);
+  const c = world.campaigns.find((x) => x.id === campaignId && !world.hidden.has(x.id));
   return Schema.encodeSync(CampaignDetails)({
     user:
       c === undefined

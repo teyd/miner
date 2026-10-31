@@ -1,19 +1,21 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import type { DropsGoal, Settings } from "../core/model.ts";
+import { MINUTE, type DropId, type DropsGoal, type Settings } from "../core/model.ts";
 import { compareNumbers, minable, SLACK_HYSTERESIS, type Pick, type Rank } from "../core/plan.ts";
 import type { Command } from "../core/protocol.ts";
 import { canEarn, isActive, minutesOf, slackOf, wantedDrops } from "../core/rules.ts";
 import { nextDeadline } from "../core/state.ts";
 import { step, stepWith } from "../core/step.ts";
+import { CLAIM_AFTER_FRAME_MAX, FRAME_GAPS } from "./calibration.ts";
 import {
   Capsule,
   DEFAULT_GOAL_SPEC,
+  SIM_EPOCH,
+  Scenario,
   plainScenarioArbitrary,
   scenarioArbitrary,
   type Fault,
   type GoalSpec,
-  type Scenario,
 } from "./scenario.ts";
 import {
   runProperty,
@@ -24,6 +26,9 @@ import {
   type Core,
   type SeedResult,
 } from "./sim.ts";
+import { minutesAt } from "./world.ts";
+import seed22 from "./fixtures/seed-22.json" with { type: "json" };
+import seed90052 from "./fixtures/seed-90052.json" with { type: "json" };
 
 /** One linked campaign on one live channel, with a 10-minute drop and a 30-minute one. */
 const base: Scenario = {
@@ -65,6 +70,15 @@ const base: Scenario = {
   faults: [],
 };
 
+interface TraceLine {
+  readonly at: number;
+  readonly kind: string;
+  readonly data: {
+    readonly event?: { readonly _tag: string; readonly minutes?: number };
+    readonly calls?: ReadonlyArray<{ readonly kind: string; readonly at: number }>;
+  };
+}
+
 const withFaults = (...faults: ReadonlyArray<Fault>): Scenario => ({ ...base, faults });
 
 const kindOf = (result: SeedResult) =>
@@ -87,8 +101,9 @@ const claimTwice = (commands: ReadonlyArray<Command>) =>
 const withBase = scenarioArbitrary.map((s): Scenario => ({
   ...s,
   settings: base.settings,
-  campaigns: [base.campaigns[0]!, ...s.campaigns],
-  channels: [base.channels[0]!, ...s.channels],
+  // Within the Schema's bounds, so a capsule decodes.
+  campaigns: [base.campaigns[0]!, ...s.campaigns].slice(0, 4),
+  channels: [base.channels[0]!, ...s.channels].slice(0, 8),
   faults: s.faults.filter((f) => f.kind !== "revoke-token"),
 }));
 
@@ -203,7 +218,30 @@ describe("seeds found by longer sweeps", () => {
     [23266, "a switch that follows Twitch's credit"],
     // A new target on the same channel restarted the stall clock, holding a dead channel.
     [22972, "a channel that never credits, its target changing"],
+    // Measured frame gaps: a credit began 20 s before the stall rule fired, too late to be heard.
+    [7242, "a stall just as the channel starts crediting, frames 9 minutes apart"],
+    [7291, "a stall just as the channel starts crediting, frames 3 and 7 minutes apart"],
+    [30860, "a stall clock restarted by an inventory read minutes after the last credit"],
   ];
+  // Stored as a world: the generator has changed since, so the seed alone draws another.
+  it.effect("seed 90052: the last minute before a channel moved its credit came by inventory", () =>
+    Effect.gen(function* () {
+      // ch2 credited c0 while c2 had nothing to earn, then c2 again after its claim, mid-way
+      // through c0's frame countdown: the core heard that minute at the next inventory read,
+      // 5 minutes later, and its stall clock rightly ran from there.
+      const scenario = yield* Schema.decodeUnknownEffect(Scenario)(seed90052);
+      const result = yield* runTwice(scenario);
+      assert.isUndefined(result.violation, JSON.stringify(result.violation));
+    }),
+  );
+  it.effect("seed 22 (sweep of 2026-10-31): a channel avoided once its campaign had ended", () =>
+    Effect.gen(function* () {
+      // ch0 credited c2 for its last minute, c2's drop window cut to it, and nothing after.
+      const scenario = yield* Schema.decodeUnknownEffect(Scenario)(seed22);
+      const result = yield* runTwice(scenario);
+      assert.isUndefined(result.violation, JSON.stringify(result.violation));
+    }),
+  );
   for (const [seed, name] of found) {
     it.effect(
       `seed ${seed}: ${name}`,
@@ -229,6 +267,9 @@ describe("seeds found by longer sweeps", () => {
     // That at-once skip followed the channel's credits to another campaign: the fairness check
     // looks at the campaign's own credits.
     [50613, "a retry given up at once after another campaign's credits"],
+    // A channel given up while Twitch credited another campaign's unwanted item, 100 minutes
+    // short of moving on to the emote a goal wants (calibrated generator, 2026-10-31).
+    [131, "a channel given up, Twitch more than a stall from a wanted drop"],
   ];
   for (const [seed, name] of quirky) {
     it.effect(
@@ -337,6 +378,44 @@ describe("planted bugs are caught and shrunk", () => {
       assert.strictEqual(blipped.violation?.kind, "WatchFlip");
       assert.strictEqual((yield* runTwice(blip)).violation, undefined);
     }),
+  );
+
+  it.effect(
+    "a claim re-sent at every inventory read, for an unlinked item never shown claimed",
+    () =>
+      Effect.gen(function* () {
+        // Marvel Rivals, 2026-10-30: an unlinked item stays unclaimed in the inventory after its
+        // claim, so a core that trusts the flag claims it again at every read. Re-sent on every
+        // step, the claims pile up in flight (`TooManyInFlight`); at every read they don't.
+        const unlinked: Scenario = {
+          ...base,
+          horizonMinutes: 30,
+          settings: { goals: [{ ...DEFAULT_GOAL_SPEC, linkedOnly: false }] },
+          campaigns: [{ ...base.campaigns[0]!, linked: false, creditsUnlinked: true }],
+        };
+        const resending = (): Core => {
+          let last: Command | undefined;
+          return {
+            nextDeadline,
+            step: (state, event, now) => {
+              const result = step(state, event, now);
+              if (event._tag === "Started") last = undefined;
+              const claim = result.commands.findLast((c) => c._tag === "Claim");
+              const commands =
+                claim === undefined && last !== undefined && event._tag === "InventoryRead"
+                  ? [...result.commands, last]
+                  : result.commands;
+              last = claim ?? last;
+              return { ...result, commands };
+            },
+          };
+        };
+        const caught = yield* runScenario(unlinked, { core: resending() });
+        assert.include(["ClaimedTwice", "MutationRetried"], caught.violation?.kind);
+        const real = yield* runTwice(unlinked);
+        assert.isUndefined(real.violation, JSON.stringify(real.violation));
+        assert.isAtLeast(real.claimsApplied, 1);
+      }),
   );
 
   it.effect("a restart that forgets claims in flight", () =>
@@ -802,16 +881,21 @@ describe("rewards already received, and credit the plan can't use (the 4 h live 
               (c) => c.creditsOnly !== undefined || c.drops.some((d) => d.received),
             ) && s.campaigns.every((c) => c.creditsMoveOn !== true),
         );
-        const result = yield* runProperty(quirky, 1, {
-          core: old,
-          maxShrinks: 30,
-          maxHorizonMinutes: 240,
-        });
-        assert.strictEqual(result._tag, "Failed");
-        if (result._tag !== "Failed") return;
-        assert.include(["WatchedClaimed", "Unproductive", "Idle"], result.capsule.violation.kind);
+        // The first seed whose world it fails in. Not every world tempts it: of 100 sampled, it
+        // failed 32 of A6's and 28 of the calibrated generator's, and seeds 1–10 pass it now.
+        let failed: Array<string> = [];
+        for (let seed = 1; seed <= 15 && failed.length === 0; seed++) {
+          const result = yield* runProperty(quirky, seed, {
+            core: old,
+            maxShrinks: 30,
+            maxHorizonMinutes: 240,
+          });
+          if (result._tag === "Failed") failed = [result.capsule.violation.kind];
+        }
+        assert.lengthOf(failed, 1);
+        assert.include(["WatchedClaimed", "Unproductive", "Idle"], failed[0]);
       }),
-    60_000,
+    120_000,
   );
 });
 
@@ -892,6 +976,139 @@ describe("a reward an overlapping campaign gave", () => {
       assert.strictEqual(mined.claimsApplied, 1);
     }),
   );
+});
+
+/** The twin calibrated on the 2026-10-30 recordings, end to end (research 04 §2b). */
+describe("calibrated twin", () => {
+  const measured: Scenario = {
+    ...base,
+    inventoryLagMinutes: 0,
+    frameGaps: FRAME_GAPS,
+    claimedFlagLagSeconds: 59,
+  };
+
+  it.effect("claims within a second of the completing frame, as live (0.60–0.88 s)", () =>
+    Effect.gen(function* () {
+      const result = yield* runTwice({ ...measured, horizonMinutes: 12 });
+      assert.isUndefined(result.violation);
+      const lines = result.tail.map((l) => JSON.parse(l) as TraceLine);
+      const done = lines.find(
+        (l) =>
+          l.kind === "step" && l.data.event?._tag === "DropProgress" && l.data.event.minutes === 10,
+      );
+      const claim = lines
+        .flatMap((l) => (l.kind === "twin" ? (l.data.calls ?? []) : []))
+        .find((c) => c.kind === "claim");
+      assert.isDefined(done);
+      assert.isDefined(claim);
+      // The simulator looks at work in flight once a second (`POLL`), so the inventory read the
+      // frame asked for lands, and the claim goes out, a second after the frame at most.
+      const after = claim!.at - SIM_EPOCH - done!.at;
+      assert.isAbove(after, 0);
+      assert.isAtMost(after, CLAIM_AFTER_FRAME_MAX);
+    }),
+  );
+
+  it.effect("mines a hidden campaign's channel without a violation, and claims both drops", () =>
+    Effect.gen(function* () {
+      const hidden = {
+        ...base.campaigns[0]!,
+        startMinute: -60,
+        drops: [{ requiredMinutes: 200, after: null, benefit: "DIRECT_ENTITLEMENT" as const }],
+        hidden: true,
+      };
+      const result = yield* runTwice({ ...measured, campaigns: [...base.campaigns, hidden] });
+      assert.isUndefined(result.violation);
+      assert.strictEqual(result.claimsApplied, 2);
+      // It moved in step with the listed campaign, a minute for each of its 40.
+      const end = SIM_EPOCH + measured.horizonMinutes * MINUTE;
+      assert.strictEqual(minutesAt(result.world, "c1-d0" as DropId, end), 40);
+    }),
+  );
+
+  it.effect("a campaign claimed in full before the run: left for the one that earns", () =>
+    Effect.gen(function* () {
+      // Witchspire, run4h: its badges were claimed the day before, so no inventory lists it and
+      // the session counter read 263 of 240. The core watched it for 2 hours; it now reads
+      // `gameEventDrops` and counts no credit past a requirement (A6), so it mines the other.
+      const spent = {
+        ...base.campaigns[0]!,
+        // Started long enough before the run for both drops to be earned and claimed.
+        startMinute: -600,
+        durationMinutes: 900,
+        linked: false,
+        drops: [
+          { requiredMinutes: 60, after: null, benefit: "BADGE" as const },
+          { requiredMinutes: 240, after: null, benefit: "BADGE" as const },
+        ],
+        claimedBefore: 2,
+      };
+      const other = { ...base.campaigns[0]!, game: 1 };
+      const result = yield* runTwice({
+        ...measured,
+        campaigns: [spent, other],
+        channels: [base.channels[0]!, { ...base.channels[0]!, game: 1, viewers: 10 }],
+      });
+      assert.isUndefined(result.violation, JSON.stringify(result.violation));
+      // Both drops of the other campaign, none of the spent one.
+      assert.strictEqual(result.claimsApplied, 2);
+    }),
+  );
+
+  /**
+   * What the calibrated twin still finds in the core, kept out of the sweep (`scenario.ts`) until
+   * the core is fixed. The test pins the failure; when a fix lands it fails, and the bound goes.
+   */
+  describe("core gaps (known, research 04 §2b)", () => {
+    it.effect("a claimed flag later than CLAIM_RECHECK: a lost answer's claim is sent again", () =>
+      Effect.gen(function* () {
+        // Measured: the flag (and `gameEventDrops`) shows within 5 minutes; the core rechecks
+        // after 1.
+        const result = yield* runTwice({
+          ...measured,
+          claimedFlagLagSeconds: 120,
+          faults: [{ kind: "lose-claim-answer", atMinute: 0 }],
+        });
+        assert.include(["ClaimedTwice", "MutationRetried"], result.violation?.kind);
+      }),
+    );
+
+    it.effect("a wanted drop credited without frames: the channel given up while it earns", () =>
+      Effect.gen(function* () {
+        // Twitch frames one drop per campaign, the closest to done (run4h). The newer campaign
+        // credits an unwanted badge (framed, 40 minutes) and the wanted emote beside it (silent,
+        // 50 minutes); only the inventory shows the emote move, and the core adopts or confirms
+        // a drop only from frames and the session read. It stalls on the item it targets and
+        // gives up the channel while the emote earns (sweep seed 161).
+        const goal = { ...DEFAULT_GOAL_SPEC, rewards: ["item", "emote"] as const };
+        const result = yield* runTwice({
+          ...measured,
+          frameGaps: [1],
+          horizonMinutes: 45,
+          settings: { goals: [{ ...goal, rewards: [...goal.rewards] }] },
+          campaigns: [
+            {
+              ...base.campaigns[0]!,
+              startMinute: -60,
+              durationMinutes: 300,
+              drops: [{ requiredMinutes: 60, after: null, benefit: "DIRECT_ENTITLEMENT" }],
+            },
+            {
+              ...base.campaigns[0]!,
+              startMinute: -10,
+              durationMinutes: 2000,
+              drops: [
+                { requiredMinutes: 50, after: null, benefit: "EMOTE" },
+                { requiredMinutes: 40, after: null, benefit: "BADGE" },
+              ],
+            },
+          ],
+          channels: [base.channels[0]!],
+        });
+        assert.strictEqual(result.violation?.kind, "AvoidedUnfairly");
+      }),
+    );
+  });
 });
 
 describe("capsules", () => {

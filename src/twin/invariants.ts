@@ -769,6 +769,8 @@ const checkBudgets = (
       }
       continue;
     }
+    // A tick's requests are CDN requests, so two overlapping ticks are caught by the CDN
+    // concurrency limit above; the client's own `busy` guard is what serialises them.
     api.push(request);
     if (request.limited) {
       fail(

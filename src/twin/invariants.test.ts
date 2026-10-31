@@ -144,12 +144,7 @@ const tickCall = (channelId: ChannelId, endedAt: Millis): ActuatorCall => ({
   result: "ticked",
 });
 
-const claimCall = (
-  endedAt: Millis,
-  applied: boolean,
-  alreadyApplied = false,
-  limited = false,
-): ActuatorCall => ({
+const claimCall = (endedAt: Millis, applied: boolean, alreadyApplied = false): ActuatorCall => ({
   kind: "claim",
   at: endedAt - 200,
   endedAt,
@@ -159,7 +154,6 @@ const claimCall = (
   applied,
   answered: applied,
   outcome: applied ? "claimed" : "unavailable",
-  limited,
 });
 
 const calls = (...list: ReadonlyArray<ActuatorCall>): Activity => ({
@@ -352,7 +346,6 @@ describe("invariant 4b: a claim's result says what Twitch answered (ClaimMisread
     applied,
     answered,
     outcome,
-    limited: false,
   });
   const claimAndReport = (
     twin: ActuatorCall,
@@ -1004,8 +997,8 @@ describe("invariant 8: within Twitch's limits and the request budgets", () => {
     at: start,
     endedAt: end,
     operation,
-    status: limited ? 429 : 200,
     limited,
+    status: limited ? 429 : 200,
   });
   const requests = (...list: ReadonlyArray<TwinRequest>): Activity => ({
     ...noActivity(),

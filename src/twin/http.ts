@@ -185,7 +185,7 @@ const serveRequest = (twin: Twin, request: HttpClientRequest.HttpClientRequest) 
       return reply(401, { status: 401, message: "invalid access token" });
     };
     if (limited) {
-      if (operation === "ClaimDrop") recordClaim(twin, sent, startedAt, "429", now, true);
+      if (operation === "ClaimDrop") recordClaim(twin, sent, startedAt, "429", now);
       const message = `more than ${TWITCH_GQL_PER_SECOND} requests in a second`;
       return yield* reply(429, { error: "Too Many Requests", message });
     }
@@ -260,7 +260,6 @@ const recordClaim = (
   at: Millis,
   outcome: string,
   endedAt: Millis = at,
-  limited = false,
 ) =>
   twin.activity.calls.push({
     kind: "claim",
@@ -272,7 +271,6 @@ const recordClaim = (
     applied: false,
     answered: false,
     outcome,
-    limited,
   });
 
 /**
@@ -308,7 +306,6 @@ const claim = (
       applied,
       answered: !crashed && !lost,
       outcome: result.outcome,
-      limited: false,
     });
     if (crashed) {
       twin.crashRequested = true;

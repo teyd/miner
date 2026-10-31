@@ -75,8 +75,6 @@ export type ActuatorCall =
       /** The twin sent an answer: 200 with a payload. A fault, a lost answer or a crash sent none. */
       readonly answered: boolean;
       readonly outcome: string;
-      /** Answered 429 because the miner went over `TWITCH_GQL_PER_SECOND`. */
-      readonly limited: boolean;
     }
   | {
       /** A socket opened, or a frame the client sent on one. */

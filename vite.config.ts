@@ -32,7 +32,9 @@ export default defineConfig({
     },
     overrides: [
       {
-        files: ["src/bin.ts", "src/platform/**"],
+        // scripts/ are the shell around the built miner (verify-miner, hooks): processes, files
+        // and clocks are their job, and no simulator ever runs them.
+        files: ["src/bin.ts", "src/platform/**", "scripts/**"],
         rules: Object.fromEntries(Object.keys(entropy).map((rule) => [rule, "off"])),
       },
     ],
@@ -42,7 +44,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
     // Simulator-driven tests take seconds here and 2–3× that on CI's 4-core runner (#22, #25).
     testTimeout: 30_000,
   },

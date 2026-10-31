@@ -85,6 +85,10 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   claims and channel reads; `ClaimLate` fails a claimable drop left
   unclaimed (`claimLiveness`), `RefusalDropped` a refused read never sent again, and `sim` prints how many
   seeds refused each command. Each seed runs twice and the trace digests must match. A failure prints a capsule to replay.
+- `.agents/skills/verify-miner/SKILL.md`: how to prove a change without Twitch (decision 13), with a feature
+  map of which evidence proves which area. `pnpm verify` runs it all (check, build, `sim --seeds 20`, a shadow run
+  over the twin, its status and recordings) and prints PASS/FAIL with the evidence; `scripts/verify/` holds one
+  script per step, `docs/verification.md` the short version.
 - `README.md` is the user's tutorial (token, config, running, logs, what needs a person). Change it
   with any user-visible change. `Dockerfile` and `compose.yaml` build and run the image (node alpine
   plus `dist/bin.mjs`, uid 1000, `/data`); `deploy/miner.service` is the systemd unit. Both stop on
@@ -100,6 +104,8 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   `node_modules/.bin` (`devEngines` in `package.json`). Scripts run on that Node, whatever `node` is on PATH.
 - Commits pass the secret guard's hooks (Shipping). `pnpm check` is the gate: `vp check` (format, lint, typecheck) and then `vp test`. CI runs exactly this
   plus `pnpm build`. Done means exit 0.
+- Prove a change with the `verify-miner` skill (`.agents/skills/verify-miner/SKILL.md`) before calling it done:
+  `pnpm verify` (`--skip-check` while iterating) prints a PASS/FAIL table to paste into the PR body.
 - `pnpm exec vp check --fix` formats and applies lint fixes. `pnpm exec vp test <file>` runs one test file.
 - `pnpm build` bundles everything into `dist/bin.mjs` (`vp pack`). One file, no `node_modules` at runtime,
   because that halves idle RSS (research 03). `pnpm start --help` runs it.
@@ -118,7 +124,10 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
 - `miner status [--json]` (`pnpm dev status`, so it sees the same `DATA_DIR` as `pnpm dev run`) reads `$DATA_DIR/status.json` only (live and shadow runs share it; `mode` says which wrote it), never Twitch, so it is safe
   beside a live miner. `--schema` prints the JSON Schema of `--json`. The exit code is the health check.
 - The simulator: `pnpm build && pnpm start sim [--seed N] [--seeds N] [--json]` runs seeds 1–100 by default
-  and exits 1 on any invariant violation, printing the shrunk capsule and the rerun command. Save a capsule to a
+  and exits 1 on any invariant violation, printing the shrunk capsule and the rerun command, and a sweep digest
+  that stays the same while every seed's trace does. `sim --seed N --shadow DIR` (or `--trace capsule.json
+  --shadow DIR`) instead runs `run --shadow` over that seed's twin (`src/twin/shadow.ts`) and writes its state,
+  `status.json`, recordings and logs into the new or empty `DIR`. Save a capsule to a
   file and `pnpm start sim --trace <file>` replays it. `MINER_SIM_SEED`, `MINER_SIM_SEEDS` and `MINER_SIM_TRACE`
   stand in for the flags. `pnpm exec vp test src/twin` runs its tests (seeds 1–20, 6 h horizons).
 - Use `pnpm exec`, not `npx`: `devEngines` refuses npm.

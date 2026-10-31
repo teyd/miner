@@ -1,7 +1,12 @@
-import { Config, Console, Effect, FileSystem, Option, Schema } from "effect";
+import { Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { Command, Flag } from "effect/cli";
+import { load } from "../config/load.ts";
+import { sha256 } from "../platform/Sha256.ts";
+import { STATUS_FILE } from "../runtime/status.ts";
 import { Capsule, type Violation } from "../twin/scenario.ts";
-import { runSeeds, runTwice, type SeedOptions } from "../twin/sim.ts";
+import { scenarioOfSeed, shadowOverTwin } from "../twin/shadow.ts";
+import { runSeeds, runTwice, type SeedOptions, type SeedResult } from "../twin/sim.ts";
+import { ConfigInvalid } from "./config.ts";
 
 /** An invariant failed, or a capsule still fails. Exit code 1. */
 export class SimFailed extends Schema.TaggedError<SimFailed, { readonly brand: unique symbol }>()(
@@ -15,13 +20,39 @@ export class SimTraceInvalid extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("SimTraceInvalid", { path: Schema.String, problem: Schema.String }) {}
 
+/** `--shadow` was given a directory that holds more than a `config.json`. Exit code 2. */
+export class SimShadowRefused extends Schema.TaggedError<
+  SimShadowRefused,
+  { readonly brand: unique symbol }
+>()("SimShadowRefused", { path: Schema.String, problem: Schema.String }) {}
+
 export interface SimInput {
   readonly seed: number;
   readonly seeds: number;
   /** A capsule file. When set, the seeds are ignored. */
   readonly trace: Option.Option<string>;
   readonly json: boolean;
+  /** A scratch data directory: run `run --shadow` over the twin there instead of checking seeds. */
+  readonly shadow?: Option.Option<string>;
+  /** Virtual minutes of the shadow run. */
+  readonly minutes?: number;
 }
+
+/** The default length of a shadow run over the twin, in virtual minutes. */
+export const SHADOW_MINUTES = 60;
+
+/**
+ * One hash over every seed's trace digest. Two sweeps of the same seeds agree on it exactly when
+ * every seed's trace does, so a refactor that should change no behaviour keeps it.
+ */
+export const sweepDigest = (results: ReadonlyArray<SeedResult>): string =>
+  sha256(
+    results
+      .map((r) =>
+        r._tag === "Passed" ? `${r.seed} ${r.digest}` : `${r.capsule.seed} ${r.capsule.digest}`,
+      )
+      .join("\n"),
+  ).slice(0, 16);
 
 const describe = (v: Violation) => `${v.kind} at +${v.at}m: ${v.detail}`;
 
@@ -72,6 +103,14 @@ const sweep = (first: number, count: number, json: boolean, options: SeedOptions
     for (const r of results) {
       if (r._tag === "Passed") for (const tag of r.refused) refused[tag] = (refused[tag] ?? 0) + 1;
     }
+    const digests = Object.fromEntries(
+      results.map((r) =>
+        r._tag === "Passed"
+          ? [String(r.seed), r.digest]
+          : [String(r.capsule.seed), r.capsule.digest],
+      ),
+    );
+    const combined = sweepDigest(results);
     const refusedLine = Object.entries(refused)
       .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([tag, n]) => `${tag} ${n}`)
@@ -86,6 +125,8 @@ const sweep = (first: number, count: number, json: boolean, options: SeedOptions
             watched,
             claimed,
             refused,
+            sweepDigest: combined,
+            digests,
             failures,
           },
           null,
@@ -103,6 +144,7 @@ const sweep = (first: number, count: number, json: boolean, options: SeedOptions
       yield* Console.log(
         `seeds where a budget refused: ${refusedLine === "" ? "none" : refusedLine}`,
       );
+      yield* Console.log(`sweep digest: ${combined}`);
       for (const capsule of failures) {
         yield* Console.log(`\nseed ${capsule.seed} capsule:`);
         yield* Console.log(JSON.stringify(capsule, null, 2));
@@ -117,11 +159,95 @@ const sweep = (first: number, count: number, json: boolean, options: SeedOptions
     if (failures.length > 0) return yield* new SimFailed({ failures: failures.length });
   });
 
+/** Refuses a directory with anything but a `config.json` in it: never write over a real one. */
+const scratch = (dir: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if (!(yield* fs.exists(dir))) return;
+    const refuse = (problem: string) =>
+      Effect.flatMap(
+        Console.log(`${dir}: ${problem}`),
+        () => new SimShadowRefused({ path: dir, problem }),
+      );
+    const names = yield* fs.readDirectory(dir).pipe(Effect.catch((e) => refuse(e.message)));
+    const other = names.filter((n) => n !== "config.json");
+    if (other.length > 0) {
+      return yield* refuse(
+        `not a fresh scratch directory (holds ${other.toSorted().join(", ")}); give an empty or new one`,
+      );
+    }
+  });
+
+const shadowRun = (dir: string, input: SimInput, minutes: number) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = path.resolve(dir);
+    yield* scratch(root);
+    const loaded = yield* load(path.join(root, "config.json")).pipe(Effect.orDie);
+    if (loaded._tag === "Invalid") {
+      for (const p of loaded.problems)
+        yield* Console.log(`${loaded.path}#${p.pointer}: ${p.message}`);
+      return yield* new ConfigInvalid({ path: loaded.path });
+    }
+    const scenario = yield* Option.match(input.trace, {
+      onNone: () => Effect.succeed(scenarioOfSeed(input.seed)),
+      onSome: (file) => Effect.map(readCapsule(file), (c) => c.scenario),
+    });
+    const world = Option.match(input.trace, {
+      onNone: () => `seed ${input.seed}`,
+      onSome: (file) => `the capsule ${file}`,
+    });
+    const result = yield* shadowOverTwin(scenario, loaded.config, minutes);
+    const written: Array<string> = [];
+    for (const [name, bytes] of [...result.files].toSorted(([a], [b]) => a.localeCompare(b))) {
+      const file = path.join(root, name);
+      yield* fs.makeDirectory(path.dirname(file), { recursive: true }).pipe(Effect.orDie);
+      yield* fs.writeFile(file, bytes).pipe(Effect.orDie);
+      written.push(name);
+    }
+    const ok = result.stopped === undefined;
+    const recordings = written.filter((n) => n.startsWith("recordings/"));
+    if (input.json) {
+      yield* Console.log(
+        JSON.stringify(
+          {
+            ok,
+            dataDir: root,
+            world,
+            minutes,
+            requests: result.requests,
+            stopped: result.stopped ?? null,
+            files: written,
+            status: path.join(root, STATUS_FILE),
+            recordings: recordings.map((n) => path.join(root, n)),
+          },
+          null,
+          2,
+        ),
+      );
+    } else {
+      yield* Console.log(
+        `shadow run over the twin of ${world}, ${minutes} virtual minutes: ${result.requests} requests`,
+      );
+      if (!ok) yield* Console.log(`the run stopped by itself: ${result.stopped}`);
+      yield* Console.log(`wrote ${root}: ${written.join(", ")}`);
+      yield* Console.log(`status: DATA_DIR=${root} miner status --json`);
+      for (const r of recordings)
+        yield* Console.log(`recording: miner journal cat ${path.join(root, r)}`);
+    }
+    if (!ok) return yield* new SimFailed({ failures: 1 });
+  });
+
 /** `miner sim`, with the core under test injectable so tests can plant a bug. */
 export const simulate = (input: SimInput, options?: SeedOptions) =>
-  Option.match(input.trace, {
-    onNone: () => sweep(input.seed, input.seeds, input.json, options),
-    onSome: (path) => replay(path, input.json, options),
+  Option.match(input.shadow ?? Option.none(), {
+    onSome: (dir) => shadowRun(dir, input, input.minutes ?? SHADOW_MINUTES),
+    onNone: () =>
+      Option.match(input.trace, {
+        onNone: () => sweep(input.seed, input.seeds, input.json, options),
+        onSome: (path) => replay(path, input.json, options),
+      }),
   });
 
 export const sim = Command.make(
@@ -146,6 +272,18 @@ export const sim = Command.make(
       Flag.withDescription("Print one JSON document"),
       Flag.withDefault(false),
     ),
+    shadow: Flag.String("shadow").pipe(
+      Flag.withDescription(
+        "Instead of checking seeds, run `miner run --shadow` over the twin of --seed (or of the " +
+          "--trace capsule) and write its state, status.json, recordings and logs to this new or " +
+          "empty directory (a config.json in it is used)",
+      ),
+      Flag.optional,
+    ),
+    minutes: Flag.Int("minutes").pipe(
+      Flag.withDescription("Virtual minutes of the --shadow run"),
+      Flag.withDefault(SHADOW_MINUTES),
+    ),
   },
   (input) => simulate(input),
 ).pipe(
@@ -157,5 +295,9 @@ export const sim = Command.make(
     { command: "miner sim", description: "Seeds 1-100" },
     { command: "miner sim --seed 17 --seeds 1", description: "One seed" },
     { command: "miner sim --trace capsule.json", description: "Replay a failure" },
+    {
+      command: "miner sim --seed 3 --shadow /tmp/miner-shadow",
+      description: "A shadow run over seed 3's twin, its files in /tmp/miner-shadow",
+    },
   ]),
 );

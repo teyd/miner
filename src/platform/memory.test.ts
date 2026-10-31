@@ -25,7 +25,7 @@ describe("sample", () => {
 
 describe("LEAN_V8_FLAGS", () => {
   it("are flags this V8 knows", () => {
-    // Set at run time, an unknown flag would do nothing, silently: a Node upgrade must not drop one.
+    // An unknown flag on the command line only warns: a Node upgrade must not drop one silently.
     const known = execFileSync(process.execPath, ["--v8-options"], { encoding: "utf8" });
     for (const flag of LEAN_V8_FLAGS) {
       assert.include(known, `  --${flag.replace(/^--(no-)?/, "")} (`, flag);

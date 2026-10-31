@@ -201,7 +201,8 @@ node dist/bin.mjs doctor
 node dist/bin.mjs run          # Ctrl-C stops it
 ```
 
-`run` holds about 100 MB of RAM this way. Started as the unit starts it, about 85 MB:
+`run` holds about 130 MB of RAM started plainly. With the flags the unit and the image use,
+about 85–100 MB:
 
 ```sh
 MALLOC_MMAP_THRESHOLD_=16384 node --optimize-for-size --no-opt --no-maglev --no-sparkplug dist/bin.mjs run

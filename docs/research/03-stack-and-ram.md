@@ -161,9 +161,11 @@ week (below) finds no growth either. Effect's runtime and layers are part of the
 1. **V8 flags** (`LEAN_V8_FLAGS` in `src/platform/memory.ts`): `--optimize-for-size --no-opt
    --no-maglev --no-sparkplug`, only V8's interpreter, and the heap sized for memory over speed.
    The compilers' code is gone from the heap, and their pages of the `node` binary are never
-   read. `run` sets them itself; the Dockerfile and the systemd unit also give them to `node`,
-   which saves 3 MB more from its start. CPU: 0.55 % of a core instead of 0.43 % on the same
-   run (measured at 10×, 300 s). `--jitless` would save more, but it removes WebAssembly, and
+   read. They go on node's **command line**, before it starts: the Dockerfile, the systemd unit
+   and README's plain-node line all pass them. `v8.setFlagsFromString` after startup would save
+   about 30 MB for an unadorned `node dist/bin.mjs run`, but Node documents changing flags after
+   startup as possibly unpredictable, so the mining path doesn't. CPU: 0.55 % of a core instead
+   of 0.43 % on the same run (measured at 10×, 300 s). `--jitless` would save more, but it removes WebAssembly, and
    `fetch` (undici) parses HTTP with it: the miner then hung without a request or a log line.
 2. **`MALLOC_MMAP_THRESHOLD_=16384`** on glibc (the systemd unit). V8 parses the bundle in 11 MB
    of 32 kB blocks and frees them, but glibc keeps freed memory below its top. Above the
@@ -177,16 +179,17 @@ week (below) finds no growth either. Effect's runtime and layers are part of the
 
 **Results** (MB RSS, steady, while watching; heap snapshot 26 → 18 MB):
 
-| How it runs                                      | Before | After | Anon | File | Heap used |
-| ------------------------------------------------ | ------ | ----- | ---- | ---- | --------- |
-| systemd unit (glibc, flags and env)              | 130    | 83    | 28   | 55   | 14        |
-| Docker image (Alpine, musl, flags)               | 115    | 88    | 28   | 60   | 14        |
-| plain `node dist/bin.mjs run`, `pnpm dev`, glibc | 130    | 100   | 43   | 57   | 15        |
-| the same with `MALLOC_MMAP_THRESHOLD_=16384`     | 112    | 87    | 29   | 57   | 15        |
+| How it runs                                  | Before | After | Anon | File | Heap used |
+| -------------------------------------------- | ------ | ----- | ---- | ---- | --------- |
+| systemd unit (glibc, flags and env)          | 130    | 83    | 28   | 55   | 14        |
+| Docker image (Alpine, musl, flags)           | 115    | 88    | 28   | 60   | 14        |
+| plain node with the flags (README), glibc    | 130    | 100   | 43   | 57   | 15        |
+| plain node without them                      | 130    | 130   | 62   | 57   | 23        |
+| the same with `MALLOC_MMAP_THRESHOLD_=16384` | 112    | 87    | 29   | 57   | 15        |
 
 Re-measured on dev `3285768` (with config reload and the verify tooling), four runs at once:
-129.6 → 82.7 MB as the unit runs it, 98.1 MB plain, and 110.9 MB for the old bundle with only
-`MALLOC_MMAP_THRESHOLD_` (heap used 22.7 → 13.6 MB).
+129.6 → 82.7 MB as the unit runs it, 98.1 MB for plain node given the flags, and 110.9 MB for the
+old bundle with only `MALLOC_MMAP_THRESHOLD_` (heap used 22.7 → 13.6 MB).
 
 The file-backed pages are the `node` binary's, shared with any other node process and dropped
 first under memory pressure. They are a third of the binary: little more is left to cut without

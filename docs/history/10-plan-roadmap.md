@@ -168,3 +168,15 @@ Favourites and a second stream wait for experiments E2/E3 of research 05 (decisi
     after a narrowing edit, docs).
 - Still open for teyd: the homelab deploy (place the token) and the 24 h run (memory, recording size per day),
   feasibility-first in decision 28 (research 07 §4), and the games list for `data/config.json`.
+- 2026-10-31 21:25 — C2 merged (#39): RSS 130 → 83 MB with the systemd unit (88 in the image, 95–98
+  for plain node given the flags), heap used 22.7 → 13.6 MB, a minified 0.8 MB bundle, `compareText`
+  instead of `localeCompare` (same sweep digest), and `miner sim --heap` running a simulated week with a
+  bound (heap growth under 6 MB after day one; a planted 1 KB/request leak fails it). The supervisor
+  removed the delegate's in-process `v8.setFlagsFromString`: Node documents changing flags after startup
+  as unpredictable, so the flags live on node's command line (image, unit, README).
+  - **Live check (15 min, 2026-10-31 20:11, flags on node's command line, no `MALLOC_MMAP_THRESHOLD_`):**
+    RSS 95–97 MB, flat (was 126–131). It finished `CFB Twitch Pack` and moved to `Dragon's Dogma II`
+    (29 → 38/60), one credited minute per minute, one warning (`claimBonus`). The unit's own env
+    (`MALLOC_MMAP_THRESHOLD_=16384`) is what takes it to the measured 83 MB.
+  - Waves A, B and C are done. What remains needs teyd: the homelab deploy and 24 h run, the decision-28
+    feasibility wording, and the games list.

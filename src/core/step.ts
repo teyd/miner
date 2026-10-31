@@ -384,12 +384,17 @@ const tick = (state: State, now: Millis, rank: Rank): Handled => {
       // can: an allow-list the core never read, or a game it never looked for (seed 280753). The
       // catalog read's own discovery does this when it is due.
       const known = [...s.channels.values()];
+      const excluded = new Set(s.settings.goals.flatMap((g) => g.excludeChannels));
+      const skipped = new Set(
+        [...s.avoidCampaigns].filter(([, until]) => now < until).map(([id]) => id),
+      );
       const opened = new Set(
         (s.catalog ?? [])
           .filter(
             (c) =>
+              !skipped.has(c.id) &&
               c.drops.some((x) => x.startsAt >= openedAt && x.startsAt <= now) &&
-              !known.some((ch) => channelCanEarn(c, ch, [], s.avoid)),
+              !known.some((ch) => channelCanEarn(c, ch, [...excluded], s.avoid)),
           )
           .map((c) => c.id),
       );

@@ -5,6 +5,8 @@ import { FetchHttpClient } from "effect/http";
 import { configPath, dataDir } from "../config/load.ts";
 import { load } from "../config/load.ts";
 import { Gzip } from "../platform/Gzip.ts";
+import { makeConfigWatch } from "../runtime/reload.ts";
+import { fingerprint } from "../runtime/reload.ts";
 import { run as runtime } from "../runtime/run.ts";
 import { unmapped } from "../runtime/settings.ts";
 import { LIVE_STATE, liveLayer } from "../runtime/live.ts";
@@ -38,7 +40,12 @@ export const run = Command.make(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const dir = path.resolve(yield* dataDir);
-    const loaded = yield* load(yield* configPath);
+    const file = yield* configPath;
+    // Before the read: an edit made in between is then still seen as a change (review of C3).
+    const baseline = yield* fingerprint(fs, file).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+    );
+    const loaded = yield* load(file);
     if (loaded._tag === "Invalid") {
       for (const p of loaded.problems)
         yield* Console.log(`${loaded.path}#${p.pointer}: ${p.message}`);
@@ -61,7 +68,9 @@ export const run = Command.make(
         ),
       ),
     );
-    return yield* runtime(loaded.config).pipe(
+    // The file reloads while the miner runs (decision 28); a bad edit is logged and ignored.
+    const config = yield* makeConfigWatch(loaded.path, loaded.config, baseline);
+    return yield* runtime(config).pipe(
       Effect.provide(services),
       // Shadow runs count as the one live miner too (AGENTS.md), so both modes take the lock.
       (effect) => Effect.andThen(lockDataDir(dir), effect),

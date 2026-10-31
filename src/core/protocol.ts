@@ -10,6 +10,7 @@ import type {
   GameId,
   Millis,
   Progress,
+  Settings,
 } from "./model.ts";
 
 /** Everything the core learns about the world. The runtime turns Twitch answers into these. */
@@ -18,6 +19,12 @@ export type Event = Data.TaggedEnum<{
   Started: {};
   /** Time passed. The core compares its deadlines with `now`. */
   Tick: {};
+  /**
+   * `config.json` changed while running: the step carries the new `Settings`, and `previous`
+   * are the ones before. Like every step it re-plans, so the new goals apply now, not at the next
+   * deadline; campaigns only the new settings want get their channels read now.
+   */
+  SettingsChanged: { readonly previous: Settings };
   TokenValid: {};
   /**
    * Twitch rejected the token (401, or a token for another client). A network failure during

@@ -127,6 +127,30 @@ const Claimed = Schema.Struct({ ...DropRef, at: timestamp("When the claim settle
   identifier: "Claimed",
 });
 
+const ConfigFile = Schema.Struct({
+  reloadedAt: Never(
+    "When the miner last applied a changed $DATA_DIR/config.json while running (it checks the " +
+      "file every 10 s).",
+  ),
+  rejected: Schema.NullOr(
+    Schema.Struct({
+      at: timestamp("When the miner read the file and refused it."),
+      problems: Schema.Array(Schema.String).annotate({
+        description: "What is wrong, one line each: `<path>#<JSON pointer>: <message>`.",
+      }),
+    }),
+  ).annotate({
+    description:
+      "The file as it is now is invalid or gone, so the miner keeps mining with the last good " +
+      "one. `null`: the file in use is the file on disk.",
+  }),
+}).annotate({
+  identifier: "ConfigFile",
+  description:
+    "$DATA_DIR/config.json, reloaded while the miner runs. Absent in files written by miners " +
+    "before the reload.",
+});
+
 export const StatusFile = Schema.Struct({
   version: Schema.Literal(1).annotate({
     description: "The format version. A reader refuses a version it doesn't know.",
@@ -148,6 +172,7 @@ export const StatusFile = Schema.Struct({
     campaigns: Count.annotate({ description: "Campaigns in the last catalog read." }),
   }),
   watch: Watch,
+  config: Schema.optionalKey(ConfigFile),
   claims: Schema.Struct({
     inFlight: Schema.Array(ClaimInFlight).annotate({
       description: "Claims sent and not yet settled.",

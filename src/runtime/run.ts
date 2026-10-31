@@ -16,6 +16,7 @@ import {
   receivedLines,
 } from "./narrate.ts";
 import { toSettings, unresolvedGames } from "./settings.ts";
+import { RELOAD_EVERY, type ConfigWatch } from "./reload.ts";
 import { makeReporter } from "./status.ts";
 import { observe, startFacts } from "../status/snapshot.ts";
 
@@ -42,22 +43,31 @@ export const countAt = (
  * The runtime: one scheduler fiber that owns the state. It takes the next event, or a `Tick` when
  * `nextDeadline(state)` comes first, steps the core, saves the new state, and only then starts
  * the step's commands. Commands run on their own fibers and come back as events, PubSub frames
- * arrive as events too, so a slow read never delays the scheduler; the deadlines live in `State`, so there are no other timers
+ * arrive as events too, so a slow read never delays the scheduler; the deadlines live in `State`, so there are no other timers besides the status heartbeat and the 10 s config poll
  * (critique 08 §6.1). The one other wake-up is the status heartbeat, which writes
  * `status.json` without stepping the core.
+ *
+ * Given a `ConfigWatch` (`reload.ts`) rather than a fixed config, a fiber polls the file every
+ * `reloadEvery` and a valid change reaches the loop as a `SettingsChanged` event: settings are
+ * mapped from the current config before every step, so that step and every one after it plan
+ * with the new goals.
  */
-export const run = (config: Config) =>
+export const run = (source: Config | ConfigWatch, reloadEvery: Millis = RELOAD_EVERY) =>
   Effect.gen(function* () {
     const store = yield* Store;
-    const events = yield* Queue.unbounded<Event>();
+    const events = yield* Queue.unbounded<Event | typeof RELOADED>();
     yield* forwardFrames(events);
     const commands = yield* FiberSet.make<void>();
     const memory = yield* Ref.make<Memory>(emptyMemory);
+    const configured: Pick<ConfigWatch, "config" | "facts"> =
+      "poll" in source
+        ? yield* reloading(source, reloadEvery, events)
+        : { config: () => source, facts: () => startFacts(0).config };
     const settingsFor = (state: State, event: Event) =>
-      toSettings(config, catalogOf(state, event), channelsOf(state, event));
+      toSettings(configured.config(), catalogOf(state, event), channelsOf(state, event));
 
     const loaded = yield* store.load;
-    let state = Option.getOrElse(loaded, () => initial(toSettings(config, [], [])));
+    let state = Option.getOrElse(loaded, () => initial(toSettings(configured.config(), [], [])));
     let saved = durable(state);
     yield* Effect.logInfo(
       Option.isSome(loaded) ? "runtime: resumed from saved state" : "runtime: starting fresh",
@@ -99,8 +109,12 @@ export const run = (config: Config) =>
       );
 
     while (true) {
-      const event = yield* next(events, nextDeadline(state), reporter.due());
+      const taken = yield* next(events, nextDeadline(state), reporter.due());
       const now = yield* Clock.currentTimeMillis;
+      facts = { ...facts, config: configured.facts() };
+      // The settings of the last step were mapped from the config before the reload.
+      const event =
+        taken === RELOADED ? Event.SettingsChanged({ previous: state.settings }) : taken;
       if (event === HEARTBEAT) {
         yield* reporter.update(state, facts, now);
         continue;
@@ -123,8 +137,8 @@ export const run = (config: Config) =>
       yield* report(state, result.state, now);
       const expired = discoveryExpired(state, result.state, event, now);
       if (expired !== undefined) yield* Effect.logWarning(`runtime: ${expired}`);
-      if (event._tag === "CatalogRead") {
-        const notes = unresolvedGames(config, event.campaigns);
+      if (event._tag === "CatalogRead" || event._tag === "SettingsChanged") {
+        const notes = unresolvedGames(configured.config(), catalogOf(state, event));
         for (const note of notes) {
           if (!unresolved.has(note)) yield* Effect.logWarning(`config: ${note}`);
         }
@@ -138,6 +152,22 @@ export const run = (config: Config) =>
   }).pipe(Effect.scoped);
 
 const HEARTBEAT = "heartbeat";
+/** The config watch applied a change; the loop makes it a `SettingsChanged`. */
+const RELOADED = "reloaded";
+
+/** Polls `watch` for the run's scope; each applied change is a `SettingsChanged` event. */
+const reloading = (watch: ConfigWatch, every: Millis, events: Queue.Enqueue<typeof RELOADED>) =>
+  Effect.gen(function* () {
+    yield* Effect.forkScoped(
+      Effect.forever(
+        Effect.sleep(every).pipe(
+          Effect.andThen(watch.poll),
+          Effect.flatMap((changed) => (changed ? Queue.offer(events, RELOADED) : Effect.void)),
+        ),
+      ),
+    );
+    return watch;
+  });
 
 /** A command a request budget refused: what, which budget, and for how long. */
 const logThrottled = (event: Event) =>
@@ -156,10 +186,10 @@ const logThrottled = (event: Event) =>
  * first. Queued events go first.
  */
 const next = (
-  events: Queue.Queue<Event>,
+  events: Queue.Queue<Event | typeof RELOADED>,
   deadline: number | undefined,
   statusDue: number,
-): Effect.Effect<Event | typeof HEARTBEAT> =>
+): Effect.Effect<Event | typeof RELOADED | typeof HEARTBEAT> =>
   Effect.gen(function* () {
     const queued = yield* Queue.poll(events);
     if (Option.isSome(queued)) return yield* coalesce(events, queued.value);
@@ -178,15 +208,21 @@ const next = (
  * cooldown refuses a whole discovery burst at once, and one step each would count against
  * `MAX_STEPS_AT_INSTANT`.
  */
-export const coalesce = (events: Queue.Queue<Event>, first: Event): Effect.Effect<Event> =>
+export const coalesce = <A extends Event | typeof RELOADED>(
+  events: Queue.Queue<A>,
+  first: A,
+): Effect.Effect<A | Event> =>
   Effect.gen(function* () {
-    if (first._tag !== "Throttled") return first;
+    if (!isThrottled(first)) return first;
     const run: Array<Event> = [first];
-    while ((yield* Queue.size(events)) > 0 && (yield* Queue.peek(events))._tag === "Throttled") {
-      run.push(yield* Queue.take(events));
+    while ((yield* Queue.size(events)) > 0 && isThrottled(yield* Queue.peek(events))) {
+      run.push((yield* Queue.take(events)) as Event);
     }
     return run.length === 1 ? first : coalesceThrottled(run);
   });
+
+const isThrottled = (e: Event | typeof RELOADED): e is Extract<Event, { _tag: "Throttled" }> =>
+  e !== RELOADED && e._tag === "Throttled";
 
 const catalogOf = (state: State, event: Event): ReadonlyArray<Campaign> =>
   event._tag === "CatalogRead" ? event.campaigns : (state.catalog ?? []);

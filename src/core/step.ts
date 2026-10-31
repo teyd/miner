@@ -303,6 +303,25 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
 
     case "Tick":
       return tick(s, now, rank);
+
+    case "SettingsChanged": {
+      // Discovery read channels for what the old settings wanted; a game or campaign only the
+      // new ones want would otherwise wait for the next catalog read, up to an hour.
+      if (s.auth !== "valid" || s.catalog === undefined) return [s, []];
+      const before = planInput({ ...s, settings: event.previous }, s.catalog, now);
+      const wanted = new Set(rank(before).map(({ campaign }) => campaign.id));
+      // A campaign the new settings still want but no longer reach on a known channel (a new
+      // exclusion, a narrower reward type) needs its channels read too, or it waits for the next
+      // catalog read (review of C3, P2-4).
+      const nowWanted = new Set(
+        rank(planInput(s, s.catalog, now)).map(({ campaign }) => campaign.id),
+      );
+      const known = [...s.channels.values()];
+      const excluded = new Set(s.settings.goals.flatMap((g) => g.excludeChannels));
+      const unreachedNow = (c: Campaign) =>
+        nowWanted.has(c.id) && !known.some((ch) => channelCanEarn(c, ch, [...excluded], s.avoid));
+      return discoverUnreached(s, now, rank, (c) => !wanted.has(c.id) || unreachedNow(c));
+    }
   }
 };
 
@@ -383,31 +402,11 @@ const tick = (state: State, now: Millis, rank: Rank): Handled => {
       // the catalog read, so ask now for the channels that can credit what opened if none known
       // can: an allow-list the core never read, or a game it never looked for (seed 280753). The
       // catalog read's own discovery does this when it is due.
-      const known = [...s.channels.values()];
-      const excluded = new Set(s.settings.goals.flatMap((g) => g.excludeChannels));
-      const skipped = new Set(
-        [...s.avoidCampaigns].filter(([, until]) => now < until).map(([id]) => id),
+      const [more, reads] = discoverUnreached(s, now, rank, (c) =>
+        c.drops.some((x) => x.startsAt >= openedAt && x.startsAt <= now),
       );
-      const opened = new Set(
-        (s.catalog ?? [])
-          .filter(
-            (c) =>
-              !skipped.has(c.id) &&
-              c.drops.some((x) => x.startsAt >= openedAt && x.startsAt <= now) &&
-              !known.some((ch) => channelCanEarn(c, ch, [...excluded], s.avoid)),
-          )
-          .map((c) => c.id),
-      );
-      const reads = discover(s, now, rank, opened).filter(
-        (read) => s.discovery?.pending.includes(readKey(read)) !== true,
-      );
-      if (reads.length > 0) {
-        commands.push(...reads);
-        discovery = {
-          pending: [...(s.discovery?.pending ?? []), ...reads.map((read) => readKey(read))],
-          until: Math.max(s.discovery?.until ?? now, now + discoverySettle(reads)),
-        };
-      }
+      commands.push(...reads);
+      discovery = more.discovery;
     }
     if (now >= d.inventory) {
       commands.push(Command.ReadInventory());
@@ -840,6 +839,42 @@ const firstOpening = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis)
       .map((d) => d.startsAt);
   });
   return Math.min(Infinity, ...starts);
+};
+
+/**
+ * Discovery for the minable campaigns that pass `which` and that no known channel can credit,
+ * joined to any discovery under way; a read already pending is not asked again.
+ */
+const discoverUnreached = (
+  s: State,
+  now: Millis,
+  rank: Rank,
+  which: (campaign: Campaign) => boolean,
+): Handled => {
+  const known = [...s.channels.values()];
+  const excluded = s.settings.goals.flatMap((g) => g.excludeChannels);
+  const skipped = new Set(
+    [...s.avoidCampaigns].filter(([, until]) => now < until).map(([id]) => id),
+  );
+  const only = new Set(
+    (s.catalog ?? [])
+      .filter(
+        (c) =>
+          !skipped.has(c.id) &&
+          which(c) &&
+          !known.some((ch) => channelCanEarn(c, ch, excluded, s.avoid)),
+      )
+      .map((c) => c.id),
+  );
+  const reads = discover(s, now, rank, only).filter(
+    (read) => s.discovery?.pending.includes(readKey(read)) !== true,
+  );
+  if (reads.length === 0) return [s, []];
+  const discovery = {
+    pending: [...(s.discovery?.pending ?? []), ...reads.map((read) => readKey(read))],
+    until: Math.max(s.discovery?.until ?? now, now + discoverySettle(reads)),
+  };
+  return [{ ...s, discovery }, reads];
 };
 
 /** Ask for the channels that can credit the minable campaigns: the directory or the allow-list. */

@@ -60,6 +60,18 @@ const watchLine = (s: StatusFile): string => {
   return `watching ${w.channel.login ?? w.channel.id} for ${drop} (${minutes})`;
 };
 
+/** Absent from a file an older miner wrote. */
+const configLines = (now: Millis, s: StatusFile): ReadonlyArray<string> => {
+  const c = s.config;
+  if (c === undefined) return [];
+  const loaded = c.reloadedAt === null ? "as started" : `reloaded ${ago(now, c.reloadedAt)}`;
+  if (c.rejected === null) return [`  config: ${loaded}`];
+  return [
+    `  config: ${loaded}; the file on disk was refused ${ago(now, c.rejected.at)}, the last valid one is in use:`,
+    ...c.rejected.problems.map((p) => `    ${p}`),
+  ];
+};
+
 /** What `miner status` prints for a person. */
 export const human = (path: string, r: StatusReport): ReadonlyArray<string> => {
   const head = `${r.health.state}: ${r.health.detail}`;
@@ -77,6 +89,7 @@ export const human = (path: string, r: StatusReport): ReadonlyArray<string> => {
     `  token: ${s.auth}`,
     `  catalog: ${s.catalog.status}, ${s.catalog.campaigns} campaigns`,
     `  ${watchLine(s)}`,
+    ...configLines(now, s),
     `  claims in flight: ${s.claims.inFlight.length === 0 ? "none" : s.claims.inFlight.map((c) => `${named(c)} (${c.status})`).join(", ")}`,
     `  claimed this run: ${s.claims.claimedThisRun.length === 0 ? "none" : s.claims.claimedThisRun.map(named).join(", ")}`,
     `  pubsub: ${s.pubsub.listening}/${s.pubsub.connections} connections listening, ${s.pubsub.topics} topics${s.pubsub.dropped > 0 ? `, ${s.pubsub.dropped} dropped` : ""}`,

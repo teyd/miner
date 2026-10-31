@@ -47,14 +47,14 @@ Each wave starts when what it builds on is merged. Inside a wave the steps run i
 | B3   | Calibration from the 2026-10-30 recordings (`calibrate-twin-timings`)                          | review done, fixes committed (2169cc9), merge after A6 |
 | B4   | Conformance: replay a recording's answers and frames through the twin and report disagreements | after B1+B3                                            |
 
-### Wave C — the agent harness
+### Wave C — the agent harness (C1 #35/#37, C3 #36 merged; C2 in progress)
 
-| Step | What                                                                                                                                                        | Builds on  |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| C1   | `verify-miner` skill (decision 13, research 06): launch (sim, shadow), status, evidence (trace digest, recordings, status JSON), cleanup, and a feature map | A2, B4     |
-| C2   | A simulated week with a heap bound (research 03 §2); bring RSS toward the ≤ 90 MB target (the live run sat at 126–131 MB)                                   | B1         |
-| C3   | `config.json` reloads while the miner runs (decision 28)                                                                                                    | A3         |
-| C4   | Scheduled `doctor` on the homelab, catching hash and header changes (research 02 §7)                                                                        | A2, A4, D1 |
+| Step | What                                                                                                                      | Builds on  |
+| ---- | ------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| C1   | `verify-miner` skill and `pnpm verify`: launch, status, evidence, cleanup, feature map                                    | #35, #37   |
+| C2   | A simulated week with a heap bound (research 03 §2); bring RSS toward the ≤ 90 MB target (the live run sat at 126–131 MB) | B1         |
+| C3   | `config.json` reloads while the miner runs (decision 28)                                                                  | A3         |
+| C4   | Scheduled `doctor` on the homelab, catching hash and header changes (research 02 §7)                                      | A2, A4, D1 |
 
 ### Wave D — live, one at a time (supervisor only)
 
@@ -152,3 +152,19 @@ Favourites and a second stream wait for experiments E2/E3 of research 05 (decisi
 - 2026-10-31 17:20 — Wave C delegated: C1 the `verify-miner` skill and `pnpm verify`, C2 a simulated week
   with a heap bound and RSS work (the live miner sits at 126–131 MB against a ≤ 90 MB target), C3
   `config.json` reload while running.
+- 2026-10-31 19:30 — Wave C: C1 (#35, review fixes #37), C3 (#36) merged; C2 building.
+  - **C1** gives every agent one way to prove a change: `.agents/skills/verify-miner/SKILL.md` (launch, status,
+    evidence, cleanup, feature map, and what the twin cannot prove), `pnpm verify` (build, a 20-seed sweep
+    with a digest, a shadow run over a seed's twin, status, recordings — about 25 s), `miner sim --shadow DIR`
+    (a shadow run in virtual time), a sweep digest with `--expect-digest`, and step tests that deliberately
+    break each step. The review's P1 was real and is fixed: the recordings step had reported "no secret" for a
+    crash-torn recording it could not decompress; it now reads past the tear, scans raw bytes, and fails
+    rather than skips. The step now also proves `$same` references resolve (`--min-refs`), which no simulator
+    invariant checks; that is a follow-up.
+  - **C3** reloads `config.json` every 10 s: a valid edit applies without a restart (a newly listed game's
+    channels are read at that poll), an invalid or deleted file is refused with warnings while the last good
+    config keeps mining, and `miner status` reports it. Core gained `SettingsChanged { previous }`; review P2s
+    fixed by the supervisor (retry a failed read, cap problems and file size, baseline before load, discover
+    after a narrowing edit, docs).
+- Still open for teyd: the homelab deploy (place the token) and the 24 h run (memory, recording size per day),
+  feasibility-first in decision 28 (research 07 §4), and the games list for `data/config.json`.

@@ -1,9 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Option, Redacted, Schema } from "effect";
+import { Effect, Fiber, Layer, Option, Queue, Redacted, Schema } from "effect";
 import { HttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { Config } from "../config/schema.ts";
-import { HOUR, MINUTE, type DropId } from "../core/model.ts";
+import { HOUR, MINUTE, type DropId, type GameId } from "../core/model.ts";
+import { Command, Event } from "../core/protocol.ts";
 import { Gzip, nodeGzip } from "../platform/Gzip.ts";
 import { Instance } from "../platform/instance.ts";
 import { decodeState } from "../store/codec.ts";
@@ -14,10 +15,10 @@ import { makeTwin, type Twin } from "../twin/twin.ts";
 import { buildWorld } from "../twin/world.ts";
 import { fakeEdge, listenedOn, type FakeEdge } from "../twitch/fakeSocket.ts";
 import { DEFAULT_LIMITS, parseRecording, type Limits } from "../twitch/journal.ts";
-import { REQUEST_GAP } from "../twitch/pace.ts";
+import { GQL_LIMITS } from "../twitch/budget.ts";
 import { Connector } from "../twitch/PubSub.ts";
 import { Credentials } from "../twitch/Twitch.ts";
-import { countAt, MAX_STEPS_AT_INSTANT, run } from "./run.ts";
+import { coalesce, countAt, MAX_STEPS_AT_INSTANT, run } from "./run.ts";
 import { SHADOW_STATE, shadowLayer } from "./shadow.ts";
 
 const DIR = "/data";
@@ -172,7 +173,7 @@ describe("run --shadow", () => {
         // Browser-like: reads start at least the gap apart, about 1 per 5 minutes at rest.
         const starts = twin.activity.requests.map((r) => r.at).toSorted((a, b) => a - b);
         for (let i = 1; i < starts.length; i++) {
-          assert.isAtLeast(starts[i]! - starts[i - 1]!, REQUEST_GAP);
+          assert.isAtLeast(starts[i]! - starts[i - 1]!, GQL_LIMITS.gap);
         }
         assert.isBelow(starts.length, 80);
 
@@ -264,4 +265,35 @@ describe("the spin guard", () => {
     assert.deepStrictEqual(instant, [5, MAX_STEPS_AT_INSTANT + 1]);
     assert.deepStrictEqual(countAt(instant, 6), [6, 1]);
   });
+
+  it.effect("takes refusals queued together as one event, so a refused burst is one step", () =>
+    Effect.gen(function* () {
+      const events = yield* Queue.unbounded<Event>();
+      const refusal = (gameId: string) =>
+        Event.Throttled({
+          refusals: [
+            {
+              command: Command.ReadDirectory({ gameId: gameId as GameId }),
+              budget: "gql",
+              retryAt: 1,
+            },
+          ],
+        });
+      const burst = Array.from({ length: MAX_STEPS_AT_INSTANT + 1 }, (_, i) => refusal(`g${i}`));
+      yield* Queue.offerAll(events, [...burst.slice(1), Event.Tick(), refusal("after")]);
+      const merged = yield* coalesce(events, burst[0]!);
+      assert.strictEqual(merged._tag, "Throttled");
+      if (merged._tag === "Throttled") {
+        assert.deepStrictEqual(
+          merged.refusals,
+          burst.flatMap((e) => (e._tag === "Throttled" ? e.refusals : [])),
+        );
+      }
+      // Only the run right behind it: the tick and what follows it keep their order.
+      assert.strictEqual((yield* Queue.take(events))._tag, "Tick");
+      const tick = Event.Tick();
+      assert.strictEqual(yield* coalesce(events, tick), tick);
+      assert.strictEqual(yield* Queue.size(events), 1);
+    }),
+  );
 });

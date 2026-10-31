@@ -1,5 +1,6 @@
 import { Effect, Random } from "effect";
 import type { ChannelId, DropId, DropInstanceId, Millis } from "../core/model.ts";
+import { TOKEN_MARGIN } from "../twitch/hls.ts";
 import { REQUEST_TIMEOUT } from "../twitch/Twitch.ts";
 import type { Operation } from "./scenario.ts";
 import { SIM_EPOCH } from "./scenario.ts";
@@ -16,11 +17,38 @@ import { framesDownAt, type Credit, type Frame, type World } from "./world.ts";
  */
 export const TWIN_TIMEOUT: Millis = REQUEST_TIMEOUT;
 
+/**
+ * Twitch's per-IP limits as the twin enforces them: about 5 GQL requests a second and about 10
+ * websockets (DevilXD, TDM #1153, 2026-08-29; research 02 §4b), 50 topics each (TDM
+ * `WS_TOPICS_LIMIT`). A GQL request above the rate is answered 429, a socket above the count is
+ * refused, and the topics it would carry are never heard.
+ */
+export const TWITCH_GQL_PER_SECOND = 5;
+export const TWITCH_SOCKETS = 10;
+export const TWITCH_TOPICS_PER_SOCKET = 50;
+
+/**
+ * The requests one typed watch tick stands for: a media playlist and a `HEAD` of each of its
+ * 15–16 segments (live run 2026-10-30, research 02 §4).
+ */
+export const TICK_REQUESTS = 17;
+
+/**
+ * A playback token lives 20 minutes (live 2026-10-30, `hls.ts`) and the HLS method fetches a new
+ * one `TOKEN_MARGIN` early: a tick that resolves the stream (the first of a session, one after a
+ * failure, one every 19 minutes) also sends the token request (GQL) and usher (one more CDN
+ * request).
+ */
+export const TOKEN_REFRESH: Millis = 20 * 60_000 - TOKEN_MARGIN;
+
 export interface TwinRequest {
   readonly at: Millis;
   readonly endedAt: Millis;
-  readonly operation: Operation;
+  /** The playback token is a GQL request no fault window targets. */
+  readonly operation: Operation | "PlaybackAccessToken";
   readonly status: number | "timeout";
+  /** Answered 429 because the miner went over `TWITCH_GQL_PER_SECOND`, not by a fault window. */
+  readonly limited: boolean;
 }
 
 export type ActuatorCall =
@@ -30,6 +58,8 @@ export type ActuatorCall =
       readonly kind: "subscribe";
       readonly at: Millis;
       readonly channelIds: ReadonlyArray<ChannelId>;
+      /** Sockets PubSub needs for these channels; above `TWITCH_SOCKETS` the rest is refused. */
+      readonly sockets: number;
     }
   | {
       readonly kind: "tick";
@@ -37,6 +67,8 @@ export type ActuatorCall =
       readonly endedAt: Millis;
       readonly channelId: ChannelId;
       readonly result: string;
+      /** CDN requests the tick stands for: usher too when it resolved the stream. */
+      readonly requests: number;
     }
   | {
       readonly kind: "claim";
@@ -48,6 +80,8 @@ export type ActuatorCall =
       readonly alreadyApplied: boolean;
       readonly applied: boolean;
       readonly outcome: string;
+      /** Answered 429 because the miner went over `TWITCH_GQL_PER_SECOND`. */
+      readonly limited: boolean;
     };
 
 export interface Activity {
@@ -67,6 +101,14 @@ export interface Twin {
   inClaimCrashes: Array<Millis>;
   /** Set by a claim that hit an `in-claim` crash; the simulator crashes the process. */
   crashRequested: boolean;
+  /** When the simulator must back the API budget off for a begun `gql-cooldown`, ascending. */
+  backOffs: Array<Millis>;
+  /** Starts of GQL requests in the last second, the twin's own count for its 429s. */
+  gqlStarts: Array<Millis>;
+  /** The stream the miner's watch resolved: for which session, and until when. */
+  stream:
+    | { readonly openedAt: Millis; readonly channelId: ChannelId; readonly until: Millis }
+    | undefined;
 }
 
 const emptyActivity = (): Activity => ({ requests: [], calls: [], credits: [] });
@@ -87,8 +129,25 @@ export const makeTwin = (world: World): Twin => {
     lostAnswers: times("lose-claim-answer"),
     inClaimCrashes: times("crash", "in-claim"),
     crashRequested: false,
+    backOffs: [],
+    gqlStarts: [],
+    stream: undefined,
   };
 };
+
+/**
+ * Counts a GQL request starting at `at` (a refused one counts too, as Twitch counts it) and says
+ * whether it is over `TWITCH_GQL_PER_SECOND` in the second ending at `at`. Call in `Effect.sync`.
+ */
+export const overGqlRate = (twin: Twin, at: Millis): boolean => {
+  twin.gqlStarts = twin.gqlStarts.filter((t) => t > at - 1_000);
+  twin.gqlStarts.push(at);
+  return twin.gqlStarts.length > TWITCH_GQL_PER_SECOND;
+};
+
+/** Sockets PubSub needs to follow `channels`: two topics each, plus the account's drop topic. */
+export const socketsFor = (channels: number): number =>
+  channels === 0 ? 0 : Math.ceil((2 * channels + 1) / TWITCH_TOPICS_PER_SOCKET);
 
 /** Frames sent while PubSub is down never arrive. */
 export const emit = (twin: Twin, frames: ReadonlyArray<Frame>): void => {

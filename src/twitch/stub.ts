@@ -1,5 +1,6 @@
 import { Effect, Layer } from "effect";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
+import { Budgets, UNLIMITED } from "./budget.ts";
 import { Credentials } from "./Twitch.ts";
 import claimClaimed from "./fixtures/claim-claimed-instance.json" with { type: "json" };
 import mediaPlaylist from "./fixtures/media-playlist.json" with { type: "json" };
@@ -62,6 +63,8 @@ export const stubTwitch = (script: Record<string, ReadonlyArray<Answer | Hang>>)
   });
   const layer = Layer.mergeAll(
     Layer.succeed(HttpClient.HttpClient, http),
+    // Wire tests answer at once and don't move the clock: no budget waits (`budget.test.ts`).
+    Layer.effect(Budgets, Budgets.make({ gql: UNLIMITED, cdn: UNLIMITED })),
     Layer.succeed(
       Credentials,
       Credentials.of({ token: Redacted.make("test-token"), deviceId: "d".repeat(32) }),

@@ -24,7 +24,7 @@ describe("shadowActuator", () => {
       yield* actuator.subscribe([ch]);
       yield* actuator.stopWatching;
       const tick = yield* Effect.flip(actuator.watchTick(ch));
-      assert.strictEqual(tick.reason, "network");
+      assert.strictEqual(tick._tag === "WatchFailure" && tick.reason, "network");
       assert.deepStrictEqual(
         intents.map((i) => i.command),
         ["Watch", "Subscribe", "StopWatching"],

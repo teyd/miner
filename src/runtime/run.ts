@@ -1,7 +1,7 @@
 import { Cause, Clock, Effect, FiberSet, Option, Queue, Ref, Schema } from "effect";
 import type { Config } from "../config/schema.ts";
 import type { Campaign, Channel, Millis } from "../core/model.ts";
-import { Event, type Command } from "../core/protocol.ts";
+import { Event, coalesceThrottled, type Command } from "../core/protocol.ts";
 import { initial, nextDeadline, type State } from "../core/state.ts";
 import { step } from "../core/step.ts";
 import { canonical } from "../store/codec.ts";
@@ -73,6 +73,7 @@ export const run = (config: Config) =>
       FiberSet.run(
         commands,
         execute(memory, command).pipe(
+          Effect.tap((out) => Effect.forEach(out, logThrottled)),
           Effect.flatMap((out) => Queue.offerAll(events, out)),
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)
@@ -138,6 +139,18 @@ export const run = (config: Config) =>
 
 const HEARTBEAT = "heartbeat";
 
+/** A command a request budget refused: what, which budget, and for how long. */
+const logThrottled = (event: Event) =>
+  event._tag === "Throttled"
+    ? Effect.flatMap(Clock.currentTimeMillis, (now) =>
+        Effect.forEach(event.refusals, (r) =>
+          Effect.logWarning(
+            `runtime: ${r.command._tag} not sent, the ${r.budget} request budget has room again in ${Math.ceil((r.retryAt - now) / 1000)} s`,
+          ),
+        ),
+      )
+    : Effect.void;
+
 /**
  * The next event, a `Tick` once the core's deadline passes, or `HEARTBEAT` once the status is due
  * first. Queued events go first.
@@ -149,15 +162,30 @@ const next = (
 ): Effect.Effect<Event | typeof HEARTBEAT> =>
   Effect.gen(function* () {
     const queued = yield* Queue.poll(events);
-    if (Option.isSome(queued)) return queued.value;
+    if (Option.isSome(queued)) return yield* coalesce(events, queued.value);
     const wake = Math.min(deadline ?? Infinity, statusDue);
     const wait = wake - (yield* Clock.currentTimeMillis);
     if (wait > 0) {
       const taken = yield* Queue.take(events).pipe(Effect.timeoutOption(wait));
-      if (Option.isSome(taken)) return taken.value;
+      if (Option.isSome(taken)) return yield* coalesce(events, taken.value);
     }
     const now = yield* Clock.currentTimeMillis;
     return deadline !== undefined && now >= deadline ? Event.Tick() : HEARTBEAT;
+  });
+
+/**
+ * A `Throttled` and the `Throttled` events queued right behind it, as one event: a budget in
+ * cooldown refuses a whole discovery burst at once, and one step each would count against
+ * `MAX_STEPS_AT_INSTANT`.
+ */
+export const coalesce = (events: Queue.Queue<Event>, first: Event): Effect.Effect<Event> =>
+  Effect.gen(function* () {
+    if (first._tag !== "Throttled") return first;
+    const run: Array<Event> = [first];
+    while ((yield* Queue.size(events)) > 0 && (yield* Queue.peek(events))._tag === "Throttled") {
+      run.push(yield* Queue.take(events));
+    }
+    return run.length === 1 ? first : coalesceThrottled(run);
   });
 
 const catalogOf = (state: State, event: Event): ReadonlyArray<Campaign> =>

@@ -1,11 +1,19 @@
+import { Budgets } from "../twitch/budget.ts";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Exit, Fiber } from "effect";
+import { Clock, Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import type { ChannelId, DropId } from "../core/model.ts";
 import type { Actuator } from "../twitch/Actuator.ts";
 import { twinActuator } from "./actuator.ts";
 import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Fault, type Scenario } from "./scenario.ts";
-import { makeTwin, type Twin } from "./twin.ts";
+import {
+  TICK_REQUESTS,
+  TOKEN_REFRESH,
+  TWITCH_SOCKETS,
+  makeTwin,
+  socketsFor,
+  type Twin,
+} from "./twin.ts";
 import { buildWorld, instanceOf, minutesAt } from "./world.ts";
 
 const scenario = (faults: ReadonlyArray<Fault> = [], refuses = false): Scenario => ({
@@ -36,7 +44,7 @@ const instance = instanceOf("c0-d0" as DropId);
 /** Runs actuator calls from `SIM_EPOCH`, moving virtual time until they settle. */
 const act = <A, E>(twin: Twin, use: (a: Actuator["Service"]) => Effect.Effect<A, E>) =>
   Effect.gen(function* () {
-    const fiber = yield* Effect.forkChild(use(twinActuator(twin)));
+    const fiber = yield* Effect.forkChild(use(twinActuator(twin, yield* Budgets.make())));
     yield* TestClock.adjust("10 minutes");
     return yield* Fiber.await(fiber);
   });
@@ -112,6 +120,34 @@ describe("twin actuator", () => {
     }),
   );
 
+  it.effect("charges a tick that resolves the stream a token request and usher", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(SIM_EPOCH);
+      const twin = makeTwin(buildWorld(scenario()));
+      const ticks = () =>
+        twin.activity.calls.flatMap((c) => (c.kind === "tick" ? [c.requests] : []));
+      const tokens = () =>
+        twin.activity.requests.filter((r) => r.operation === "PlaybackAccessToken").length;
+      yield* act(twin, (a) =>
+        Effect.gen(function* () {
+          yield* a.watch(ch(0), "chan0");
+          for (let i = 0; i < 3; i++) {
+            yield* Effect.sleep("20 seconds");
+            yield* a.watchTick(ch(0));
+          }
+        }),
+      );
+      assert.deepStrictEqual(ticks(), [TICK_REQUESTS + 1, TICK_REQUESTS, TICK_REQUESTS]);
+      assert.strictEqual(tokens(), 1);
+      // The token is fetched again before it expires, and for a new session.
+      yield* TestClock.adjust(TOKEN_REFRESH);
+      yield* act(twin, (a) => a.watchTick(ch(0)));
+      yield* act(twin, (a) => Effect.andThen(a.watch(ch(0), "chan0"), a.watchTick(ch(0))));
+      assert.deepStrictEqual(ticks().slice(3), [TICK_REQUESTS + 1, TICK_REQUESTS + 1]);
+      assert.strictEqual(tokens(), 3);
+    }),
+  );
+
   it.effect("reports offline and refusing channels", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(SIM_EPOCH);
@@ -156,6 +192,39 @@ describe("twin actuator", () => {
       const exit = yield* act(twin, (a) => Effect.andThen(completeDrop(a), a.claim(instance)));
       return { exit, twin };
     });
+
+  it.effect("answers a claim 429, unapplied, above five GQL requests a second", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(SIM_EPOCH);
+      const twin = makeTwin(buildWorld(scenario()));
+      const exit = yield* act(twin, (a) =>
+        Effect.gen(function* () {
+          yield* completeDrop(a);
+          // Five other GQL requests in the second the claim starts.
+          const now = yield* Clock.currentTimeMillis;
+          twin.gqlStarts.push(...Array.from({ length: 5 }, () => now));
+          return yield* a.claim(instance);
+        }),
+      );
+      assert.deepStrictEqual(errorOf(exit), ["TwitchUnavailable"]);
+      assert.isFalse(twin.world.claimed.has("c0-d0" as DropId));
+      const call = twin.activity.calls.find((c) => c.kind === "claim");
+      assert.isTrue(call?.kind === "claim" && call.limited && !call.applied);
+    }),
+  );
+
+  it.effect("follows only what fits in Twitch's sockets per IP", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(SIM_EPOCH);
+      const twin = makeTwin(buildWorld(scenario()));
+      const many = Array.from({ length: 300 }, (_, i) => ch(i));
+      yield* act(twin, (a) => a.subscribe(many));
+      assert.strictEqual(twin.world.subscriptions.size, 249);
+      const call = twin.activity.calls.find((c) => c.kind === "subscribe");
+      assert.isTrue(call?.kind === "subscribe" && call.sockets === socketsFor(300));
+      assert.isAbove(socketsFor(300), TWITCH_SOCKETS);
+    }),
+  );
 
   it.effect("fails a claim before it applies during a 5xx, 429 or service-error window", () =>
     Effect.gen(function* () {

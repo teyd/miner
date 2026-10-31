@@ -20,7 +20,7 @@ import {
   type Rank,
   type Target,
 } from "./plan.ts";
-import { Command, readKey, type ChannelRead, type Event } from "./protocol.ts";
+import { Command, readKey, readOfKey, type ChannelRead, type Event } from "./protocol.ts";
 import { canEarn, channelCanEarn, isClaimable, wantedDrops, withReceived } from "./rules.ts";
 import {
   CAMPAIGN_SKIP,
@@ -34,6 +34,7 @@ import {
   ONLINE_DELAY,
   STALL_AFTER,
   SUBSCRIBE_SETTLE,
+  THROTTLE_FLOOR,
   VALIDATE_INTERVAL,
   WATCHLIST_LIMIT,
   WATCH_INTERVAL,
@@ -110,6 +111,7 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
             tick: undefined,
             online: new Map(),
             subscribe: undefined,
+            deferred: new Map(),
           },
         },
         [Command.ValidateToken()],
@@ -138,7 +140,13 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
           watch: { _tag: "Idle", reason: "needs-login" },
           subscriptions: [],
           discovery: undefined,
-          deadlines: { ...s.deadlines, tick: undefined, online: new Map(), subscribe: undefined },
+          deadlines: {
+            ...s.deadlines,
+            tick: undefined,
+            online: new Map(),
+            subscribe: undefined,
+            deferred: new Map(),
+          },
         },
         [
           ...(s.watch._tag === "Watching" ? [Command.StopWatching()] : []),
@@ -204,7 +212,11 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
         awarded,
         inventoried: new Set(event.progress.map((p) => p.dropId)),
         claims,
-        deadlines: { ...s.deadlines, inventory: nextInventory(claims, now) },
+        deadlines: {
+          ...s.deadlines,
+          // A refused read is owed at its retry time: this answer must not postpone it.
+          inventory: Math.min(s.deadlines.inventory, nextInventory(claims, now)),
+        },
       };
       return [confirmWatched(next, now), []];
     }
@@ -279,8 +291,75 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
       return [withProgress({ ...s, claims }, event.dropId, (p) => ({ ...p, claimed: true })), []];
     }
 
+    case "Throttled": {
+      let next = s;
+      for (const refusal of event.refusals) {
+        const at = Math.max(refusal.retryAt, now + THROTTLE_FLOOR);
+        next = throttled(next, refusal.command, at, now);
+      }
+      return [next, []];
+    }
+
     case "Tick":
       return tick(s, now);
+  }
+};
+
+/**
+ * A request budget refused `command` before sending it: due again at `at`. A refused read moves
+ * its deadline; a refused channel read waits in `deferred`, and the discovery waiting for it waits
+ * that much longer. A refused claim was never sent, but it is settled the way a lost answer is:
+ * its intent waits for an inventory read at or after `at`, which sends it again only if the drop
+ * still shows unclaimed. A refused current-drop read is due again at `at`, and a refused
+ * subscription is sent again then: `ticked` and `follow` had already counted both as done. A
+ * refused watch tick needs nothing: the next one is due on its own schedule.
+ */
+const throttled = (s: State, command: Command, at: Millis, now: Millis): State => {
+  const d = s.deadlines;
+  switch (command._tag) {
+    case "ValidateToken":
+      return { ...s, deadlines: { ...d, validate: Math.min(d.validate, at) } };
+    case "ReadCatalog":
+      return { ...s, deadlines: { ...d, catalog: Math.min(d.catalog, at) } };
+    case "ReadInventory":
+      return { ...s, deadlines: { ...d, inventory: Math.min(d.inventory, at) } };
+    case "ReadDirectory":
+    case "ReadChannels": {
+      if (s.auth !== "valid") return s;
+      const key = readKey(command);
+      const deferred = new Map(d.deferred);
+      deferred.set(key, Math.min(deferred.get(key) ?? Infinity, at));
+      const discovery =
+        s.discovery?.pending.includes(key) === true
+          ? { ...s.discovery, until: Math.max(s.discovery.until, at + discoverySettle([command])) }
+          : s.discovery;
+      return { ...s, discovery, deadlines: { ...d, deferred } };
+    }
+    case "Claim": {
+      const key = claimKey(command.campaignId, command.dropId);
+      const intent = s.claims.get(key);
+      if (intent === undefined) return s;
+      const recheckAt = Math.max(at, now + CLAIM_RECHECK);
+      const claims = new Map(s.claims);
+      claims.set(key, { ...intent, status: "unknown", recheckAt });
+      return { ...s, claims, deadlines: { ...d, inventory: Math.min(d.inventory, recheckAt) } };
+    }
+    case "ReadCurrentDrop": {
+      const w = s.watch;
+      if (w._tag !== "Watching" || w.channelId !== command.channelId) return s;
+      // `ticked` asks again once `CURRENT_DROP_RECHECK` has passed since this: at `at`.
+      return { ...s, watch: { ...w, lastCurrentDropRead: at - CURRENT_DROP_RECHECK } };
+    }
+    case "Subscribe": {
+      // `follow` took the set as followed when it sent it. Twitch never heard of it, so what is
+      // followed is unknown: an empty set makes `follow` send the plan's set again at `at`.
+      if (s.auth !== "valid" || !sameMembers(command.channelIds, s.subscriptions)) return s;
+      return { ...s, subscriptions: [], deadlines: { ...d, subscribe: at } };
+    }
+    case "Watch":
+    case "WatchTick":
+    case "StopWatching":
+      return s;
   }
 };
 
@@ -305,6 +384,11 @@ const tick = (state: State, now: Millis): Handled => {
     if (due.length > 0) {
       commands.push(Command.ReadChannels({ channelIds: due.toSorted() }));
       d = { ...d, online: new Map([...d.online].filter(([, at]) => now < at)) };
+    }
+    const again = [...d.deferred].filter(([, at]) => now >= at).map(([key]) => key);
+    if (again.length > 0) {
+      commands.push(...again.toSorted().map(readOfKey));
+      d = { ...d, deferred: new Map([...d.deferred].filter(([, at]) => now < at)) };
     }
   }
   return [{ ...s, deadlines: d }, commands];

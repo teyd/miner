@@ -1,3 +1,4 @@
+import { Budgets } from "../twitch/budget.ts";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Ref } from "effect";
 import { TestClock } from "effect/testing";
@@ -62,7 +63,11 @@ const run = (twin: Twin, commands: ReadonlyArray<Command>, memory: Memory = empt
   Effect.gen(function* () {
     yield* TestClock.setTime(SIM_EPOCH + 60_000);
     const ref = yield* Ref.make(memory);
-    const services = Layer.merge(twinTwitch(twin), Layer.succeed(Actuator, twinActuator(twin)));
+    const budgets = yield* Budgets.make();
+    const services = Layer.merge(
+      twinTwitch(twin, budgets),
+      Layer.succeed(Actuator, twinActuator(twin, budgets)),
+    );
     const fiber = yield* Effect.forkChild(
       Effect.forEach(commands, (c) => execute(ref, c)).pipe(Effect.provide(services)),
     );
@@ -84,6 +89,39 @@ const storm = (operation: Operation | "any" = "any"): Fault => ({
 });
 
 describe("execute", () => {
+  it.effect("after a 429, reports the refused reads and claim as Throttled; the claim unsent", () =>
+    Effect.gen(function* () {
+      const limited: Fault = {
+        kind: "http-429",
+        operation: "Inventory",
+        atMinute: 1,
+        durationSeconds: 1800,
+      };
+      const twin = completed([limited]);
+      const read = Command.ReadChannels({ channelIds: [ch0] });
+      const { events } = yield* run(twin, [Command.ReadInventory(), claimCommand, read], knowsCh0);
+      assert.deepStrictEqual(tags(events), [["Throttled"], ["Throttled"], ["Throttled"]]);
+      const sent = [Command.ReadInventory(), claimCommand, read];
+      for (const [i, command] of sent.entries()) {
+        const event = events[i]![0]!;
+        if (event._tag !== "Throttled") continue;
+        assert.lengthOf(event.refusals, 1);
+        const refusal = event.refusals[0]!;
+        assert.deepStrictEqual(refusal.command, command);
+        assert.strictEqual(refusal.budget, "gql");
+        // The cooldown after the 429 at +1m.
+        assert.isAtLeast(refusal.retryAt, SIM_EPOCH + 2 * 60_000);
+      }
+      // One Inventory request answered 429; nothing else reached Twitch, the claim least of all.
+      assert.deepStrictEqual(
+        twin.activity.requests.map((r) => [r.operation, r.status]),
+        [["Inventory", 429]],
+      );
+      assert.lengthOf(claims(twin), 0);
+      assert.strictEqual(twin.world.claimed.size, 0);
+    }),
+  );
+
   it.effect("validates, and reports a rejected token as AuthFailed and an outage as nothing", () =>
     Effect.gen(function* () {
       const ok = yield* run(makeTwin(buildWorld(scenario())), [Command.ValidateToken()]);

@@ -14,6 +14,10 @@ import {
   CATALOG_INTERVAL,
   CLAIM_RECHECK,
   ONLINE_DELAY,
+  READ_BATCH,
+  READ_WORST_CASE,
+  THROTTLE_FLOOR,
+  WATCHLIST_LIMIT,
   STALL_AFTER,
   SUBSCRIBE_SETTLE,
   WATCH_INTERVAL,
@@ -27,14 +31,25 @@ import {
   COMMAND_DEADLINE,
   FLIP_WINDOW,
   IN_FLIGHT_LIMIT,
+  MOST_REQUESTS,
   checkStep,
+  claimLiveness,
+  inFlightCap,
   initialChecker,
   opportunities,
   type Observation,
   type StepRecord,
 } from "./invariants.ts";
 import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Fault, type Scenario } from "./scenario.ts";
-import type { Activity, ActuatorCall } from "./twin.ts";
+import { CDN_LIMITS, GQL_LIMITS } from "../twitch/budget.ts";
+import {
+  TICK_REQUESTS,
+  TWITCH_SOCKETS,
+  socketsFor,
+  type Activity,
+  type ActuatorCall,
+  type TwinRequest,
+} from "./twin.ts";
 import { buildWorld, instanceOf, openSession, tick, type World } from "./world.ts";
 
 const scenario = (faults: ReadonlyArray<Fault> = []): Scenario => ({
@@ -132,9 +147,15 @@ const tickCall = (channelId: ChannelId, endedAt: Millis): ActuatorCall => ({
   endedAt,
   channelId,
   result: "ticked",
+  requests: TICK_REQUESTS,
 });
 
-const claimCall = (endedAt: Millis, applied: boolean, alreadyApplied = false): ActuatorCall => ({
+const claimCall = (
+  endedAt: Millis,
+  applied: boolean,
+  alreadyApplied = false,
+  limited = false,
+): ActuatorCall => ({
   kind: "claim",
   at: endedAt - 200,
   endedAt,
@@ -143,6 +164,7 @@ const claimCall = (endedAt: Millis, applied: boolean, alreadyApplied = false): A
   alreadyApplied,
   applied,
   outcome: applied ? "claimed" : "unavailable",
+  limited,
 });
 
 const calls = (...list: ReadonlyArray<ActuatorCall>): Activity => ({
@@ -391,6 +413,34 @@ describe("invariant 3: no idle time while an eligible live channel exists", () =
     assert.include(kinds([known(0), known(bound + 1)]), "Idle");
     // The core that doesn't know yet only answers to the discovery bound.
     assert.deepStrictEqual(kinds([unwatched(0), unwatched(bound + 1)]), []);
+  });
+
+  it("gives an idle core a GQL cooldown's news, as a fault window", () => {
+    // An idle core hears only through GQL reads, which a cooldown refuses (seed 80053).
+    const knowing: State = {
+      ...idle,
+      catalog: [world0.campaigns[0]!],
+      channels: new Map([
+        [
+          ch0,
+          {
+            id: ch0,
+            login: "chan0",
+            gameId: "g0" as GameId,
+            live: { viewers: 50, dropsEnabled: true },
+          },
+        ],
+      ]),
+    };
+    const cooled: World = { ...world0, cooldowns: [{ from: at(0), to: at(240) }] };
+    const known = (seconds: number, world: World) =>
+      observation(at(seconds), { state: knowing, world });
+    const bound = (ONLINE_DELAY + MINUTE) / 1000;
+    assert.include(kinds([known(0, world0), known(bound + 1, world0)]), "Idle");
+    assert.deepStrictEqual(kinds([known(0, cooled), known(bound + 1, cooled)]), []);
+    // Still within the discovery bound.
+    const late = (CATALOG_INTERVAL + 2 * MINUTE) / 1000 + 1;
+    assert.include(kinds([known(0, cooled), known(late, cooled)]), "Idle");
   });
 
   it("counts a channel as heard only when its change sends a frame", () => {
@@ -795,12 +845,46 @@ describe("the supporting checks", () => {
     );
   });
 
-  it("s5: flags more than IN_FLIGHT_LIMIT commands of one kind in flight", () => {
+  it("s5: flags more than IN_FLIGHT_LIMIT of the same command in flight", () => {
     const reads = (n: number) =>
       Array.from({ length: n }, () => ({ command: Command.ReadInventory(), since: at(60) }));
     assert.deepStrictEqual(kinds([observation(at(60), { inFlight: reads(IN_FLIGHT_LIMIT) })]), []);
     assert.include(
       kinds([observation(at(60), { inFlight: reads(IN_FLIGHT_LIMIT + 1) })]),
+      "TooManyInFlight",
+    );
+    // One directory read per game of a large catalog is discovery, not a storm.
+    const games = Array.from({ length: 3 * IN_FLIGHT_LIMIT }, (_, i) => ({
+      command: Command.ReadDirectory({ gameId: `g${i}` as GameId }),
+      since: at(60),
+    }));
+    assert.deepStrictEqual(kinds([observation(at(60), { inFlight: games })]), []);
+  });
+
+  it("s3: gives a command as long as its requests take at their worst, one after the other", () => {
+    // A stream read of a full watchlist sends three batches, each up to `READ_WORST_CASE`.
+    assert.strictEqual(MOST_REQUESTS, Math.ceil(WATCHLIST_LIMIT / READ_BATCH));
+    assert.isAbove(COMMAND_DEADLINE, MOST_REQUESTS * READ_WORST_CASE);
+    const since = at(60);
+    const full = Command.ReadChannels({
+      channelIds: Array.from({ length: WATCHLIST_LIMIT }, (_, i) => `x${i}` as ChannelId),
+    });
+    const hung = [{ command: full, since }];
+    const end = since + MOST_REQUESTS * READ_WORST_CASE;
+    assert.deepStrictEqual(kinds([observation(end, { inFlight: hung })]), []);
+  });
+
+  it("s5: flags more commands in flight than two discoveries of the catalog's games need", () => {
+    const games = new Set(world0.campaigns.map((x) => x.game.id)).size;
+    const distinct = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        command: Command.ReadChannels({ channelIds: [ch0, `x${i}` as ChannelId] }),
+        since: at(60),
+      }));
+    const cap = inFlightCap(games);
+    assert.deepStrictEqual(kinds([observation(at(60), { inFlight: distinct(cap) })]), []);
+    assert.include(
+      kinds([observation(at(60), { inFlight: distinct(cap + 1) })]),
       "TooManyInFlight",
     );
   });
@@ -812,5 +896,203 @@ describe("the supporting checks", () => {
       credits: [{ at: at(60), channelId: ch0, campaignId: c0, dropIds: [d0] }],
     };
     assert.include(kinds([observation(at(60), { world, activity })]), "TwinBroken");
+  });
+});
+
+describe("invariant 8: within Twitch's limits and the request budgets", () => {
+  const request = (start: Millis, end: Millis, limited = false): TwinRequest => ({
+    at: start,
+    endedAt: end,
+    operation: "Inventory",
+    status: limited ? 429 : 200,
+    limited,
+  });
+  const requests = (...list: ReadonlyArray<TwinRequest>): Activity => ({
+    ...noActivity(),
+    requests: [...list],
+  });
+
+  it("flags a GQL request or a claim Twitch answered 429 for the rate, not a fault window's", () => {
+    assert.deepStrictEqual(
+      kinds([observation(at(60), { activity: requests(request(at(59), at(60), true)) })]),
+      ["OverBudget"],
+    );
+    const limitedClaim = claimCall(at(60), false, false, true);
+    assert.include(kinds([observation(at(60), { activity: calls(limitedClaim) })]), "OverBudget");
+    const fault: TwinRequest = { ...request(at(59), at(60)), status: 429 };
+    assert.deepStrictEqual(kinds([observation(at(60), { activity: requests(fault) })]), []);
+  });
+
+  it("flags more API requests in flight than the budget allows, across observations", () => {
+    const n = GQL_LIMITS.concurrency;
+    // A long request ends last: the overlap shows only once it is in.
+    const short = Array.from({ length: n }, (_, i) => request(at(100) + i, at(101) + i));
+    const long = request(at(100) - 1, at(130));
+    assert.deepStrictEqual(kinds([observation(at(102), { activity: requests(...short) })]), []);
+    assert.deepStrictEqual(
+      kinds([
+        observation(at(102), { activity: requests(...short) }),
+        observation(at(130), { activity: requests(long) }),
+      ]),
+      ["OverBudget"],
+    );
+    // As many as allowed, one after the other, is fine.
+    const serial = Array.from({ length: 3 * n }, (_, i) => request(at(100 + i), at(100.5 + i)));
+    assert.deepStrictEqual(kinds([observation(at(140), { activity: requests(...serial) })]), []);
+  });
+
+  it("flags two watch ticks at once: CDN requests go one at a time", () => {
+    const a = tickCall(ch0, at(60));
+    const overlapping: ActuatorCall = { ...tickCall(ch0, at(61)), at: at(59) };
+    assert.include(kinds([observation(at(61), { activity: calls(a, overlapping) })]), "OverBudget");
+    const next = tickCall(ch0, at(80));
+    assert.deepStrictEqual(kinds([observation(at(80), { activity: calls(a, next) })]), []);
+  });
+
+  it("flags more CDN requests in a window than the CDN budget allows", () => {
+    const ticks = Math.ceil(CDN_LIMITS.max / TICK_REQUESTS) + 1;
+    const burst = Array.from({ length: ticks }, (_, i) => tickCall(ch0, at(1 + i)));
+    assert.include(
+      kinds([observation(at(ticks + 1), { activity: calls(...burst) })]),
+      "OverBudget",
+    );
+    const paced = Array.from({ length: ticks }, (_, i) => tickCall(ch0, at(20 * (i + 1))));
+    assert.deepStrictEqual(kinds([observation(at(20 * ticks), { activity: calls(...paced) })]), []);
+  });
+
+  it("charges a tick what it cost: a tick that resolves the stream sends more", () => {
+    // Ticks of 54 requests, as the largest seen live: nine in a minute pass the CDN budget,
+    // where nine of the usual 17 would not.
+    const ticks = (requests: number) =>
+      Array.from({ length: 9 }, (_, i): ActuatorCall => ({
+        kind: "tick",
+        at: at(1 + 6 * i) - 200,
+        endedAt: at(1 + 6 * i),
+        channelId: ch0,
+        result: "ticked",
+        requests,
+      }));
+    assert.isAbove(9 * 54, CDN_LIMITS.max);
+    assert.include(kinds([observation(at(60), { activity: calls(...ticks(54)) })]), "OverBudget");
+    assert.deepStrictEqual(
+      kinds([observation(at(60), { activity: calls(...ticks(TICK_REQUESTS)) })]),
+      [],
+    );
+  });
+
+  it("flags a subscription needing more sockets than Twitch allows per IP", () => {
+    const channels = (n: number) => Array.from({ length: n }, (_, i) => `x${i}` as ChannelId);
+    const subscribe = (n: number): ActuatorCall => ({
+      kind: "subscribe",
+      at: at(60),
+      channelIds: channels(n),
+      sockets: socketsFor(n),
+    });
+    assert.strictEqual(socketsFor(249), TWITCH_SOCKETS);
+    assert.deepStrictEqual(kinds([observation(at(60), { activity: calls(subscribe(249)) })]), []);
+    assert.include(kinds([observation(at(60), { activity: calls(subscribe(250)) })]), "OverBudget");
+  });
+});
+
+describe("invariant 9: a claimable drop gets claimed", () => {
+  const bound = claimLiveness(completed());
+
+  it("flags a drop the twin would let the account claim, left unclaimed past the bound", () => {
+    const from = at(60);
+    assert.deepStrictEqual(kinds([observation(from), observation(from + bound)]), []);
+    assert.deepStrictEqual(kinds([observation(from), observation(from + bound + 1)]), [
+      "ClaimLate",
+    ]);
+  });
+
+  it("stops the clock while the token is revoked or a fault window is open", () => {
+    const from = at(60);
+    const cooled = {
+      ...completed(),
+      cooldowns: [{ from: SIM_EPOCH + 5 * MINUTE, to: SIM_EPOCH + 15 * MINUTE }],
+    };
+    // The window resets the clock: the bound counts again from its end, at +15m.
+    const end = SIM_EPOCH + 15 * MINUTE;
+    const run = (world: World, until: Millis) =>
+      kinds([
+        observation(from, { world }),
+        observation(SIM_EPOCH + 10 * MINUTE, { world }),
+        observation(end, { world }),
+        observation(until, { world }),
+      ]);
+    assert.deepStrictEqual(run(cooled, end + bound), []);
+    assert.deepStrictEqual(run(cooled, end + bound + 1), ["ClaimLate"]);
+    const revoked = completed(buildWorld(scenario([{ kind: "revoke-token", atMinute: 2 }])));
+    assert.deepStrictEqual(
+      kinds([
+        observation(from, { world: revoked }),
+        observation(from + 2 * bound, { world: revoked }),
+      ]),
+      [],
+    );
+  });
+
+  it("counts a claim the twin applied as done", () => {
+    const claimed = completed();
+    const done: World = { ...claimed, claimed: new Map([[d0, at(90)]]) };
+    assert.deepStrictEqual(
+      kinds([
+        observation(at(60)),
+        observation(at(90), { world: done }),
+        observation(at(90) + 2 * bound, { world: done }),
+      ]),
+      [],
+    );
+  });
+});
+
+describe("invariant 10: what a budget refused is sent again", () => {
+  const refused = (command: Command, retryAt: Millis) =>
+    Event.Throttled({ refusals: [{ command, budget: "gql", retryAt }] });
+
+  it("flags a refused read the core never sends again, and accepts one sent at its retry time", () => {
+    const retryAt = at(120);
+    const due = retryAt + 1_000;
+    const refusal = observation(at(60), {
+      step: record(refused(Command.ReadInventory(), retryAt), []),
+    });
+    assert.deepStrictEqual(kinds([refusal, observation(due)]), []);
+    assert.deepStrictEqual(kinds([refusal, observation(due + 1)]), ["RefusalDropped"]);
+    const resent = observation(retryAt, {
+      step: record(Event.Tick(), [Command.ReadInventory()]),
+    });
+    assert.deepStrictEqual(kinds([refusal, resent, observation(due + MINUTE)]), []);
+  });
+
+  it("waits at least THROTTLE_FLOOR, as the core does", () => {
+    const refusal = observation(at(60), {
+      step: record(refused(Command.ReadDirectory({ gameId: "g0" as GameId }), at(0)), []),
+    });
+    assert.deepStrictEqual(kinds([refusal, observation(at(60) + THROTTLE_FLOOR + 1_000)]), []);
+    assert.deepStrictEqual(kinds([refusal, observation(at(60) + THROTTLE_FLOOR + 1_001)]), [
+      "RefusalDropped",
+    ]);
+  });
+
+  it("owes nothing after a restart, a refused token, or for a read refused without a token", () => {
+    const refusal = observation(at(60), {
+      step: record(refused(Command.ReadCatalog(), at(70)), []),
+    });
+    const restart = { saved: undefined, resumed: idle };
+    assert.deepStrictEqual(
+      kinds([refusal, observation(at(600), { restart, state: idle, world: world0 })]),
+      [],
+    );
+    const parked: State = { ...watching, auth: "needs-login" };
+    const parking = observation(at(61), { step: record(Event.AuthFailed(), [], watching, parked) });
+    assert.deepStrictEqual(kinds([refusal, parking, observation(at(600), { state: parked })]), []);
+    const tokenless = observation(at(60), {
+      step: record(refused(Command.ReadCatalog(), at(70)), [], idle),
+      world: world0,
+    });
+    assert.deepStrictEqual(
+      kinds([tokenless, observation(at(600), { state: idle, world: world0 })]),
+      [],
+    );
   });
 });

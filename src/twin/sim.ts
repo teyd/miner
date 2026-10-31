@@ -2,10 +2,11 @@ import fc from "fast-check";
 import { Cause, Clock, Context, Effect, Exit, Fiber, Layer, Random, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import { MINUTE, type Millis } from "../core/model.ts";
-import { Event, type Command } from "../core/protocol.ts";
+import { Event, coalesceThrottled, type Command } from "../core/protocol.ts";
 import { initial, nextDeadline, type State } from "../core/state.ts";
 import { step } from "../core/step.ts";
 import { Actuator } from "../twitch/Actuator.ts";
+import { Budgets, GQL_LIMITS, type Limits } from "../twitch/budget.ts";
 import type { Twitch } from "../twitch/Twitch.ts";
 import { twinActuator } from "./actuator.ts";
 import { canonical, decodeState, encodeState } from "../store/codec.ts";
@@ -41,6 +42,8 @@ export interface RunOptions {
   readonly core?: Core;
   /** Caps the scenario's horizon, to keep test runs short. */
   readonly maxHorizonMinutes?: number;
+  /** The miner's request budgets; the real ones by default. Tests plant `UNLIMITED`. */
+  readonly limits?: { readonly gql?: Limits; readonly cdn?: Limits };
 }
 
 export interface RunResult {
@@ -50,6 +53,8 @@ export interface RunResult {
   /** Minutes the twin credited, and claims it applied: zero for both means nothing was earned. */
   readonly creditedMinutes: number;
   readonly claimsApplied: number;
+  /** The commands a request budget refused at least once. */
+  readonly refused: ReadonlyArray<Command["_tag"]>;
   readonly violation: Violation | undefined;
   /** The last trace lines. */
   readonly tail: ReadonlyArray<string>;
@@ -107,8 +112,15 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
     yield* TestClock.setTime(SIM_EPOCH);
     const world0 = buildWorld(capped);
     const twin = makeTwin(world0);
+    // One set of budgets for the run, as one process has: a restart keeps them, as Twitch's
+    // per-IP count would.
+    const maxWait = capped.gqlMaxWait;
+    const budgets = yield* Budgets.make({
+      ...(maxWait === undefined ? {} : { gql: { ...GQL_LIMITS, maxWait } }),
+      ...options?.limits,
+    });
     const services = yield* Layer.build(
-      Layer.merge(twinTwitch(twin), Layer.succeed(Actuator, twinActuator(twin))),
+      Layer.merge(twinTwitch(twin, budgets), Layer.succeed(Actuator, twinActuator(twin, budgets))),
     );
     const horizon = SIM_EPOCH + capped.horizonMinutes * MINUTE;
     const memory = yield* Ref.make<Memory>(emptyMemory);
@@ -148,10 +160,22 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
     let claimsApplied = 0;
     let lastEdgeAt = SIM_EPOCH;
     let found: Violation | undefined;
+    const refused = new Set<Command["_tag"]>();
 
     const enqueue = (at: Millis, event: Event) => {
       inbox.push({ at, seq: seq++, event });
       inbox.sort((a, b) => a.at - b.at || a.seq - b.seq);
+    };
+
+    /** The inbox's head, with the `Throttled` events right behind it merged in, as the runtime does. */
+    const takeEvent = (): Event => {
+      const first = inbox.shift()!.event;
+      if (first._tag !== "Throttled") return first;
+      const run: Array<Event> = [first];
+      while (inbox[0] !== undefined && inbox[0].at <= now && inbox[0].event._tag === "Throttled") {
+        run.push(inbox.shift()!.event);
+      }
+      return run.length === 1 ? first : coalesceThrottled(run);
     };
 
     const observe = (record: Parameters<typeof checkStep>[1]["step"]) => {
@@ -220,6 +244,11 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
 
     enqueue(now, Event.Started());
     while (found === undefined) {
+      // A `gql-cooldown` the twin began (`startCooldown`): before the step its answer brings.
+      while (twin.backOffs[0] !== undefined && twin.backOffs[0] <= now) {
+        twin.backOffs.shift();
+        yield* budgets.gql.backOff;
+      }
       emit(twin, channelFrames(twin.world, lastEdgeAt, now));
       lastEdgeAt = now;
       for (const frame of drainFrames(twin)) enqueue(frame.at, frame.event);
@@ -232,7 +261,7 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
       const deadline = core.nextDeadline(state);
       const event =
         head !== undefined && head.at <= now
-          ? inbox.shift()!.event
+          ? takeEvent()
           : deadline !== undefined && deadline <= now
             ? Event.Tick()
             : undefined;
@@ -241,6 +270,7 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
         const before = state;
         const result = core.step(state, event, now);
         steps++;
+        if (event._tag === "Throttled") for (const r of event.refusals) refused.add(r.command._tag);
         trace(now, "step", { event, commands: result.commands, watch: result.state.watch });
         if (takeDue(beforePersist, now)) {
           yield* crash;
@@ -267,6 +297,7 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
         ...(head === undefined ? [] : [head.at]),
         ...(deadline === undefined ? [] : [deadline]),
         ...(inFlight.size > 0 ? [now + POLL] : []),
+        ...twin.backOffs.slice(0, 1),
         wakeups.find((t) => t > now) ?? horizon,
       ];
       const wake = Math.max(now + 1, Math.min(...candidates));
@@ -280,6 +311,7 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
       restarts,
       creditedMinutes,
       claimsApplied,
+      refused: [...refused].toSorted(),
       violation: found,
       tail: [...digest.tail],
       world: twin.world,
@@ -294,6 +326,7 @@ export type SeedResult =
       readonly digest: string;
       readonly creditedMinutes: number;
       readonly claimsApplied: number;
+      readonly refused: ReadonlyArray<Command["_tag"]>;
     }
   | {
       readonly _tag: "Failed";
@@ -354,6 +387,7 @@ export const runProperty = (
         digest: first?.result.digest ?? "",
         creditedMinutes: first?.result.creditedMinutes ?? 0,
         claimsApplied: first?.result.claimsApplied ?? 0,
+        refused: first?.result.refused ?? [],
       } as const;
     }
     const shrunk = capHorizon(details.counterexample[0], options);

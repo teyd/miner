@@ -20,6 +20,7 @@ import {
 import { Event } from "../core/protocol.ts";
 import { WATCH_INTERVAL } from "../core/state.ts";
 import { CREDIT_SECONDS } from "./calibration.ts";
+import { GQL_LIMITS } from "../twitch/budget.ts";
 import { SIM_EPOCH, type Fault, type GoalSpec, type Operation, type Scenario } from "./scenario.ts";
 
 /**
@@ -35,6 +36,40 @@ export const GAMES: ReadonlyArray<Game> = [
 ];
 
 export const ACCOUNT = { userId: "1", login: "twin" } as const;
+
+/**
+ * `otherGames` campaigns: one each, started, running three days, with one linked item drop of an
+ * hour, in a game of its own that no channel streams. They add to the catalog and to discovery's
+ * reads, and never to what can earn.
+ */
+const otherCampaigns = (count: number): ReadonlyArray<Campaign> =>
+  Array.from({ length: count }, (_, i): Campaign => {
+    const id = `o${i}` as CampaignId;
+    const startsAt = SIM_EPOCH - HOUR;
+    const endsAt = SIM_EPOCH + 72 * HOUR;
+    return {
+      id,
+      name: `Other ${i}`,
+      game: { id: `x${i}` as GameId, name: `Other game ${i}`, slug: `other-${i}` },
+      startsAt,
+      endsAt,
+      linked: true,
+      allowedChannels: [],
+      drops: [
+        {
+          id: `${id}-d0` as DropId,
+          name: `Other drop ${i}`,
+          requiredMinutes: 60,
+          startsAt,
+          endsAt,
+          preconditions: [],
+          benefits: [
+            { id: `${id}-d0-b`, name: `Other reward ${i}`, distribution: "DIRECT_ENTITLEMENT" },
+          ],
+        },
+      ],
+    };
+  });
 
 /**
  * Inventory shows a claim this long after it happened, when the scenario doesn't say: the core's
@@ -129,6 +164,8 @@ export interface World {
   /** Minutes watched on a campaign with nothing left to earn, which only the session counter shows. */
   readonly overtime: ReadonlyMap<CampaignId, number>;
   readonly revokedAt: Millis | undefined;
+  /** The `gql-cooldown` windows begun so far (`startCooldown`). */
+  readonly cooldowns: ReadonlyArray<{ readonly from: Millis; readonly to: Millis }>;
   readonly session: Session | undefined;
   readonly subscriptions: ReadonlySet<ChannelId>;
 }
@@ -255,7 +292,7 @@ export const buildWorld = (scenario: Scenario): World => {
     }
   }
   return {
-    campaigns,
+    campaigns: [...campaigns, ...otherCampaigns(scenario.otherGames ?? 0)],
     creditsUnlinked: new Set(
       scenario.campaigns.flatMap((spec, i) =>
         spec.creditsUnlinked === true ? [`c${i}` as CampaignId] : [],
@@ -286,6 +323,7 @@ export const buildWorld = (scenario: Scenario): World => {
     frameCursor: 0,
     overtime: new Map(),
     revokedAt: revokes.length === 0 ? undefined : Math.min(...revokes),
+    cooldowns: [],
     session: undefined,
     subscriptions: new Set(),
   };
@@ -856,14 +894,58 @@ export const networkDownAt = (world: World, now: Millis): boolean =>
 export const framesDownAt = (world: World, now: Millis): boolean =>
   faultWindows(world, ["frames-down", "reconnect"]).some((w) => w.from <= now && now < w.to);
 
-/** Start and end of every fault window (of these kinds), for wake-ups and the idle clock. */
+/**
+ * Start and end of every fault window (of these kinds), for wake-ups and the idle clock. A GQL
+ * cooldown is left out: ticks are CDN requests, so the miner can still watch and earn through one
+ * (its own window, `cooldownWindows`, excuses only a late claim).
+ */
 export const faultWindows = (
   world: World,
   kinds?: ReadonlyArray<Fault["kind"]>,
 ): ReadonlyArray<{ readonly from: Millis; readonly to: Millis }> =>
   world.faults.flatMap((f) => {
     if (kinds !== undefined && !kinds.includes(f.kind)) return [];
+    if (f.kind === "gql-cooldown") return [];
     if ("durationSeconds" in f) return [{ from: at(f.atMinute), to: windowEnd(f) }];
     if (f.kind === "reconnect") return [{ from: at(f.atMinute), to: at(f.atMinute) + f.gapMillis }];
     return [];
   });
+
+/** The GQL cooldowns begun so far, which excuse a claim that could not go out meanwhile. */
+export const cooldownWindows = (
+  world: World,
+): ReadonlyArray<{ readonly from: Millis; readonly to: Millis }> => world.cooldowns;
+
+/**
+ * Starts the next `gql-cooldown` due at `now`, if this answer shows a drop ready to claim: the
+ * moment the miner learns of a claim, someone else on its IP spends Twitch's rate. Anchored there
+ * rather than to a minute, because without `drop-claim` frames the claim waits on an inventory
+ * read, which a cooldown already open refuses too: the claim then goes out after the window and
+ * is never the request refused. Returns the world with the window and when the simulator must
+ * back the API budget off (`Budget.backOff`, one cooldown each) to keep it cooling from start to
+ * end: one a cooldown apart, the last one cooldown before the end.
+ */
+export const startCooldown = (
+  world: World,
+  now: Millis,
+  answer: ReadonlyArray<InventoryCampaign>,
+): readonly [World, ReadonlyArray<Millis>] => {
+  const due = world.faults
+    .filter((f) => f.kind === "gql-cooldown" && at(f.atMinute) <= now)
+    .toSorted((a, b) => a.atMinute - b.atMinute);
+  const fault = due[world.cooldowns.length];
+  if (fault === undefined || !("durationSeconds" in fault)) return [world, []];
+  if (world.cooldowns.some((w) => now < w.to)) return [world, []];
+  const ready = answer.some((c) =>
+    c.drops.some(
+      (d) => d.instanceId !== undefined && !d.claimed && claimableAt(world, d.dropId, now),
+    ),
+  );
+  if (!ready) return [world, []];
+  const to = now + Math.max(fault.durationSeconds * 1000, GQL_LIMITS.cooldown);
+  const last = to - GQL_LIMITS.cooldown;
+  const calls: Array<Millis> = [];
+  for (let t = now; t < last; t += GQL_LIMITS.cooldown) calls.push(t);
+  calls.push(last);
+  return [{ ...world, cooldowns: [...world.cooldowns, { from: now, to }] }, calls];
+};

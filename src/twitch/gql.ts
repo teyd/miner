@@ -1,6 +1,7 @@
 import { Effect, Redacted, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type { Millis } from "../core/model.ts";
+import type { Budget } from "./budget.ts";
 import { AuthRejected, TwitchDrift, TwitchUnavailable, type TwitchError } from "./errors.ts";
 import {
   CLIENT_ID,
@@ -15,9 +16,12 @@ import { Envelope } from "./wire.ts";
 
 /**
  * A request with no answer this long fails as `TwitchUnavailable`, so a hung connection can't hang
- * the runtime. With its three retries one read (a batch of up to 35) gives up within
- * 4 × 30 s + 14 s = 134 s, inside the simulator's 5 min bound on a command (plan 09 §4 s3). The
- * wait for a pacing turn counts too. A claim has its own, shorter bound (`CLAIM_TIMEOUT`).
+ * the runtime. The wait for a turn at the budget comes before it and has its own bound
+ * (`GQL_LIMITS.maxWait`), so with its three retries one request (a batch of up to 35) gives up
+ * within 4 × (15 s + 30 s) + 14 s = 194 s (`READ_WORST_CASE`). A read of several batches sends
+ * them one after the other, each with this bound; the simulator's bound on a command
+ * (`COMMAND_DEADLINE`, plan 09 §4 s3) counts three. A claim has its own, shorter bound
+ * (`CLAIM_TIMEOUT`).
  */
 export const REQUEST_TIMEOUT: Millis = 30_000;
 
@@ -25,8 +29,9 @@ export type Decodable = Schema.Top & { readonly DecodingServices: never };
 
 /**
  * One HTTP exchange with Twitch's API, recorded, with its status classified. Reads and mutations
- * share it, so both carry the same client identity and land in the same recording. It sends
- * exactly once: retrying is the caller's choice, and never a claim's.
+ * share it, so both carry the same client identity, count against the same request budget and
+ * land in the same recording. It sends at most once: retrying is the caller's choice, and never a
+ * claim's. A budget that refuses the request fails it with `BudgetExhausted`, unsent.
  */
 export interface Gql {
   readonly oauth: () => string;
@@ -55,6 +60,7 @@ export const makeGql = (
   http: HttpClient.HttpClient,
   credentials: { readonly token: Redacted.Redacted<string>; readonly deviceId: string },
   journal: Journal["Service"],
+  budget: Budget,
 ): Gql => {
   const oauth = () => `OAuth ${Redacted.value(credentials.token)}`;
 
@@ -64,7 +70,7 @@ export const makeGql = (
     variables: unknown,
   ) =>
     Effect.gen(function* () {
-      const [response, text] = yield* http.execute(request).pipe(
+      const exchange = http.execute(request).pipe(
         // Keep the raw text when it isn't JSON (an HTML error page): that is the answer to record.
         Effect.flatMap((r) =>
           Effect.map(r.text.pipe(Effect.orElseSucceed(() => "")), (t) => [r, t] as const),
@@ -78,12 +84,15 @@ export const makeGql = (
             ),
         }),
       );
+      const [response, text] = yield* budget.run(operation, exchange);
       const body: unknown = yield* Effect.try(() => JSON.parse(text) as unknown).pipe(
         Effect.orElseSucceed(() => text),
       );
       yield* journal.record({ operation, variables, status: response.status, body });
       if (response.status === 401)
         return yield* new AuthRejected({ reason: `${operation} answered 401` });
+      // Twitch says this IP sends too much: the whole budget backs off, not just this request.
+      if (response.status === 429) yield* budget.backOff;
       if (response.status === 429 || response.status >= 500) {
         return yield* new TwitchUnavailable({ operation, detail: `HTTP ${response.status}` });
       }

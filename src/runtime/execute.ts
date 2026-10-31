@@ -2,7 +2,7 @@ import { Effect, Ref } from "effect";
 import type { ChannelId, GameId } from "../core/model.ts";
 import { Event, readKey, type Command } from "../core/protocol.ts";
 import { Actuator } from "../twitch/Actuator.ts";
-import type { TwitchError } from "../twitch/errors.ts";
+import type { BudgetExhausted, TwitchError } from "../twitch/errors.ts";
 import { Twitch, type Account } from "../twitch/Twitch.ts";
 
 /**
@@ -27,13 +27,24 @@ export const DIRECTORY_LIMIT = 30;
 
 const none: ReadonlyArray<Event> = [];
 
+/** A request budget refused the command's request, unsent: the core reschedules it. */
+const throttled = (command: Command, error: BudgetExhausted): ReadonlyArray<Event> => [
+  Event.Throttled({ refusals: [{ command, budget: error.budget, retryAt: error.retryAt }] }),
+];
+
 /** A rejected token parks the core; anything else on a read is retried by its next deadline. */
-const onReadError = (error: TwitchError): ReadonlyArray<Event> =>
-  error._tag === "AuthRejected" ? [Event.AuthFailed()] : none;
+const onReadError = (command: Command, error: TwitchError): ReadonlyArray<Event> =>
+  error._tag === "AuthRejected"
+    ? [Event.AuthFailed()]
+    : error._tag === "BudgetExhausted"
+      ? throttled(command, error)
+      : none;
 
 /** A channel read that gave up still answers, so discovery stops waiting for it. */
-const onChannelsError = (error: TwitchError, read: string): ReadonlyArray<Event> =>
-  error._tag === "AuthRejected" ? [Event.AuthFailed()] : [Event.ChannelsReadFailed({ read })];
+const onChannelsError = (command: Command, error: TwitchError, read: string) =>
+  error._tag === "AuthRejected" || error._tag === "BudgetExhausted"
+    ? onReadError(command, error)
+    : [Event.ChannelsReadFailed({ read })];
 
 const remember = (memory: Ref.Ref<Memory>, f: (m: Memory) => Memory) => Ref.update(memory, f);
 
@@ -49,7 +60,7 @@ export const execute = (
         return yield* twitch.validate.pipe(
           Effect.tap((account) => remember(memory, (m) => ({ ...m, account }))),
           Effect.as([Event.TokenValid()]),
-          Effect.catch((e) => Effect.succeed(onReadError(e))),
+          Effect.catch((e) => Effect.succeed(onReadError(command, e))),
         );
 
       case "ReadCatalog": {
@@ -69,8 +80,8 @@ export const execute = (
           Effect.map((catalog) => [Event.CatalogRead({ campaigns: catalog.campaigns })]),
           Effect.catch((e) =>
             Effect.succeed(
-              e._tag === "AuthRejected"
-                ? [Event.AuthFailed()]
+              e._tag === "AuthRejected" || e._tag === "BudgetExhausted"
+                ? onReadError(command, e)
                 : [Event.CatalogUnavailable({ reason: `${e.operation}: ${e.detail}` })],
             ),
           ),
@@ -80,7 +91,7 @@ export const execute = (
       case "ReadInventory":
         return yield* twitch.inventory.pipe(
           Effect.map(({ progress, awarded }) => [Event.InventoryRead({ progress, awarded })]),
-          Effect.catch((e) => Effect.succeed(onReadError(e))),
+          Effect.catch((e) => Effect.succeed(onReadError(command, e))),
         );
 
       case "ReadDirectory": {
@@ -96,7 +107,7 @@ export const execute = (
             })),
           ),
           Effect.map((channels) => [Event.ChannelsRead({ channels, read })]),
-          Effect.catch((e) => Effect.succeed(onChannelsError(e, read))),
+          Effect.catch((e) => Effect.succeed(onChannelsError(command, e, read))),
         );
       }
 
@@ -107,14 +118,14 @@ export const execute = (
         if (known.length === 0) return [Event.ChannelsReadFailed({ read })];
         return yield* twitch.streams(known).pipe(
           Effect.map((channels) => [Event.ChannelsRead({ channels, read })]),
-          Effect.catch((e) => Effect.succeed(onChannelsError(e, read))),
+          Effect.catch((e) => Effect.succeed(onChannelsError(command, e, read))),
         );
       }
 
       case "ReadCurrentDrop":
         return yield* twitch.currentDrop(command.channelId).pipe(
           Effect.map((read) => [Event.CurrentDropRead({ channelId: command.channelId, ...read })]),
-          Effect.catch((e) => Effect.succeed(onReadError(e))),
+          Effect.catch((e) => Effect.succeed(onReadError(command, e))),
         );
 
       case "Subscribe":
@@ -140,9 +151,9 @@ export const execute = (
           Effect.as([Event.WatchTicked({ channelId })]),
           Effect.catch((e) =>
             Effect.succeed(
-              e._tag === "AuthRejected"
-                ? [Event.AuthFailed()]
-                : [Event.WatchFailed({ channelId, reason: e.reason })],
+              e._tag === "WatchFailure"
+                ? [Event.WatchFailed({ channelId, reason: e.reason })]
+                : onReadError(command, e),
             ),
           ),
         );
@@ -152,12 +163,17 @@ export const execute = (
         const { campaignId, dropId } = command;
         return yield* actuator.claim(command.instanceId).pipe(
           Effect.map((outcome) => [Event.ClaimResult({ campaignId, dropId, outcome })]),
-          // Any failure may hide a success: report `unknown` and let inventory decide.
+          // Any failure may hide a success: report `unknown` and let inventory decide. Only a
+          // budget's refusal means the claim was never sent.
           Effect.catch((e) =>
-            Effect.succeed([
-              Event.ClaimResult({ campaignId, dropId, outcome: "unknown" }),
-              ...(e._tag === "AuthRejected" ? [Event.AuthFailed()] : []),
-            ]),
+            Effect.succeed(
+              e._tag === "BudgetExhausted"
+                ? throttled(command, e)
+                : [
+                    Event.ClaimResult({ campaignId, dropId, outcome: "unknown" }),
+                    ...(e._tag === "AuthRejected" ? [Event.AuthFailed()] : []),
+                  ],
+            ),
           ),
         );
       }

@@ -82,6 +82,29 @@ describe("scenario", () => {
     ]);
   });
 
+  it("gives about half the worlds each way for a budget to refuse", () => {
+    const sample = fc.sample(scenarioArbitrary, { seed: 8, numRuns: 400 });
+    const share = (f: (s: Scenario) => boolean) => sample.filter(f).length / sample.length;
+    const has = (s: Scenario, kind: string, operation?: string) =>
+      s.faults.some(
+        (f) =>
+          f.kind === kind &&
+          (operation === undefined || ("operation" in f && f.operation === operation)),
+      );
+    for (const [name, p] of [
+      ["a short wait for a turn", share((s) => s.gqlMaxWait !== undefined)],
+      ["a cooldown over the first claim", share((s) => has(s, "gql-cooldown"))],
+      [
+        "a 429 on a discovery's directory read",
+        share((s) => has(s, "http-429", "DirectoryPage_Game")),
+      ],
+      ["campaign 0 allow-listed", share((s) => s.campaigns[0]!.allowList.length > 0)],
+    ] as const) {
+      assert.isAbove(p, 0.35, name);
+      assert.isBelow(p, 0.65, name);
+    }
+  });
+
   it("rejects values outside the bounds", () => {
     const [scenario] = fc.sample(scenarioArbitrary, { seed: 5, numRuns: 1 });
     assert.throws(() => Schema.decodeUnknownSync(Scenario)({ ...scenario, horizonMinutes: 5 }));

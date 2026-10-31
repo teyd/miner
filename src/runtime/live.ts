@@ -2,11 +2,11 @@ import { Effect, Layer, Redacted } from "effect";
 import { HttpClient } from "effect/http";
 import { Store } from "../store/Store.ts";
 import { Actuator } from "../twitch/Actuator.ts";
+import { Budgets } from "../twitch/budget.ts";
 import { makeGql } from "../twitch/gql.ts";
 import { hlsWatch } from "../twitch/hls.ts";
 import { Journal, type Limits } from "../twitch/journal.ts";
 import { liveActuator } from "../twitch/live.ts";
-import { pace } from "../twitch/pace.ts";
 import { PubSub } from "../twitch/PubSub.ts";
 import { Credentials, Twitch } from "../twitch/Twitch.ts";
 import { withListening } from "./listen.ts";
@@ -17,9 +17,9 @@ export const LIVE_STATE = "state.json";
 
 /**
  * Everything `run` needs to mine for real, over a given HTTP client and credentials: the
- * `Twitch` reads and the live actuator share one pacer for the API, so mutations count against
- * the same request budget as reads, and one flight recorder in `$DATA_DIR/recordings`. Playlist
- * and segment requests go to Twitch's CDN unpaced, one after another, as TDM sends them.
+ * `Twitch` reads and the live actuator share one set of request budgets (`budget.ts`), so
+ * mutations count against the same API budget as reads and playlists and segments against the
+ * CDN's, and one flight recorder in `$DATA_DIR/recordings`.
  * PubSub (needs a `Connector` from outside) follows the channels the core subscribes to.
  */
 export const liveLayer = (dataDir: string, limits?: Limits) => {
@@ -31,16 +31,23 @@ export const liveLayer = (dataDir: string, limits?: Limits) => {
   );
   const services = Layer.unwrap(
     Effect.gen(function* () {
-      const cdn = yield* HttpClient.HttpClient;
-      const api = yield* pace(cdn);
+      const http = yield* HttpClient.HttpClient;
+      const budgets = yield* Budgets.make();
       const credentials = yield* Credentials;
       const recorder = yield* Journal;
-      const gql = makeGql(api, credentials, recorder);
-      const method = hlsWatch({ gql, cdn, deviceId: credentials.deviceId, journal: recorder });
+      const gql = makeGql(http, credentials, recorder, budgets.gql);
+      const method = hlsWatch({
+        gql,
+        cdn: http,
+        budget: budgets.cdn,
+        deviceId: credentials.deviceId,
+        journal: recorder,
+      });
       const twitch = Twitch.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
-            Layer.succeed(HttpClient.HttpClient, api),
+            Layer.succeed(HttpClient.HttpClient, http),
+            Layer.succeed(Budgets, budgets),
             Layer.succeed(Credentials, credentials),
             Layer.succeed(Journal, recorder),
           ),

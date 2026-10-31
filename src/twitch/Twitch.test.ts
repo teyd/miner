@@ -18,14 +18,15 @@ import { DEFAULT_GOAL } from "../core/model.ts";
 import { minable } from "../core/plan.ts";
 import { withReceived } from "../core/rules.ts";
 import { stubTwitch, type Answer, type Hang } from "./stub.ts";
-import { READ_BATCH, READ_GAP, READ_WORST_CASE } from "../core/state.ts";
+import { READ_BATCH, READ_GAP, READ_MAX_WAIT, READ_WORST_CASE } from "../core/state.ts";
+import { GQL_LIMITS } from "./budget.ts";
 import { GQL_BATCH_LIMIT } from "./identity.ts";
-import { REQUEST_GAP } from "./pace.ts";
 import { REQUEST_TIMEOUT, deviceIdOf, Twitch } from "./Twitch.ts";
 
 describe("the core's read bounds", () => {
   it("match the client's pacing and batches", () => {
-    assert.strictEqual(READ_GAP, REQUEST_GAP);
+    assert.strictEqual(READ_GAP, GQL_LIMITS.gap);
+    assert.strictEqual(READ_MAX_WAIT, GQL_LIMITS.maxWait);
     assert.strictEqual(READ_BATCH, GQL_BATCH_LIMIT);
   });
 });
@@ -167,14 +168,34 @@ describe("inventory", () => {
       for (const hang of ["hang", "hang-body"] as const) {
         const { program, stub } = run({ Inventory: [hang] }, (t) => t.inventory);
         const fiber = yield* Effect.forkChild(Effect.exit(program));
-        // Four attempts of 30 s and backoffs of 2, 4 and 8 s: 134 s, well inside 5 min, and
-        // the core's `READ_WORST_CASE`, which bounds discovery.
-        assert.strictEqual(READ_WORST_CASE, 4 * REQUEST_TIMEOUT + 14_000);
+        // Four attempts of 30 s and backoffs of 2, 4 and 8 s: 134 s with no wait for a turn,
+        // 194 s at most with one. That bounds one request; a read of several batches sends them
+        // one after the other, each with this bound (below). The core's `READ_WORST_CASE` bounds
+        // discovery with it.
+        assert.strictEqual(READ_WORST_CASE, 4 * (GQL_LIMITS.maxWait + REQUEST_TIMEOUT) + 14_000);
         yield* TestClock.adjust(READ_WORST_CASE);
         const exit = yield* Fiber.join(fiber);
         assert.deepStrictEqual(errorTag(exit), ["TwitchUnavailable"]);
         assert.strictEqual(stub.calls["Inventory"], 4);
       }
+    }),
+  );
+
+  it.effect("bounds each batch of a long read alone: three can take past 5 min", () =>
+    Effect.gen(function* () {
+      // A full watchlist is three batches; each answers on its fourth attempt, the last never.
+      const logins = Array.from({ length: 100 }, (_, i) => `c${i}`);
+      const slow = ["hang", "hang", "hang", streamInfo] as const;
+      const { program } = run(
+        { VideoPlayerStreamInfoOverlayChannel: [...slow, ...slow, "hang"] },
+        (t) => t.streams(logins),
+      );
+      const fiber = yield* Effect.forkChild(Effect.exit(program));
+      yield* TestClock.adjust(5 * 60_000);
+      assert.isUndefined(fiber.pollUnsafe(), "still reading after 5 min");
+      // The simulator's `COMMAND_DEADLINE` is three of `READ_WORST_CASE`, and a minute.
+      yield* TestClock.adjust(3 * READ_WORST_CASE - 5 * 60_000);
+      assert.deepStrictEqual(errorTag(yield* Fiber.join(fiber)), ["TwitchUnavailable"]);
     }),
   );
 

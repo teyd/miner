@@ -1,6 +1,6 @@
 import { Context, Schema, type Effect } from "effect";
 import type { ChannelId, DropInstanceId } from "../core/model.ts";
-import type { AuthRejected, TwitchError } from "./errors.ts";
+import type { AuthRejected, BudgetExhausted, TwitchError } from "./errors.ts";
 
 /** A watch tick that credited nothing. The reasons are the core's `WatchFailed` reasons. */
 export class WatchFailure extends Schema.TaggedError<
@@ -25,9 +25,14 @@ export class Actuator extends Context.Service<
   {
     /** Opens the watch session on this channel, closing any other. Playback goes by login. */
     readonly watch: (channelId: ChannelId, login: string) => Effect.Effect<void>;
-    readonly watchTick: (channelId: ChannelId) => Effect.Effect<void, WatchFailure | AuthRejected>;
+    readonly watchTick: (
+      channelId: ChannelId,
+    ) => Effect.Effect<void, WatchFailure | AuthRejected | BudgetExhausted>;
     readonly stopWatching: Effect.Effect<void>;
-    /** Sent once per call. A lost answer may still have succeeded: never retry it. */
+    /**
+     * Sent at most once per call. A lost answer may still have succeeded: never retry it. Fails
+     * with `BudgetExhausted` only when it was not sent.
+     */
     readonly claim: (instanceId: DropInstanceId) => Effect.Effect<ClaimAnswer, TwitchError>;
     /** Replaces the followed channel set. */
     readonly subscribe: (channelIds: ReadonlyArray<ChannelId>) => Effect.Effect<void>;

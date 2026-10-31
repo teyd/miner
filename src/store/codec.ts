@@ -45,8 +45,9 @@ const revive = (value: unknown): unknown => {
  * of drops goals (2 migrates). 4: `awarded`, `inventoried`, `avoidCampaigns`, `skipCauses` and
  * the watch's `wasted` (2 and 3 migrate). A file of the unmerged first version 4, which saved
  * `avoidCampaigns` as a set, reads with nothing avoided: a start resets both anyway.
+ * 5: `deadlines.deferred` (2, 3 and 4 migrate).
  */
-export const STATE_VERSION = 4;
+export const STATE_VERSION = 5;
 
 export const encodeState = (state: State): string =>
   `{"state":${canonical(state)},"version":${STATE_VERSION}}`;
@@ -78,27 +79,40 @@ const fromVersion3 = (state: Record<string, unknown>): Record<string, unknown> =
       : state["watch"],
 });
 
-/** Throws on text that isn't a saved state of this version, or of one it migrates (2, 3). */
+/**
+ * Version 4 to 5: no channel read was refused before budgets existed. `Started` empties
+ * `deferred` anyway.
+ */
+const fromVersion4 = (state: Record<string, unknown>): Record<string, unknown> => ({
+  ...state,
+  deadlines: Predicate.isObject(state["deadlines"])
+    ? { ...state["deadlines"], deferred: new Map() }
+    : state["deadlines"],
+});
+
+/** Throws on text that isn't a saved state of this version, or of one it migrates (2, 3, 4). */
 export const decodeState = (text: string): State => {
   const parsed: unknown = JSON.parse(text);
   if (!Predicate.isObject(parsed) || !("version" in parsed) || !("state" in parsed)) {
     throw new Error("not a saved miner state");
   }
-  if (parsed.version === 2 || parsed.version === 3) {
+  if (parsed.version === 2 || parsed.version === 3 || parsed.version === 4) {
     if (!Predicate.isObject(parsed.state) || Array.isArray(parsed.state)) {
       throw new Error("not a saved miner state");
     }
     const state = revive(parsed.state) as Record<string, unknown>;
-    return checked(fromVersion3(parsed.version === 2 ? fromVersion2(state) : state));
+    const v4 =
+      parsed.version === 4
+        ? state["avoidCampaigns"] instanceof Set
+          ? { ...state, avoidCampaigns: new Map(), skipCauses: new Map() }
+          : state
+        : fromVersion3(parsed.version === 2 ? fromVersion2(state) : state);
+    return checked(fromVersion4(v4));
   }
   if (parsed.version !== STATE_VERSION) {
     throw new Error(`state version ${String(parsed.version)}, this miner reads ${STATE_VERSION}`);
   }
-  const state = revive(parsed.state);
-  if (Predicate.isObject(state) && state["avoidCampaigns"] instanceof Set) {
-    return checked({ ...state, avoidCampaigns: new Map(), skipCauses: new Map() });
-  }
-  return checked(state);
+  return checked(revive(parsed.state));
 };
 
 type Check = (value: unknown) => boolean;
@@ -180,6 +194,7 @@ const fields: { readonly [K in keyof State]-?: Check } = {
     tick: optional(isNumber),
     online: mapOf(isString, isNumber),
     subscribe: optional(isNumber),
+    deferred: mapOf(isString, isNumber),
   }),
 };
 

@@ -5,6 +5,7 @@ import type { ChannelId, DropInstanceId } from "../core/model.ts";
 import claimed from "./fixtures/claim-claimed-instance.json" with { type: "json" };
 import unknown from "./fixtures/claim-unknown-instance.json" with { type: "json" };
 import unlinked from "./fixtures/claim-unlinked-account.json" with { type: "json" };
+import { GQL_LIMITS, makeBudget } from "./budget.ts";
 import { makeGql } from "./gql.ts";
 import type { WatchMethod } from "./hls.ts";
 import { Mutations } from "./identity.ts";
@@ -31,15 +32,17 @@ const countingMethod = () => {
 
 const setup = (claim: Answer = claimed) => {
   const stub = stubPlayback({ claim });
+  const budget = Effect.runSync(makeBudget("gql", GQL_LIMITS));
   const gql = makeGql(
     stub.http,
     { token: Redacted.make("test-token"), deviceId: "d".repeat(32) },
     Journal.of({ record: () => Effect.void, intent: () => Effect.void, frame: () => Effect.void }),
+    budget,
   );
   const { ticks, method } = countingMethod();
   const actuator = liveActuator({ gql, method });
   const claims = () => stub.requests.filter((r) => r.step === "claim");
-  return { stub, actuator, claims, ticks };
+  return { stub, actuator, claims, ticks, budget };
 };
 
 describe("claim", () => {
@@ -57,6 +60,22 @@ describe("claim", () => {
         },
       });
       assert.strictEqual(t.claims()[0]!.headers["authorization"], "OAuth test-token");
+    }),
+  );
+
+  it.effect("is never sent when the request budget refuses it, and says so", () =>
+    Effect.gen(function* () {
+      const t = setup();
+      // Twitch answered 429 to something else: the API budget cools down.
+      yield* t.budget.backOff;
+      const refused = yield* Effect.flip(t.actuator.claim(instance));
+      assert.strictEqual(refused._tag, "BudgetExhausted");
+      assert.lengthOf(t.stub.requests, 0);
+      // A 429 to the claim itself was sent: its outcome is unknown, never "not sent".
+      const limited = setup({ status: 429, body: "" });
+      const answered = yield* Effect.flip(limited.actuator.claim(instance));
+      assert.strictEqual(answered._tag, "TwitchUnavailable");
+      assert.lengthOf(limited.claims(), 1);
     }),
   );
 
@@ -124,18 +143,18 @@ describe("liveActuator", () => {
       const a = "1" as ChannelId;
       const b = "2" as ChannelId;
       const early = yield* Effect.flip(t.actuator.watchTick(a));
-      assert.strictEqual(early.reason, "network");
+      assert.strictEqual(early._tag === "WatchFailure" && early.reason, "network");
       yield* t.actuator.watch(a, "alpha");
       yield* t.actuator.watchTick(a);
       const stale = yield* Effect.flip(t.actuator.watchTick(b));
-      assert.strictEqual(stale.reason, "network");
+      assert.strictEqual(stale._tag === "WatchFailure" && stale.reason, "network");
       yield* t.actuator.watch(b, "beta");
       yield* t.actuator.watchTick(b);
       const old = yield* Effect.flip(t.actuator.watchTick(a));
-      assert.strictEqual(old.reason, "network");
+      assert.strictEqual(old._tag === "WatchFailure" && old.reason, "network");
       yield* t.actuator.stopWatching;
       const stopped = yield* Effect.flip(t.actuator.watchTick(b));
-      assert.strictEqual(stopped.reason, "network");
+      assert.strictEqual(stopped._tag === "WatchFailure" && stopped.reason, "network");
       assert.deepStrictEqual(t.ticks, ["alpha", "beta"]);
     }),
   );

@@ -1,8 +1,8 @@
 import { Effect, Layer, Redacted } from "effect";
 import { Store } from "../store/Store.ts";
 import { Actuator, WatchFailure } from "../twitch/Actuator.ts";
+import { Budgets } from "../twitch/budget.ts";
 import { Journal, type Limits } from "../twitch/journal.ts";
-import { paced } from "../twitch/pace.ts";
 import { PubSub } from "../twitch/PubSub.ts";
 import { Credentials, Twitch } from "../twitch/Twitch.ts";
 import { withListening } from "./listen.ts";
@@ -38,7 +38,7 @@ export const SHADOW_STATE = "state.shadow.json";
 
 /**
  * Everything `run` needs in shadow mode, over a given HTTP client, PubSub connector and
- * credentials: the real `Twitch` client, paced and recording into `$DATA_DIR/recordings`, the
+ * credentials: the real `Twitch` client, within its request budget and recording into `$DATA_DIR/recordings`, the
  * real PubSub (listening is read-only, research 04 §4), the shadow actuator, and the state file.
  */
 export const shadowLayer = (dataDir: string, limits?: Limits) => {
@@ -48,7 +48,7 @@ export const shadowLayer = (dataDir: string, limits?: Limits) => {
       return Journal.rolling(`${dataDir}/recordings`, [Redacted.value(token)], limits);
     }),
   );
-  const twitch = Twitch.layer.pipe(Layer.provide(Layer.merge(paced(), journal)));
+  const twitch = Twitch.layer.pipe(Layer.provide(Layer.merge(Budgets.layer, journal)));
   const pubsub = PubSub.layer.pipe(Layer.provide(Layer.merge(twitch, journal)));
   const actuator = withListening(
     Layer.effect(

@@ -4,6 +4,7 @@ import {
   type CampaignId,
   type ChannelId,
   type DropId,
+  type Progress,
   type GameId,
   type Millis,
 } from "../core/model.ts";
@@ -470,6 +471,56 @@ describe("invariants 8 and 9: no watch for a received drop, none that earns noth
     // A claim this read can't show yet (`CLAIMED_FLAG_LAG` and a minute of latency).
     const fresh: World = { ...long, claimed: new Map([[d0, at(0)]]) };
     assert.deepStrictEqual(kinds([{ ...inventory(30), world: fresh }]), []);
+  });
+});
+
+describe("the unplaced-credit slack (review of A6)", () => {
+  const madeProgress = (dropId: string, minutes: number): Progress => ({
+    dropId: dropId as DropId,
+    campaignId: c0,
+    campaignEndsAt: SIM_EPOCH + 600 * MINUTE,
+    minutes,
+    instanceId: undefined,
+    claimed: false,
+  });
+  // A credit to a real campaign (so it earns in the world) that the core's catalog lacks: only an
+  // inventory read can place it.
+  const credited = (creditsAt: Millis): ReadonlyArray<Observation> => [
+    observation(at(0)),
+    observation(creditsAt, {
+      activity: {
+        requests: [],
+        calls: [],
+        credits: [{ at: creditsAt, campaignId: c0, channelId: ch0, dropIds: [d0] }],
+      },
+    }),
+  ];
+  const read = (now: Millis, progress: ReadonlyArray<Progress>): Observation =>
+    observation(now, { step: record(Event.InventoryRead({ progress, awarded: [] }), []) });
+  const checkerAt = (observations: ReadonlyArray<Observation>) =>
+    observations.reduce((c, o) => checkStep(c, o)[0], initialChecker);
+
+  it("grants the slack from the first read that carries the credit's minutes", () => {
+    const shown = checkerAt([...credited(at(20)), read(at(25), [madeProgress("c0-d0", 1)])]);
+    assert.strictEqual(shown.unplacedHeardAt.get(ch0), at(25));
+  });
+
+  it("grants nothing when that one read omits the drop, or a later one shows it", () => {
+    const omitted = checkerAt([
+      ...credited(at(20)),
+      read(at(25), []),
+      read(at(600), [madeProgress("c0-d0", 1)]),
+    ]);
+    assert.isUndefined(omitted.unplacedHeardAt.get(ch0));
+  });
+
+  it("forgets both after a restart", () => {
+    const shown = checkerAt([...credited(at(20)), read(at(25), [madeProgress("c0-d0", 1)])]);
+    const restarted = checkStep(
+      shown,
+      observation(at(60), { restart: { saved: undefined, resumed: watching } } as never),
+    )[0];
+    assert.isUndefined(restarted.unplacedHeardAt.get(ch0));
   });
 });
 

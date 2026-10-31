@@ -14,6 +14,7 @@ import {
   type Campaign,
   type CampaignId,
   type ChannelId,
+  type DropId,
   type Millis,
 } from "../core/model.ts";
 import type { Command, Event } from "../core/protocol.ts";
@@ -131,7 +132,10 @@ export interface Checker {
    * can't keep the frame's minutes (no campaign to file them under), so it learns them from the
    * first inventory read that shows them, and confirms the watch then (`confirmWatched`).
    */
-  readonly unplacedCredit: ReadonlyMap<ChannelId, Millis>;
+  readonly unplacedCredit: ReadonlyMap<
+    ChannelId,
+    { readonly at: Millis; readonly dropIds: ReadonlyArray<DropId> }
+  >;
   /** The core's inventory read that may be the first to show each channel's `unplacedCredit`. */
   readonly unplacedHeardAt: ReadonlyMap<ChannelId, Millis>;
   /** When each campaign last had a credit the settings want, on any channel. */
@@ -342,6 +346,8 @@ export const checkStep = (
       // What a previous run read or failed to read is no news to this one, which reads again.
       lastCatalogChangeAt: undefined,
       lastReadFailureAt: undefined,
+      unplacedCredit: new Map(),
+      unplacedHeardAt: new Map(),
     };
   }
 
@@ -422,7 +428,7 @@ export const checkStep = (
       fail("TwinBroken", `credit on ${credit.channelId} after revoke`);
     if (earnedWantedCredit(world, credit, c.fairlyAvoidedCampaigns)) {
       lastEarnedCredit.set(credit.channelId, credit.at);
-      if (unknown) unplacedCredit.set(credit.channelId, credit.at);
+      if (unknown) unplacedCredit.set(credit.channelId, { at: credit.at, dropIds: credit.dropIds });
     }
     if (wantedCredit(world, credit, c.fairlyAvoidedCampaigns)) {
       lastWantedCredit.set(credit.channelId, credit.at);
@@ -513,11 +519,17 @@ const checkCommands = (
     // previous read may not have (seed 150534: a minute earned at +4.4m, unplaced, first shown by
     // the read at +10.1m, which confirmed the watch).
     const unplacedHeardAt = new Map(c.unplacedHeardAt);
-    for (const [channelId, at] of c.unplacedCredit) {
-      const shownFrom = at + o.world.inventoryLag;
+    for (const [channelId, unplaced] of c.unplacedCredit) {
+      // The read must actually carry the credit's minutes: a credit the core can never place (a
+      // campaign that opens and closes between two catalog reads) earns no slack (review of A6).
+      const carried = event.progress.some(
+        (p) => unplaced.dropIds.includes(p.dropId) && p.minutes > 0,
+      );
+      const previous = c.lastInventoryAt;
       const first =
-        shownFrom <= o.now &&
-        (c.lastInventoryAt === undefined || shownFrom > c.lastInventoryAt - TWIN_TIMEOUT - 1_000);
+        carried &&
+        unplaced.at + o.world.inventoryLag <= o.now &&
+        (previous === undefined || unplaced.at + o.world.inventoryLag > previous - 1_000);
       if (first) unplacedHeardAt.set(channelId, o.now);
     }
     c = { ...c, lastInventoryAt: o.now, unplacedHeardAt };

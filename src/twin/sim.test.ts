@@ -298,6 +298,21 @@ describe("seeds found by longer sweeps", () => {
     // A channel given up while Twitch credited another campaign's unwanted item, 100 minutes
     // short of moving on to the emote a goal wants (calibrated generator, 2026-10-31).
     [131, "a channel given up, Twitch more than a stall from a wanted drop"],
+    // One framed drop per campaign (measured, `framesAll` off): a wanted drop credited beside the
+    // framed one shows only in the inventory, and the channel was given up while it earned.
+    [161, "a wanted drop credited without frames, heard through the inventory"],
+    [160174, "a wanted drop credited without frames, after a switch"],
+    // Twitch credited only a drop the goal filters out, far from done, and each frame confirmed
+    // the watch: the miner never gave the campaign up.
+    [80578, "a filtered drop credited alone, 148 minutes from done"],
+    [280710, "a filtered drop credited alone, 236 minutes from done"],
+    // Another wanted campaign's filtered badge, 5 minutes short of the emote Twitch moves on to.
+    [270187, "a channel kept while another wanted campaign's badge leads to its emote"],
+    // A known drop's opening woke nothing but the next inventory read, or a catalog read 15
+    // minutes after the last; the channels of an allow-list were read only at that catalog read.
+    [270057, "a known drop opens: the core wakes for it"],
+    [280721, "a known drop opens on a channel the core knows"],
+    [280753, "a known drop opens on an allow-list the core never read"],
   ];
   for (const [seed, name] of quirky) {
     it.effect(
@@ -445,20 +460,24 @@ describe("planted bugs are caught and shrunk", () => {
     }),
   );
 
-  it.effect("no GQL budget: a large catalog's discovery burst gets 429s", () =>
-    Effect.gen(function* () {
-      const unbudgeted = { limits: { gql: UNLIMITED }, maxHorizonMinutes: 120 };
-      // Seed 7: fourteen other games, as many as the live catalog of 2026-10-30.
-      const result = yield* runSeed(7, { ...unbudgeted, maxShrinks: 30 });
-      assert.strictEqual(result._tag, "Failed");
-      if (result._tag !== "Failed") return;
-      assert.strictEqual(result.capsule.violation.kind, "OverBudget");
-      assert.match(result.capsule.violation.detail, /429/);
-      assert.isUndefined((yield* runTwice(result.capsule.scenario)).violation);
-      // The sweep finds it without being pointed at it.
-      const swept = yield* runSeeds(1, 40, { ...unbudgeted, maxShrinks: 0 });
-      assert.isAtLeast(swept.filter((r) => r._tag === "Failed").length, 1);
-    }),
+  it.effect(
+    "no GQL budget: a large catalog's discovery burst gets 429s",
+    () =>
+      Effect.gen(function* () {
+        const unbudgeted = { limits: { gql: UNLIMITED }, maxHorizonMinutes: 120 };
+        // Seed 7: fourteen other games, as many as the live catalog of 2026-10-30.
+        const result = yield* runSeed(7, { ...unbudgeted, maxShrinks: 30 });
+        assert.strictEqual(result._tag, "Failed");
+        if (result._tag !== "Failed") return;
+        assert.strictEqual(result.capsule.violation.kind, "OverBudget");
+        assert.match(result.capsule.violation.detail, /429/);
+        assert.isUndefined((yield* runTwice(result.capsule.scenario)).violation);
+        // The sweep finds it without being pointed at it.
+        const swept = yield* runSeeds(1, 40, { ...unbudgeted, maxShrinks: 0 });
+        assert.isAtLeast(swept.filter((r) => r._tag === "Failed").length, 1);
+      }),
+    // A shrink plus a 40-seed sweep against an unbudgeted twin: over 30 s on CI.
+    120_000,
   );
 
   it.effect("the API budget's concurrency alone keeps nothing under Twitch's rate", () =>
@@ -1172,6 +1191,42 @@ describe("calibrated twin", () => {
     }),
   );
 
+  it.effect("a wanted drop credited without frames: the channel kept while it earns", () =>
+    Effect.gen(function* () {
+      // Twitch frames one drop per campaign, the closest to done (run4h). The newer campaign
+      // credits an unwanted badge (framed, 40 minutes) and the wanted emote beside it (silent,
+      // 50 minutes); only the inventory shows the emote move. The core used to adopt or confirm
+      // a drop only from frames and the session read, stall on the item it targeted and give
+      // up the channel while the emote earned (sweep seed 161). Inventory rises are credits.
+      const goal = { ...DEFAULT_GOAL_SPEC, rewards: ["item", "emote"] as const };
+      const result = yield* runTwice({
+        ...measured,
+        frameGaps: [1],
+        horizonMinutes: 45,
+        settings: { goals: [{ ...goal, rewards: [...goal.rewards] }] },
+        campaigns: [
+          {
+            ...base.campaigns[0]!,
+            startMinute: -60,
+            durationMinutes: 300,
+            drops: [{ requiredMinutes: 60, after: null, benefit: "DIRECT_ENTITLEMENT" }],
+          },
+          {
+            ...base.campaigns[0]!,
+            startMinute: -10,
+            durationMinutes: 2000,
+            drops: [
+              { requiredMinutes: 50, after: null, benefit: "EMOTE" },
+              { requiredMinutes: 40, after: null, benefit: "BADGE" },
+            ],
+          },
+        ],
+        channels: [base.channels[0]!],
+      });
+      assert.isUndefined(result.violation, JSON.stringify(result.violation));
+    }),
+  );
+
   /**
    * What the calibrated twin still finds in the core, kept out of the sweep (`scenario.ts`) until
    * the core is fixed. The test pins the failure; when a fix lands it fails, and the bound goes.
@@ -1187,42 +1242,6 @@ describe("calibrated twin", () => {
           faults: [{ kind: "lose-claim-answer", atMinute: 0 }],
         });
         assert.include(["ClaimedTwice", "MutationRetried"], result.violation?.kind);
-      }),
-    );
-
-    it.effect("a wanted drop credited without frames: the channel given up while it earns", () =>
-      Effect.gen(function* () {
-        // Twitch frames one drop per campaign, the closest to done (run4h). The newer campaign
-        // credits an unwanted badge (framed, 40 minutes) and the wanted emote beside it (silent,
-        // 50 minutes); only the inventory shows the emote move, and the core adopts or confirms
-        // a drop only from frames and the session read. It stalls on the item it targets and
-        // gives up the channel while the emote earns (sweep seed 161).
-        const goal = { ...DEFAULT_GOAL_SPEC, rewards: ["item", "emote"] as const };
-        const result = yield* runTwice({
-          ...measured,
-          frameGaps: [1],
-          horizonMinutes: 45,
-          settings: { goals: [{ ...goal, rewards: [...goal.rewards] }] },
-          campaigns: [
-            {
-              ...base.campaigns[0]!,
-              startMinute: -60,
-              durationMinutes: 300,
-              drops: [{ requiredMinutes: 60, after: null, benefit: "DIRECT_ENTITLEMENT" }],
-            },
-            {
-              ...base.campaigns[0]!,
-              startMinute: -10,
-              durationMinutes: 2000,
-              drops: [
-                { requiredMinutes: 50, after: null, benefit: "EMOTE" },
-                { requiredMinutes: 40, after: null, benefit: "BADGE" },
-              ],
-            },
-          ],
-          channels: [base.channels[0]!],
-        });
-        assert.strictEqual(result.violation?.kind, "AvoidedUnfairly");
       }),
     );
   });

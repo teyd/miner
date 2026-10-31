@@ -80,8 +80,8 @@ const listArb = <A>(item: fc.Arbitrary<A>, bound: Bound) => {
 /** The longest claimed-flag lag the sweep draws, in seconds (see `randomScenario`). */
 export const CLAIM_FLAG_LAG_SWEPT = 59;
 
-/** The sweep frames every credited drop (`framesAll`, see `randomScenario`). */
-export const FRAMES_ALL_SWEPT = true;
+/** Whether the sweep frames every credited drop (`framesAll`, see `randomScenario`). */
+export const FRAMES_ALL_SWEPT = false;
 
 /** What window faults hit. The first eight are the API's, as the generator drew them before B1. */
 export const OPERATIONS = [
@@ -296,8 +296,8 @@ export const Scenario = Schema.Struct({
   claimFrames: Schema.optionalKey(Schema.Boolean),
   /**
    * Every credited drop frames, not only the one closest to done, as the twin did before the
-   * calibration. The sweep draws true until the core learns a drop's minutes from the inventory
-   * (`FRAMES_ALL_SWEPT`). Omitted: false, one drop per campaign, as measured.
+   * calibration. The sweep draws false (`FRAMES_ALL_SWEPT`), the measured world, since the core
+   * learns an unframed drop's minutes from the inventory. Omitted: false.
    */
   framesAll: Schema.optionalKey(Schema.Boolean),
   settings: Schema.Struct({ goals: list(GoalSpec, "goals") }),
@@ -493,8 +493,8 @@ const randomScenario: fc.Arbitrary<Scenario> = fc
     // Shrinks towards the first gap, 1: a frame every minute.
     frameGaps: listArb(fc.constantFrom(...FRAME_GAPS), "frameGaps"),
     claimFrames: fc.integer({ min: 0, max: 9 }).map((n) => n === 9),
-    // Measured: one framed drop per campaign. Drawn as every drop until the core learns a wanted
-    // drop's minutes from the inventory (`sim.test.ts` shows the channel it gives up otherwise).
+    // Measured: one framed drop per campaign. The core hears an unframed credit when an
+    // inventory read shows its minutes (`creditShown` in `step.ts`; sweep seed 161).
     framesAll: fc.constant(FRAMES_ALL_SWEPT),
     settings: fc.record({ goals: listArb(goalArbitrary, "goals") }),
     campaigns: listArb(

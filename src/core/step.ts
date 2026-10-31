@@ -185,7 +185,8 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
       ];
 
     case "InventoryRead": {
-      const progress = new Map(s.progress);
+      const credited = creditShown(s, event.progress, now, rank);
+      const progress = new Map(credited.progress);
       for (const read of event.progress)
         progress.set(read.dropId, merge(progress.get(read.dropId), read));
       const claims = new Map(s.claims);
@@ -207,7 +208,7 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
       for (const a of event.awarded)
         awarded.set(a.benefitId, Math.max(a.at, awarded.get(a.benefitId) ?? a.at));
       const next = {
-        ...s,
+        ...credited,
         progress,
         awarded,
         inventoried: new Set(event.progress.map((p) => p.dropId)),
@@ -301,7 +302,7 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
     }
 
     case "Tick":
-      return tick(s, now);
+      return tick(s, now, rank);
   }
 };
 
@@ -363,7 +364,7 @@ const throttled = (s: State, command: Command, at: Millis, now: Millis): State =
   }
 };
 
-const tick = (state: State, now: Millis): Handled => {
+const tick = (state: State, now: Millis, rank: Rank): Handled => {
   const commands: Array<Command> = [];
   const s = expireSkips(state, now);
   let d = s.deadlines;
@@ -371,10 +372,42 @@ const tick = (state: State, now: Millis): Handled => {
     commands.push(Command.ValidateToken());
     d = { ...d, validate: now + VALIDATE_INTERVAL };
   }
+  let discovery = s.discovery;
+  const openedAt = d.tick;
   if (s.auth === "valid") {
     if (now >= d.catalog) {
       commands.push(Command.ReadCatalog());
       d = { ...d, catalog: now + CATALOG_INTERVAL };
+    } else if (s.watch._tag === "Idle" && openedAt !== undefined && now >= openedAt) {
+      // A wanted drop opened (`firstOpening`). Discovery read channels only for what earned at
+      // the catalog read, so ask now for the channels that can credit what opened if none known
+      // can: an allow-list the core never read, or a game it never looked for (seed 280753). The
+      // catalog read's own discovery does this when it is due.
+      const known = [...s.channels.values()];
+      const excluded = new Set(s.settings.goals.flatMap((g) => g.excludeChannels));
+      const skipped = new Set(
+        [...s.avoidCampaigns].filter(([, until]) => now < until).map(([id]) => id),
+      );
+      const opened = new Set(
+        (s.catalog ?? [])
+          .filter(
+            (c) =>
+              !skipped.has(c.id) &&
+              c.drops.some((x) => x.startsAt >= openedAt && x.startsAt <= now) &&
+              !known.some((ch) => channelCanEarn(c, ch, [...excluded], s.avoid)),
+          )
+          .map((c) => c.id),
+      );
+      const reads = discover(s, now, rank, opened).filter(
+        (read) => s.discovery?.pending.includes(readKey(read)) !== true,
+      );
+      if (reads.length > 0) {
+        commands.push(...reads);
+        discovery = {
+          pending: [...(s.discovery?.pending ?? []), ...reads.map((read) => readKey(read))],
+          until: Math.max(s.discovery?.until ?? now, now + discoverySettle(reads)),
+        };
+      }
     }
     if (now >= d.inventory) {
       commands.push(Command.ReadInventory());
@@ -391,7 +424,7 @@ const tick = (state: State, now: Millis): Handled => {
       d = { ...d, deferred: new Map([...d.deferred].filter(([, at]) => now < at)) };
     }
   }
-  return [{ ...s, deadlines: d }, commands];
+  return [{ ...s, discovery, deadlines: d }, commands];
 };
 
 /** A campaign skip ends at its time (`CAMPAIGN_SKIP`), so `nextDeadline` never points back. */
@@ -494,9 +527,10 @@ const skipCampaign = (s: State, drop: Drop, now: Millis): State => {
  * the watch (`STALL_AFTER`): new minutes, within the requirement, for a drop that could still
  * earn before this credit. A drop a goal wants is adopted if it isn't the watched one: several
  * campaigns can share a stream and Twitch picks which one progresses. Another drop of a campaign
- * a goal works on (a badge while the goal wants the item) confirms without adoption: Twitch
- * reports one drop, and moves on to the next once it completes. A credit to anything else
- * (received, complete, past its requirement, a campaign no goal works on) is noted in `wasted`;
+ * a goal works on (a badge while the goal wants the item) confirms without adoption once it is
+ * within a stall of completing: Twitch reports one drop, and moves on to the next once it
+ * completes. A credit to anything else (received, complete, past its requirement, a filtered drop
+ * further off, a campaign no goal works on) is noted in `wasted`;
  * if it is the drop the watched campaign was last given up for, the campaign is given up again.
  */
 const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Rank): State => {
@@ -523,7 +557,22 @@ const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Ra
     minutes <= found.drop.requiredMinutes &&
     canEarn(found.drop, input.progress, now) &&
     wantedOn(input, found.campaign, w.channelId, rank);
-  if (!earns) {
+  const usable = earns && usableOn(input, found.campaign, found.drop, w.channelId, rank);
+  // A filtered-out drop of a campaign a goal works on (a badge while the goal wants the emote):
+  // Twitch reports one drop and moves on to the next once it completes, so it confirms the watch
+  // without adoption, but only within a stall of completing (and before its window closes).
+  // Further off, it is no sign a wanted drop comes soon: Twitch crediting only a filtered
+  // 148-minute item confirmed a watch forever (seed 80578). It needn't be the watched campaign:
+  // Twitch credits one campaign per stream, and the channel was given up 5 minutes before it moved
+  // on to the emote (seed 270187). The twin's `wantedCredit` holds the same bound.
+  const leadsOn =
+    earns &&
+    !usable &&
+    (found.drop.requiredMinutes - minutes) * MINUTE <=
+      Math.min(STALL_AFTER, found.drop.endsAt - now);
+  if (!usable && !leadsOn) {
+    // A credit that leads nowhere counts toward giving up: the channel, or the watched campaign
+    // when it is that campaign's (`ticked`).
     const again = w.campaignId === found.campaign.id && s.skipCauses.get(w.campaignId) === dropId;
     if (again) return skipCampaign(updated, found.drop, now);
     return { ...updated, watch: { ...w, wasted: dropId } };
@@ -531,14 +580,7 @@ const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Ra
   // The campaign earns again, so a skip it caused is over: a straggling frame for that drop must
   // not skip it again (review of A6: one stale frame cost a fresh hour).
   const clears = clearSkip(updated, found.campaign.id);
-  if (!usableOn(input, found.campaign, found.drop, w.channelId, rank)) {
-    // A filtered-out drop beside the wanted one in the watched campaign (parallel drops) shows
-    // Twitch is crediting here: confirm, don't adopt. Another campaign's credit is no such sign:
-    // it must count toward giving the channel up, or an unwanted campaign would hold it forever.
-    return found.campaign.id === w.campaignId
-      ? { ...clears, watch: { ...w, confirmedAt: now, wasted: undefined } }
-      : { ...updated, watch: { ...w, wasted: dropId } };
-  }
+  if (leadsOn) return { ...clears, watch: { ...w, confirmedAt: now, wasted: undefined } };
   return {
     ...clears,
     watch: {
@@ -553,6 +595,29 @@ const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Ra
       wasted: undefined,
     },
   };
+};
+
+/**
+ * Twitch frames only the drop of a campaign closest to done (run4h), so a wanted drop beside it
+ * progresses unframed: the inventory is the first to show its minutes rise. Each rise is a credit
+ * like a frame's (`credit`: adopt, confirm or waste), as long as the watched channel can earn the
+ * drop's campaign; a rise elsewhere is minutes the previous watch earned before a switch, whose
+ * inventory trails it, and is only recorded.
+ */
+const creditShown = (s: State, shown: ReadonlyArray<Progress>, now: Millis, rank: Rank): State => {
+  let next = s;
+  for (const read of shown.toSorted((a, b) => a.dropId.localeCompare(b.dropId))) {
+    if (read.claimed || read.minutes <= (next.progress.get(read.dropId)?.minutes ?? 0)) continue;
+    const w = next.watch;
+    const found = findDrop(next.catalog, read.dropId);
+    const channel = w._tag === "Watching" ? next.channels.get(w.channelId) : undefined;
+    const here =
+      found !== undefined &&
+      channel !== undefined &&
+      channelCanEarn(found.campaign, channel, [], new Set());
+    if (here) next = credit(next, read.dropId, read.minutes, now, rank);
+  }
+  return next;
 };
 
 /**
@@ -611,10 +676,18 @@ const replan = (s: State, now: Millis, rank: Rank): Handled => {
       reason === "no-live-channel"
         ? Math.min(s.deadlines.catalog, now + CATALOG_OPENING_GAP)
         : s.deadlines.catalog;
+    // An idle core wakes when the next wanted drop opens its window: nothing else would wake it
+    // before the next inventory read, up to `INVENTORY_INTERVAL` late (seed 270057). Then the
+    // plan may find a channel it already knows, or `tick` reads the channels that can credit it.
+    const opening = firstOpening(s, s.catalog, now);
     const idle: State = {
       ...s,
       watch: { _tag: "Idle", reason },
-      deadlines: { ...s.deadlines, tick: undefined, catalog },
+      deadlines: {
+        ...s.deadlines,
+        tick: opening === Infinity ? undefined : opening,
+        catalog,
+      },
     };
     return [idle, w._tag === "Watching" ? [Command.StopWatching()] : []];
   }
@@ -750,6 +823,12 @@ const follow = (s: State, now: Millis, rank: Rank): Handled => {
  * otherwise a drop opening between hourly reads waits up to an hour for its channels.
  */
 const nextOpening = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis): Millis => {
+  const first = firstOpening(s, campaigns, now);
+  return first === Infinity ? Infinity : Math.max(now + CATALOG_OPENING_GAP, first);
+};
+
+/** When the next drop a goal wants opens its window, after `now`. */
+const firstOpening = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis): Millis => {
   const progress = withReceived(campaigns, s.progress, s.awarded, s.inventoried);
   const starts = campaigns.flatMap((campaign) => {
     if (now >= campaign.endsAt) return [];
@@ -760,17 +839,23 @@ const nextOpening = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis):
       .filter((d) => wanted.has(d.id) && d.startsAt > now)
       .map((d) => d.startsAt);
   });
-  return starts.length === 0 ? Infinity : Math.max(now + CATALOG_OPENING_GAP, Math.min(...starts));
+  return Math.min(Infinity, ...starts);
 };
 
 /** Ask for the channels that can credit the minable campaigns: the directory or the allow-list. */
-const discover = (s: State, now: Millis, rank: Rank): ReadonlyArray<ChannelRead> => {
+const discover = (
+  s: State,
+  now: Millis,
+  rank: Rank,
+  only?: ReadonlySet<CampaignId>,
+): ReadonlyArray<ChannelRead> => {
   if (s.catalog === undefined) return [];
   const input = planInput(s, s.catalog, now);
   const games = new Set<string>();
   const listed = new Set<ChannelId>();
   const commands: Array<ChannelRead> = [];
   for (const { campaign } of rank(input)) {
+    if (only !== undefined && !only.has(campaign.id)) continue;
     if (campaign.allowedChannels.length > 0) {
       for (const id of campaign.allowedChannels) if (listed.size < WATCHLIST_LIMIT) listed.add(id);
     } else if (!games.has(campaign.game.id)) {

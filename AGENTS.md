@@ -95,6 +95,9 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   SIGINT or SIGTERM with exit 130. The image's `HEALTHCHECK` runs `miner status`.
 - Not built yet: config reload while running, replay of recordings.
 - `docs/history/10-plan-roadmap.md`: the running plan (waves A–E) and how every step is built, reviewed and merged.
+- `docs/verification.md` and `.agents/skills/verify-miner/SKILL.md`: how to prove a change without Twitch
+  (`pnpm verify`, the evidence each step leaves, and the feature map). `scripts/verify/**` are plain Node
+  CLIs around the built miner, not app code: they are outside the lint scope, like `scripts/hooks/*.sh`.
 - `docs/decisions.md`: settled answers. Read it before proposing anything. Don't reopen a decision without new evidence.
 - `docs/research/`: dated research with sources. `docs/history/`: proposals and their critiques.
 

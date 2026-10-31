@@ -30,11 +30,13 @@ export default defineConfig({
       "effecttsgo/unstable-api-usage": "off",
       "effecttsgo/experimental-api-usage": "off",
     },
+    // Not app code, like scripts/hooks/*.sh: plain Node CLIs that spawn the built miner and read
+    // files. They never run under the simulator, so the determinism rules do not apply to them,
+    // and the override list below stays what AGENTS.md says it is.
+    ignorePatterns: ["scripts/verify/**"],
     overrides: [
       {
-        // scripts/ are the shell around the built miner (verify-miner, hooks): processes, files
-        // and clocks are their job, and no simulator ever runs them.
-        files: ["src/bin.ts", "src/platform/**", "scripts/**"],
+        files: ["src/bin.ts", "src/platform/**"],
         rules: Object.fromEntries(Object.keys(entropy).map((rule) => [rule, "off"])),
       },
     ],

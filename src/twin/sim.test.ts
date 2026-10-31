@@ -699,6 +699,89 @@ describe("rewards already received, and credit the plan can't use (the 4 h live 
     }),
   );
 
+  /**
+   * Seed 150534, shrunk, faults past its horizon dropped. A badge campaign starts unseen and is
+   * credited on ch0 for two minutes; its frames can't be filed, so the core learns the second
+   * minute from the inventory read at +10.1m, a read late, and confirms its watch then. From +4.4m
+   * Twitch credits only an unwanted emote there and never the linked badge the core targets.
+   */
+  const unplacedCredit: Scenario = {
+    latencySeed: 0,
+    horizonMinutes: 60,
+    inventoryLagMinutes: 1,
+    settings: {
+      goals: [{ ...DEFAULT_GOAL_SPEC, rewards: ["item", "badge"] }],
+    },
+    campaigns: [
+      {
+        game: 0,
+        startMinute: -23,
+        durationMinutes: 1100,
+        linked: true,
+        allowList: [],
+        drops: [{ requiredMinutes: 1, after: null, benefit: "BADGE" }],
+      },
+      {
+        game: 0,
+        startMinute: 1,
+        durationMinutes: 30,
+        linked: false,
+        creditsUnlinked: false,
+        allowList: [],
+        drops: [
+          {
+            requiredMinutes: 2,
+            after: null,
+            benefit: "BADGE",
+            window: { startMinute: 2, durationMinutes: 30 },
+          },
+          { requiredMinutes: 1, after: null, benefit: "BADGE" },
+        ],
+      },
+      {
+        game: 0,
+        startMinute: 0,
+        durationMinutes: 1306,
+        linked: false,
+        creditsUnlinked: false,
+        allowList: [5, 6],
+        drops: [
+          { requiredMinutes: 77, after: 2, benefit: "EMOTE" },
+          { requiredMinutes: 4, after: 0, benefit: "DIRECT_ENTITLEMENT" },
+        ],
+      },
+    ],
+    channels: [
+      {
+        game: 0,
+        viewers: 6310,
+        dropsEnabled: true,
+        refuses: false,
+        liveAtStart: true,
+        changes: [],
+      },
+      {
+        game: 2,
+        viewers: 5625,
+        dropsEnabled: true,
+        refuses: false,
+        liveAtStart: true,
+        changes: [{ atMinute: 0, to: "game-1" }],
+      },
+    ],
+    faults: [],
+  };
+
+  it.effect("a credit first heard through the inventory restarts the stall clock there", () =>
+    Effect.gen(function* () {
+      const result = yield* runTwice(unplacedCredit);
+      assert.isUndefined(result.violation, JSON.stringify(result.violation));
+      // The emote credited every minute still must not hold the channel.
+      const old = yield* runTwice(unplacedCredit, { core: anyCreditCounts });
+      assert.strictEqual(old.violation?.kind, "Unproductive");
+    }),
+  );
+
   it.effect(
     "both at once, the miner of the live run, on random worlds with these quirks",
     () =>

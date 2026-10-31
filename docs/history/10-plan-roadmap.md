@@ -38,7 +38,7 @@ Each wave starts when what it builds on is merged. Inside a wave the steps run i
 | A5   | Secret guard: gitleaks (pinned), lefthook pre-commit, token check, CI step                                     | #20                                                                         |
 | A6   | Skip rewards already received (`gameEventDrops`); stop on credit the plan can't use (the 2 h Witchspire waste) | branch `fix/already-received-rewards`, open: seed 150534                    |
 
-### Wave B — a twin we can trust (built, in review)
+### Wave B — a twin we can trust (merged #29–#31, plus the core round #32)
 
 | Step | What                                                                                           | State                                                  |
 | ---- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
@@ -137,3 +137,18 @@ Favourites and a second stream wait for experiments E2/E3 of research 05 (decisi
   it: 270057, 280721 and 280753 (`Idle`) pass. No state field added, `STATE_VERSION` stays 5. Each
   seed is a stored regression (`sim.test.ts`). Sweeps: 1–300, 140001–141000, 280001–281000 and
   290001–291000 pass.
+- 2026-10-31 13:00 — Wave B complete (#29 B3, #30 B2, #31 B1). The core round (#32) then fixed the five
+  bugs the calibrated wire twin pinned: an unframed credit is now learned from inventory, a filtered-out
+  credit confirms only while it is within a stall of completing, a known drop's opening is a wake-up, and
+  two planner bugs (270187, 280710/280721/280753). `FRAMES_ALL_SWEPT` is false again, so the sweep runs the
+  measured world. DeepSeek confirmed the claim count is unchanged (1779 on both sides of 140001–141000);
+  its stale-rise guard was tried and reverted (it rejected a legitimate first credit, seed 161).
+  - **Live check on the merged build (60 min, 2026-10-31 11:39–12:39):** 2 claims (`CFB Twitch Pack`
+    15/15 and 30/60), one every ~15 and ~60 min, each sent once; 1 credited minute per watched minute;
+    one HLS session with 179 beats, one per 20 s; 4 playback tokens (19-min refresh); 5 PubSub connections,
+    no reconnect needed; no budget refusals, no throttling, no `not sent`; 6 awards logged as `received
+    already` (both Witchspire drops — A6 working live); state migrated v2 → v5 on a real file. One warning:
+    `claimBonus` unsupported. Memory not sampled (the sampler matched the wrong pid twice).
+- 2026-10-31 17:20 — Wave C delegated: C1 the `verify-miner` skill and `pnpm verify`, C2 a simulated week
+  with a heap bound and RSS work (the live miner sits at 126–131 MB against a ≤ 90 MB target), C3
+  `config.json` reload while running.

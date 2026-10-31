@@ -1,7 +1,7 @@
 # miner
 
 A headless Twitch drops miner for homelabs, built for other people too. TypeScript 7 on Node 26, Effect 4.1,
-pnpm 12, Vite+ (`vp`). Status: the pure core, the read-only Twitch client, the config file, the simulator (`miner sim`), the
+pnpm 12, Vite+ (`vp`). Status: the pure core, the read-only Twitch client, the config file (reloaded while running), the simulator (`miner sim`), the
 flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), the live actuator (watch over HLS,
 `ClaimDrop`), PubSub and `miner status [--json]` are built. `miner run` mined and claimed for real on 2026-10-30 (research 02 §4).
 
@@ -24,10 +24,17 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   at `nextDeadline(state)`, steps, saves the state, then forks the step's commands, whose results come back as
   events. `execute.ts` turns a command into `Twitch`/`Actuator` calls (the simulator uses it too).
   `settings.ts` maps `config.json` to core `Settings` before every step (names and logins become ids as the
-  catalog and channels arrive) and lists what `Settings` can't express yet (`unmapped`, logged at start).
+  catalog and channels arrive) and lists what `Settings` can't express yet (`unmapped`, logged at start
+  and when a reload adds one). `reload.ts` is the config watch (decision 28): every 10 s one `stat`
+  through Effect's `FileSystem` (the content when there is no mtime, as in `memoryFileSystem`), and on
+  a change `load`; a valid change becomes the current config and the loop steps the core with a
+  `SettingsChanged` (which carries the previous `Settings`, so the core reads the channels of what
+  only the new ones want, at once); an invalid or vanished file is logged and refused, keeping the
+  last good config. `miner run` passes the watch to `run`; tests pass a plain `Config`.
   `shadow.ts` is the actuator of `run --shadow`: it records and logs what it would do and sends nothing.
   `live.ts` wires `miner run`: reads and mutations share one set of request budgets and one recorder, state in `state.json`.
-  `status.ts` writes `$DATA_DIR/status.json` (tmp + rename, never fatal) from the run loop: on a change (at most
+  `status.ts` writes `$DATA_DIR/status.json` (tmp + rename, never fatal, with `config.reloadedAt` and a
+  refused edit's problems) from the run loop: on a change (at most
   every 2 s) and on a 30 s heartbeat, the loop's one wake-up besides the core's deadlines; a clean stop writes
   `stoppedAt`.
 - `src/status/`: the external contract (decision 15). `schema.ts` is the versioned, documented Schema of
@@ -93,7 +100,7 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   with any user-visible change. `Dockerfile` and `compose.yaml` build and run the image (node alpine
   plus `dist/bin.mjs`, uid 1000, `/data`); `deploy/miner.service` is the systemd unit. Both stop on
   SIGINT or SIGTERM with exit 130. The image's `HEALTHCHECK` runs `miner status`.
-- Not built yet: config reload while running, replay of recordings.
+- Not built yet: replay of recordings.
 - `docs/history/10-plan-roadmap.md`: the running plan (waves A–E) and how every step is built, reviewed and merged.
 - `docs/verification.md` and `.agents/skills/verify-miner/SKILL.md`: how to prove a change without Twitch
   (`pnpm verify`, the evidence each step leaves, and the feature map). `scripts/verify/**` are plain Node

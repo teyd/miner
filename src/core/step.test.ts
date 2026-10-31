@@ -1283,3 +1283,74 @@ describe("auth", () => {
     assert.include(tags(d.send(Event.Tick(), T0 + HOUR)), "ValidateToken");
   });
 });
+
+describe("a config reload (SettingsChanged)", () => {
+  const one = campaign("one");
+  const two = campaign("two", { game: game("game-2") });
+
+  /** Wants game 1 only; watching `a`. Game 2's channels were never read. */
+  const watchingOne = () => {
+    const d = driver(initial(settings({ games: games(["game-1"]) })));
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    const issued = reads(d.send(Event.CatalogRead({ campaigns: [one, two] })));
+    assert.deepStrictEqual(issued.map(readKey), ["directory:game-1"]);
+    d.send(read([channel("a")]));
+    assert.strictEqual(watchedChannel(d.state), "a");
+    settle(d);
+    return d;
+  };
+
+  /** Steps as the runtime does: the new settings in the state, the old ones in the event. */
+  const reload = (d: ReturnType<typeof driver>, next: State["settings"], at = d.now + MINUTE) => {
+    const before = { ...d.state, settings: next };
+    const result = step(before, Event.SettingsChanged({ previous: d.state.settings }), at);
+    return { state: result.state, commands: result.commands };
+  };
+
+  it("changes nothing when the settings are the same", () => {
+    const d = watchingOne();
+    const { state, commands } = reload(d, d.state.settings);
+    assert.deepStrictEqual(commands, []);
+    assert.strictEqual(state.watch, d.state.watch);
+  });
+
+  it("reads the channels of a game only the new settings want, and keeps the watch", () => {
+    const d = watchingOne();
+    const { state, commands } = reload(d, settings({ games: games(["game-1", "game-2"]) }));
+    assert.deepStrictEqual(commands, [Command.ReadDirectory({ gameId: game("game-2").id })]);
+    assert.deepStrictEqual(state.discovery?.pending, ["directory:game-2"]);
+    assert.strictEqual(state.watch, d.state.watch, "game 1 still comes first");
+  });
+
+  it("moves at once to a game the new settings put first, once its channels answer", () => {
+    const d = watchingOne();
+    const { state, commands } = reload(d, settings({ games: games(["game-2"]) }));
+    assert.deepStrictEqual(tags(commands), ["ReadDirectory", "StopWatching"]);
+    assert.strictEqual(watchedChannel(state), "discovering");
+    const answered = step(
+      state,
+      read([channel("y", { gameId: "game-2" })], "directory:game-2"),
+      d.now + MINUTE,
+    );
+    assert.deepStrictEqual(tags(answered.commands), ["Watch"]);
+    assert.strictEqual(watchedChannel(answered.state), "y");
+  });
+
+  it("drops an excluded channel at once and reads nothing it knows", () => {
+    const d = watchingOne();
+    d.send(read([channel("a"), channel("b", { viewers: 50 })]));
+    const excluded = settings({ games: games(["game-1"]), excludeChannels: [chid("a")] });
+    const { state, commands } = reload(d, excluded);
+    assert.deepStrictEqual(reads(commands), []);
+    assert.include(tags(commands), "Watch");
+    assert.strictEqual(watchedChannel(state), "b");
+  });
+
+  it("waits for the token like every other step", () => {
+    const d = driver(initial(settings({ games: games(["game-1"]) })));
+    d.send(Event.Started());
+    const { commands } = reload(d, settings());
+    assert.deepStrictEqual(commands, []);
+  });
+});

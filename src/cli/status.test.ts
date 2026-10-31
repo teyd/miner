@@ -81,6 +81,32 @@ describe("miner status", () => {
     }),
   );
 
+  it.effect("says when the config was reloaded, and what is wrong with a refused one", () =>
+    Effect.gen(function* () {
+      const fresh = yield* status([], file());
+      assert.include(fresh.out, "  config: as started\n");
+      const refused = file({
+        config: {
+          reloadedAt: T0 - 300_000,
+          rejected: { at: T0 - 5_000, problems: ["/data/config.json#: not valid JSON"] },
+        },
+      });
+      const { code, out } = yield* status([], refused);
+      assert.strictEqual(code, 0, "a refused edit is no health problem: the miner mines on");
+      assert.include(
+        out,
+        "  config: reloaded 5 min ago; the file on disk was refused 15 s ago, the last valid one is in use:\n" +
+          "    /data/config.json#: not valid JSON",
+      );
+      // A file written before reloads has no `config`: still read, and nothing printed.
+      const { config: _, ...older } = file();
+      const old = yield* status([], older as StatusFile);
+      assert.strictEqual(old.code, 0);
+      // The console keeps the earlier reports of this test: look at the last one only.
+      assert.notInclude(old.out.slice(old.out.lastIndexOf("healthy: running")), "config:");
+    }),
+  );
+
   it.effect("prints the documented JSON report, with the file", () =>
     Effect.gen(function* () {
       const { code, out } = yield* status(["--json"], file());

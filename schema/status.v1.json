@@ -147,6 +147,52 @@
         }
       ]
     },
+    "ConfigFile": {
+      "type": "object",
+      "properties": {
+        "reloadedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "description": "When the miner last applied a changed $DATA_DIR/config.json while running (it checks the file every 10 s). ISO 8601, UTC."
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the miner last applied a changed $DATA_DIR/config.json while running (it checks the file every 10 s). `null`: not yet."
+        },
+        "rejected": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "string",
+                  "description": "When the miner read the file and refused it. ISO 8601, UTC."
+                },
+                "problems": {
+                  "type": "array",
+                  "description": "What is wrong, one line each: `<path>#<JSON pointer>: <message>`.",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": ["at", "problems"],
+              "additionalProperties": true
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The file as it is now is invalid or gone, so the miner keeps mining with the last good one. `null`: the file in use is the file on disk."
+        }
+      },
+      "required": ["reloadedAt", "rejected"],
+      "additionalProperties": true,
+      "description": "$DATA_DIR/config.json, reloaded while the miner runs. Absent in files written by miners before the reload."
+    },
     "ClaimInFlight": {
       "type": "object",
       "properties": {
@@ -279,6 +325,9 @@
         },
         "watch": {
           "$ref": "#/definitions/Watch"
+        },
+        "config": {
+          "$ref": "#/definitions/ConfigFile"
         },
         "claims": {
           "type": "object",

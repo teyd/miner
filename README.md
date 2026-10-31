@@ -20,12 +20,12 @@ for long yet. Today:
   runs the miner, its watching and PubSub code included, against a fake Twitch. A drop that
   can no longer finish in time never holds up a goal below it that can.
 - **Not yet:** channel-points goals and `claimBonus` (accepted in the config, skipped with a
-  warning), a second stream, picking up `config.json` edits without a restart, and a published
-  image, binary or npm package. You build it from this repository.
+  warning), a second stream, and a published image, binary or npm package. You build it from
+  this repository.
 - **Twitch's API is private** and changes about once a month. Then the miner needs an update
   ([section 5](#5-when-it-needs-you) tells how to notice).
 
-On startup the miner logs one warning per config option it can't honour yet, so it never
+On startup, and when an edit adds one, the miner logs one warning per config option it can't honour yet, so it never
 silently ignores a setting.
 
 ## Contents
@@ -100,7 +100,14 @@ mines drops for every game. `miner config init` writes this starter file:
 - Games go by the name Twitch shows (`{ "name": "Rust" }`), never by id.
 - `miner config validate` checks the file offline and names each problem by its JSON path, e.g.
   `config.json#/priorities/0/games: …`. Unknown keys count as problems, so a typo can't slip through.
-- Restart the miner after editing the file.
+- No restart needed after an edit: the running miner looks at the file every 10 seconds and
+  uses the new version from the next step. It logs `config: reloaded …/config.json`, stops
+  watching what the file no longer wants, and reads the channels of a game you just added
+  straight away. An edit that changes nothing it watches doesn't interrupt the watch.
+- If the edited file is invalid (or gone, as some editors leave it for a moment), the miner logs
+  each problem as a warning, keeps mining with the last valid version, and takes the file again
+  once it is fixed. `miner status` shows when the file was last reloaded and, while the file on
+  disk is refused, why. `miner config validate` checks an edit before the miner sees it.
 
 Section 3 shows how to run these commands in each setup. The design behind the file is in [research 07](docs/research/07-config.md).
 
@@ -253,10 +260,11 @@ these cases are yours:
 | `runtime: idle (needs-login)`                                        | Twitch refused the token. The miner stays up but sends nothing.                                                                 | Get a new token ([section 1](#1-get-a-token)), put it in `.env` or `miner.env`, restart.                                                                                              |
 | `run stopped: TOKEN is not set`, exit 1                              | No token in the environment.                                                                                                    | Set `TOKEN`.                                                                                                                                                                          |
 | `…config.json#/…: …`, exit 2                                         | `config.json` is invalid. Each line names one problem.                                                                          | Fix it, check with `miner config validate`, restart.                                                                                                                                  |
+| `config: …config.json#/…: …` then `config: … not reloaded` (warning) | You edited `config.json` while the miner runs, and the new version is invalid. The miner goes on with the last valid one.       | Fix the file; the miner picks it up within 10 s (`config: reloaded …`). No restart.                                                                                                   |
 | `run stopped: another miner (pid …) runs on …`, exit 1               | A second miner on the same data directory.                                                                                      | Stop the other one. Only one miner per account, ever, even across machines.                                                                                                           |
 | `run stopped: …state.json can't be read …`, exit 1                   | The state file is damaged or from another version.                                                                              | Stop the miner, move `state.json` away. It starts fresh from Twitch's inventory.                                                                                                      |
 | `config: … is not supported yet …` (warning at start)                | A config option the miner doesn't honour yet.                                                                                   | Nothing. The miner runs without it ([status](#status)).                                                                                                                               |
-| `config: game "…" matches no game with an active campaign`           | A listed game is misspelt, or has no campaign right now.                                                                        | If it names a "did you mean", fix the name in `config.json` and restart. Otherwise nothing: it is mined once a campaign starts.                                                       |
+| `config: game "…" matches no game with an active campaign`           | A listed game is misspelt, or has no campaign right now.                                                                        | If it names a "did you mean", fix the name in `config.json` (no restart). Otherwise nothing: it is mined once a campaign starts.                                                      |
 | `idle (catalog-unavailable)` for hours, or minutes that stop growing | Twitch changed its private API, or is down.                                                                                     | Run `miner doctor`: it names an answer that "changed shape or was null". Update the miner, or open an issue with that line.                                                           |
 | `claim: … outcome unknown …`                                         | The answer to a claim got lost.                                                                                                 | Nothing. The next inventory read shows whether it went through, and only then is it claimed again.                                                                                    |
 | `runtime: … not sent, the gql request budget has room again in … s`  | Twitch answered "too many requests" (429), or a burst was too big for the miner's own limits. Nothing of that command was sent. | Nothing, if it is rare: the miner waits, then sends it again (a claim only after inventory shows it still unclaimed). Often: check that no other miner or Twitch tool shares this IP. |

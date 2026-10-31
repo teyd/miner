@@ -5,6 +5,7 @@ import { FetchHttpClient } from "effect/http";
 import { configPath, dataDir } from "../config/load.ts";
 import { load } from "../config/load.ts";
 import { Gzip } from "../platform/Gzip.ts";
+import { makeConfigWatch } from "../runtime/reload.ts";
 import { run as runtime } from "../runtime/run.ts";
 import { unmapped } from "../runtime/settings.ts";
 import { LIVE_STATE, liveLayer } from "../runtime/live.ts";
@@ -61,7 +62,9 @@ export const run = Command.make(
         ),
       ),
     );
-    return yield* runtime(loaded.config).pipe(
+    // The file reloads while the miner runs (decision 28); a bad edit is logged and ignored.
+    const config = yield* makeConfigWatch(loaded.path, loaded.config);
+    return yield* runtime(config).pipe(
       Effect.provide(services),
       // Shadow runs count as the one live miner too (AGENTS.md), so both modes take the lock.
       (effect) => Effect.andThen(lockDataDir(dir), effect),

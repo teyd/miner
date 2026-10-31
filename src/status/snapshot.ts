@@ -25,6 +25,13 @@ export interface RunFacts {
     readonly dropId: DropId;
     readonly at: Millis;
   }>;
+  /** `config.json` reloads in this run (`src/runtime/reload.ts`). */
+  readonly config: ConfigFacts;
+}
+
+export interface ConfigFacts {
+  readonly reloadedAt: Millis | undefined;
+  readonly rejected: { readonly at: Millis; readonly problems: ReadonlyArray<string> } | undefined;
 }
 
 export const startFacts = (now: Millis): RunFacts => ({
@@ -38,6 +45,7 @@ export const startFacts = (now: Millis): RunFacts => ({
     watchTick: undefined,
   },
   claimed: [],
+  config: { reloadedAt: undefined, rejected: undefined },
 });
 
 const READ_OF: Partial<Record<Event["_tag"], keyof RunFacts["reads"]>> = {
@@ -148,6 +156,10 @@ export const snapshot = (input: {
     auth: state.auth === "unknown" ? "checking" : state.auth,
     catalog: { status: state.catalogStatus, campaigns: state.catalog?.length ?? 0 },
     watch: watchOf(state),
+    config: {
+      reloadedAt: facts.config.reloadedAt ?? null,
+      rejected: facts.config.rejected ?? null,
+    },
     claims: {
       inFlight: [...state.claims.values()].slice(-CLAIMS_SHOWN).map((c) => ({
         campaignId: c.campaignId,

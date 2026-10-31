@@ -20,14 +20,15 @@ import {
   type CampaignId,
   type ChannelId,
   type DropId,
+  type DropInstanceId,
   type Millis,
 } from "../core/model.ts";
 import type { Command, Event } from "../core/protocol.ts";
 import { canonical, decodeState, encodeState } from "../store/codec.ts";
 import { allowedPicks, allowedWatch, canFinishOn, goalDrops, type View } from "./oracle.ts";
-import { SIM_EPOCH, type Violation } from "./scenario.ts";
+import { SIM_EPOCH, type Fault, type Violation } from "./scenario.ts";
 import { CDN_LIMITS, GQL_LIMITS } from "../twitch/budget.ts";
-import { TWIN_TIMEOUT, TWITCH_GQL_PER_SECOND, TWITCH_SOCKETS, type Activity } from "./twin.ts";
+import { TWIN_TIMEOUT, TWITCH_GQL_PER_SECOND, type Activity } from "./twin.ts";
 import {
   channelOf,
   claimShows,
@@ -38,7 +39,6 @@ import {
   earnable,
   earnedAt,
   faultWindows,
-  framesDownAt,
   gameAt,
   cooldownWindows,
   instanceOf,
@@ -47,9 +47,13 @@ import {
   isRevoked,
   liveAt,
   minutesAt,
+  sessionAt,
+  ACCOUNT,
   type Credit,
   type World,
 } from "./world.ts";
+import { channelTopics, dropsTopic } from "../twitch/frames.ts";
+import { PUBSUB_MAX_CONNECTIONS, PUBSUB_TOPICS_PER_CONNECTION } from "../twitch/identity.ts";
 
 /** A command whose executor fiber hasn't finished. */
 export interface InFlight {
@@ -80,6 +84,13 @@ export interface Observation {
   readonly inFlight: ReadonlyArray<InFlight>;
   /** Set when the process restarted since the last observation: the last save and what resumed. */
   readonly restart: { readonly saved: string | undefined; readonly resumed: State } | undefined;
+  /** Topics listened on the edge's open sockets. */
+  readonly listening: ReadonlySet<string>;
+  /**
+   * The last `Subscribe` went out without the account id: PubSub could not validate (a refused
+   * or failed request) and follows the account's drops from the next change (`PubSub.ts`).
+   */
+  readonly accountUnknown?: boolean;
 }
 
 /**
@@ -141,6 +152,27 @@ export const FLIP_WINDOW: Millis = 2 * MINUTE;
 const NEWS_LAG: Millis = ONLINE_DELAY + MINUTE;
 /** Discovery after a restart: validate, catalog, directory and channel reads. */
 const RESTART_GRACE: Millis = 2 * MINUTE;
+/**
+ * A `Subscribe` this old, with no fault around it, is listened on the edge: connecting, a LISTEN
+ * and its RESPONSE take seconds, a lost one 10 s and a reconnect.
+ */
+export const LISTEN_SETTLE: Millis = 2 * MINUTE;
+/** A `Subscribe` that empties a connection closes it at once; this allows for its pacing. */
+const CLOSE_AFTER_SUBSCRIBE: Millis = 30_000;
+/** Topics the edge can hold for one process. */
+const TOPIC_CAPACITY = PUBSUB_MAX_CONNECTIONS * PUBSUB_TOPICS_PER_CONNECTION;
+
+/**
+ * Connections the client needs for a `Subscribe`: its channels' two topics each, packed 50 to a
+ * connection (`assign` in `PubSub.ts` keeps exactly as many as the topics fill). The account's
+ * drops topic is left out: without the account id it isn't sent, so this is the fewest. A gap:
+ * with the id known, 25k channels fill k connections and the drops topic needs one more, which
+ * this doesn't count, so a close (or a `RECONNECT` left unanswered) that drops that extra
+ * connection passes `shrunk` though the drops topic then has no socket. Only `NotListening`
+ * catches that, and only after a `Subscribe` that settles with no fault near it.
+ */
+const connectionsFor = (channels: number) =>
+  Math.min(PUBSUB_MAX_CONNECTIONS, Math.ceil((2 * channels) / PUBSUB_TOPICS_PER_CONNECTION));
 
 interface ClaimTrack {
   /** The previous `Claim` was settled by an inventory read after its recheck time, drop unclaimed. */
@@ -220,19 +252,31 @@ export interface Checker {
   readonly lastCatalogChangeAt: Millis | undefined;
   /** The last catalog or channel read that gave up: the core's picture missed its answer. */
   readonly lastReadFailureAt: Millis | undefined;
-  /** The core's last `Subscribe` since a restart. */
+  /** The core's last `Subscribe` since a restart, and whether the edge was checked for it. */
   readonly lastSubscribe:
-    | { readonly at: Millis; readonly channelIds: ReadonlyArray<ChannelId> }
+    | {
+        readonly at: Millis;
+        readonly channelIds: ReadonlyArray<ChannelId>;
+        readonly checked?: boolean;
+      }
     | undefined;
   /** API requests (GQL, validation, claims) that ended within `SPAN_MEMORY`, for concurrency. */
   readonly apiSpans: ReadonlyArray<Span>;
-  /** CDN requests (as watch ticks) within the last `CDN_LIMITS.window`, and the last tick. */
+  /** CDN requests (usher, playlists, segments) that ended within `SPAN_MEMORY`, for concurrency. */
+  readonly cdnSpans: ReadonlyArray<Span>;
+  /** CDN request starts within the last `CDN_LIMITS.window`. */
   readonly cdnStarts: ReadonlyArray<Millis>;
-  readonly lastTickSpan: Span | undefined;
   /** Refused commands (canonical) the core owes, and by when it must send them again. */
   readonly owed: ReadonlyMap<string, Millis>;
   /** Drops claimable by twin truth, and since when, while nothing excuses the wait. */
   readonly claimableSince: ReadonlyMap<DropId, Millis>;
+  /** Since when the core's watch is idle: a credit from a tick it asked for later is a leak. */
+  readonly stoppedAt: Millis | undefined;
+  /**
+   * The twin's last claim call per instance, until a `ClaimResult` reports it: whether Twitch
+   * answered it with a grant (`ELIGIBLE_FOR_ALL` for a fresh or an already applied claim).
+   */
+  readonly claimAnswers: ReadonlyMap<DropInstanceId, { readonly granted: boolean }>;
 }
 
 interface Span {
@@ -276,10 +320,12 @@ export const initialChecker: Checker = {
   lastReadFailureAt: undefined,
   lastSubscribe: undefined,
   apiSpans: [],
+  cdnSpans: [],
   cdnStarts: [],
-  lastTickSpan: undefined,
   owed: new Map(),
   claimableSince: new Map(),
+  stoppedAt: SIM_EPOCH,
+  claimAnswers: new Map(),
 };
 
 /** The campaigns a skip covers at `now`. */
@@ -399,7 +445,7 @@ export const opportunities = (
 
 /** The twin's session channel is earning something the settings want. */
 const productive = (world: World, now: Millis): boolean => {
-  const session = world.session;
+  const session = sessionAt(world, now);
   if (session === undefined) return false;
   const campaign = creditedCampaign(world, session.channelId, now);
   return campaign !== undefined && wanted(world, campaign, session.channelId, now);
@@ -448,6 +494,7 @@ export const checkStep = (
       heard: new Set(),
       lastWatch: undefined,
       lastSubscribe: undefined,
+      stoppedAt: o.now,
       // What a previous run read or failed to read is no news to this one, which reads again.
       lastCatalogChangeAt: undefined,
       lastReadFailureAt: undefined,
@@ -458,25 +505,61 @@ export const checkStep = (
     };
   }
 
-  // 3c: what the core did at its last step has run: an idle core watches nothing.
+  // 3c: an idle core watches nothing: no beat credits that a tick asked for after the stop, or
+  // that no tick asked for. A tick sent before the stop may still land.
   const coreIdle = (o.step?.before ?? o.state).watch._tag === "Idle";
-  if (coreIdle && world.session !== undefined && o.restart === undefined) {
-    fail(
-      "IdleButWatching",
-      `the core is idle, the twin still has a session on ${world.session.channelId}`,
-    );
+  const stoppedAt = c.stoppedAt;
+  const leaked = o.activity.credits.find(
+    (x) => x.sentAt === undefined || (stoppedAt !== undefined && x.sentAt >= stoppedAt),
+  );
+  if (coreIdle && leaked !== undefined && o.restart === undefined) {
+    fail("IdleButWatching", `the core is idle, ${leaked.channelId} credited a minute`);
   }
-  if (coreIdle && o.activity.credits.length > 0 && o.restart === undefined) {
-    fail(
-      "IdleButWatching",
-      `the core is idle, ${o.activity.credits[0]!.channelId} credited a minute`,
-    );
+
+  // The wire: every request belongs to a command in flight, the token never reaches the CDN,
+  // sockets and topics stay within Twitch's limits, and each tick reports what Twitch answered.
+  for (const orphan of o.activity.orphans) fail("Orphan", orphan);
+  for (const leak of o.activity.leaks) fail("TokenLeak", leak);
+  for (const wrong of o.activity.wrongTokens) fail("WrongToken", wrong);
+  for (const missing of o.activity.identity) fail("CdnIdentity", missing);
+  for (const breach of o.activity.budget) fail("SocketBudget", breach);
+  for (const misread of o.activity.misreads) fail("WatchMisread", misread);
+  // A `RECONNECT` must be obeyed: the socket closed and another opened. One closed for good is
+  // fine when a `Subscribe` around it emptied that slot, as for a close (`shrunk` below): the
+  // sockets left hold every channel the core follows, none when it follows nothing.
+  for (const r of o.activity.reconnects) {
+    const last = c.lastSubscribe;
+    const shrunk =
+      last !== undefined &&
+      last.at >= r.at - CLOSE_AFTER_SUBSCRIBE &&
+      last.at <= r.checkedAt &&
+      r.remaining >= connectionsFor(last.channelIds.length);
+    if (!r.closed) fail("ReconnectIgnored", `socket ${r.socket} stayed open after a RECONNECT`);
+    else if (!shrunk)
+      fail("ReconnectIgnored", `no new socket after socket ${r.socket}'s RECONNECT`);
+  }
+  // A socket the client closes needs a cause: the edge asked (`RECONNECT`, an error), the
+  // process stopped, or a `Subscribe` emptied its slot: one that left as many sockets as its
+  // channels need. Twitch answers every PING and LISTEN, so a client timeout here is a client
+  // bug (#15: every write went down the newest socket).
+  for (const close of o.activity.closes) {
+    const last = c.lastSubscribe;
+    const shrunk =
+      last !== undefined &&
+      close.at - last.at <= CLOSE_AFTER_SUBSCRIBE &&
+      close.remaining >= connectionsFor(last.channelIds.length);
+    if (!close.excused && !shrunk) {
+      fail("SocketChurn", `the client closed socket ${close.socket} with no cause`);
+    }
   }
 
   // Twin activity: claims, ticks, requests.
   for (const call of o.activity.calls) {
     if (call.kind === "claim") {
-      c = { ...c, claimAttempts: c.claimAttempts + 1 };
+      const granted =
+        call.answered && (call.outcome === "claimed" || call.outcome === "already-claimed");
+      const claimAnswers = new Map(c.claimAnswers).set(call.instanceId, { granted });
+      c = { ...c, claimAttempts: c.claimAttempts + 1, claimAnswers };
       if (call.alreadyApplied && blind(world, call.dropId)) {
         // Allowed, see `blind`.
       } else if (call.alreadyApplied) {
@@ -585,8 +668,9 @@ export const checkStep = (
 
   if (o.step !== undefined) c = checkCommands(c, o, o.step, fail);
 
-  // Channels whose schedule changed since the last look: did the core hear about it? A change
-  // to what already holds (`up` while live) sends no frame (`channelFrames`), so it isn't heard.
+  // Channels whose schedule changed since the last look are news the core hasn't heard, until
+  // the edge delivers their frame to a socket listening for it. A change to what already holds
+  // (`up` while live) sends no frame (`channelFrames`), so it isn't heard.
   const heard = new Set(c.heard);
   for (const ch of world.channels) {
     const changed = ch.phases.some((p, i) => {
@@ -598,11 +682,11 @@ export const checkStep = (
         (p.live !== before.live || p.gameId !== before.gameId)
       );
     });
-    if (!changed) continue;
-    if (world.subscriptions.has(ch.id) && !framesDownAt(world, o.now)) heard.add(ch.id);
-    else heard.delete(ch.id);
+    if (changed) heard.delete(ch.id);
   }
+  for (const d of o.activity.delivered) heard.add(d.channelId);
   c = { ...c, heard };
+  c = checkListening(c, o, fail);
 
   c = checkIdle(c, o, fail);
   checkUnproductive(c, o, fail);
@@ -661,9 +745,11 @@ const hears = (event: Event, credit: HeardCredit): boolean => {
 /**
  * 8: the miner keeps within Twitch's per-IP limits and its own request budgets (`budget.ts`,
  * critique 08 CF-5): no GQL request answered 429 for the rate (`TWITCH_GQL_PER_SECOND`), at most
- * `GQL_LIMITS.concurrency` API requests in flight, CDN requests one at a time and at most
- * `CDN_LIMITS.max` a window, and no more than `TWITCH_SOCKETS` sockets. Twitch counts per IP, so
- * a restart forgets nothing here.
+ * `GQL_LIMITS.concurrency` API requests in flight, CDN requests (usher, playlists, segment `HEAD`s,
+ * each one on the wire) `CDN_LIMITS.concurrency` at a time and at most `CDN_LIMITS.max` a window.
+ * Every request is counted once, as the twin served it; the miner's budgets charge them in its own
+ * code (`gql.ts`, `hls.ts`), so a request that bypassed a budget shows here. Sockets are the edge's
+ * to count (`SocketBudget`). Twitch counts per IP, so a restart forgets nothing here.
  */
 const checkBudgets = (
   checker: Checker,
@@ -671,9 +757,21 @@ const checkBudgets = (
   fail: (kind: string, detail: string) => void,
 ): Checker => {
   let c = checker;
-  const spans: Array<Span> = [];
+  const api: Array<Span> = [];
+  const cdn: Array<Span> = [];
+  let cdnStarts = [...c.cdnStarts];
   for (const request of o.activity.requests) {
-    spans.push(request);
+    if (CDN_OPERATIONS.has(request.operation)) {
+      cdn.push(request);
+      cdnStarts = [...cdnStarts.filter((t) => t > request.at - CDN_LIMITS.window), request.at];
+      if (cdnStarts.length > CDN_LIMITS.max) {
+        fail("OverBudget", `${cdnStarts.length} CDN requests within ${CDN_LIMITS.window} ms`);
+      }
+      continue;
+    }
+    // A tick's requests are CDN requests, so two overlapping ticks are caught by the CDN
+    // concurrency limit above; the client's own `busy` guard is what serialises them.
+    api.push(request);
     if (request.limited) {
       fail(
         "OverBudget",
@@ -681,43 +779,124 @@ const checkBudgets = (
       );
     }
   }
-  for (const call of o.activity.calls) {
-    if (call.kind === "claim") {
-      spans.push(call);
-      if (call.limited) {
-        fail("OverBudget", `Twitch answered a claim 429: over ${TWITCH_GQL_PER_SECOND} a second`);
-      }
-    }
-    if (call.kind === "subscribe" && call.sockets > TWITCH_SOCKETS) {
-      fail("OverBudget", `${call.channelIds.length} channels need ${call.sockets} sockets`);
-    }
-    if (call.kind === "tick") {
-      const last = c.lastTickSpan;
-      if (last !== undefined && call.at < last.endedAt && last.at < call.endedAt) {
-        fail("OverBudget", `two watch ticks at once, from +${minutesSince(last.at)}m`);
-      }
-      const cdnStarts = [
-        ...c.cdnStarts.filter((t) => t > call.at - CDN_LIMITS.window),
-        ...Array.from({ length: call.requests }, () => call.at),
-      ];
-      if (cdnStarts.length > CDN_LIMITS.max) {
-        fail("OverBudget", `${cdnStarts.length} CDN requests within ${CDN_LIMITS.window} ms`);
-      }
-      c = { ...c, lastTickSpan: call, cdnStarts };
-    }
-  }
-  if (spans.length > 0) {
-    const kept = [...c.apiSpans.filter((s) => s.endedAt > o.now - SPAN_MEMORY), ...spans];
+  const overlapping = (
+    kept: ReadonlyArray<Span>,
+    limit: number,
+    what: string,
+  ): ReadonlyArray<Span> => {
     for (const span of kept) {
       const open = kept.filter((s) => s.at <= span.at && span.at < s.endedAt).length;
-      if (open > GQL_LIMITS.concurrency) {
-        fail("OverBudget", `${open} API requests in flight at +${minutesSince(span.at)}m`);
+      if (open > limit) {
+        fail("OverBudget", `${open} ${what} requests in flight at +${minutesSince(span.at)}m`);
         break;
       }
     }
-    c = { ...c, apiSpans: kept };
+    return kept;
+  };
+  const recent = (spans: ReadonlyArray<Span>) =>
+    spans.filter((s) => s.endedAt > o.now - SPAN_MEMORY);
+  if (api.length > 0) {
+    const apiSpans = overlapping([...recent(c.apiSpans), ...api], GQL_LIMITS.concurrency, "API");
+    c = { ...c, apiSpans };
   }
-  return c;
+  if (cdn.length > 0) {
+    const cdnSpans = overlapping([...recent(c.cdnSpans), ...cdn], CDN_LIMITS.concurrency, "CDN");
+    c = { ...c, cdnSpans };
+  }
+  return { ...c, cdnStarts };
+};
+
+const CDN_OPERATIONS: ReadonlySet<string> = new Set(["usher", "playlist", "segment"]);
+
+/**
+ * 11: once a `Subscribe` settled with nothing disturbing it (no fault, crash or revoked token from
+ * `LISTEN_SETTLE` before it until now), the edge's open sockets listen to exactly its topics:
+ * each channel's two, and the account's drops while any channel is followed, unless PubSub said
+ * it subscribed without the account id (`accountUnknown`: a budget refused or Twitch failed its
+ * validation; it follows the drops from the next change). Checked once per `Subscribe`.
+ */
+const checkListening = (
+  c: Checker,
+  o: Observation,
+  fail: (kind: string, detail: string) => void,
+): Checker => {
+  const last = c.lastSubscribe;
+  if (last === undefined || last.checked === true || o.now - last.at < LISTEN_SETTLE) return c;
+  const checked = { ...c, lastSubscribe: { ...last, checked: true } };
+  const from = last.at - LISTEN_SETTLE;
+  const disturbed =
+    o.state.auth !== "valid" ||
+    isRevoked(o.world, o.now) ||
+    (c.restartedAt !== undefined && c.restartedAt >= from) ||
+    o.world.faults.some((f) => {
+      const start = SIM_EPOCH + f.atMinute * MINUTE;
+      const end = start + ("durationSeconds" in f ? f.durationSeconds * 1000 : 0);
+      return start <= o.now && end >= from && disturbsListening(f);
+    });
+  const wanted = new Set(last.channelIds.flatMap(channelTopics));
+  if (last.channelIds.length > 0 && o.accountUnknown !== true) {
+    wanted.add(dropsTopic(ACCOUNT.userId));
+  }
+  if (disturbed || wanted.size > TOPIC_CAPACITY) return checked;
+  const missing = [...wanted].filter((t) => !o.listening.has(t));
+  const extra = [...o.listening].filter((t) => !wanted.has(t));
+  if (missing.length + extra.length > 0) {
+    fail(
+      "NotListening",
+      `${minutesSince(o.now)}m: ${missing.length} topics missing (${missing.slice(0, 3).join(", ")}), ` +
+        `${extra.length} extra, ${((o.now - last.at) / 1000).toFixed(0)} s after the last Subscribe`,
+    );
+  }
+  return checked;
+};
+
+/**
+ * Faults that can leave the edge listening to other topics than the last `Subscribe`'s: the edge
+ * itself (a `RECONNECT`, an outage), a crash, a revoked token, and a failed `validate`, without
+ * which the client can't name the account's drops topic. Other API faults touch no socket.
+ */
+const disturbsListening = (f: Fault): boolean => {
+  switch (f.kind) {
+    case "pubsub-reconnect":
+    case "reconnect":
+    case "pubsub-outage":
+    case "crash":
+    case "revoke-token":
+      return true;
+    case "http-5xx":
+    case "http-429":
+    case "timeout":
+    case "service-error":
+      return f.operation === "validate" || f.operation === "any";
+    default:
+      return false;
+  }
+};
+
+/**
+ * What a `ClaimResult` may say, by what the twin did with the claim: `claimed` only when Twitch
+ * granted it and holds it, `already-claimed` only when it holds it, `unknown` only when no grant
+ * came back (a fault, a lost answer, a refusal). Returns the violation's detail.
+ */
+const claimMisread = (
+  c: Checker,
+  world: World,
+  event: Extract<Event, { readonly _tag: "ClaimResult" }>,
+): string | undefined => {
+  const answer = c.claimAnswers.get(instanceOf(event.dropId));
+  const held = world.claimed.has(event.dropId);
+  switch (event.outcome) {
+    case "claimed":
+      return answer?.granted === true && held
+        ? undefined
+        : `${event.dropId} reported claimed, Twitch ${answer === undefined ? "saw no claim" : answer.granted ? "holds none" : "granted none"}`;
+    case "already-claimed":
+      return held ? undefined : `${event.dropId} reported already claimed, Twitch holds none`;
+    case "unknown":
+      return answer?.granted === true
+        ? `${event.dropId} reported unknown, Twitch answered a grant`
+        : undefined;
+  }
 };
 
 const countClaims = (commands: ReadonlyArray<Command>) =>
@@ -733,8 +912,8 @@ const checkCommands = (
   const world = o.world;
   const { before, after, event, commands } = step;
 
-  // 5: every save decodes to itself.
-  if (!roundTrips(step.persisted)) {
+  // 5: every save decodes to itself (a save equal to the last one was checked then).
+  if (step.persisted !== c.lastSaved && !roundTrips(step.persisted)) {
     fail("StateLost", "the saved state does not survive a round-trip");
   }
   c = { ...c, lastSaved: step.persisted };
@@ -831,6 +1010,14 @@ const checkCommands = (
   ) {
     c = { ...c, lastSubscribe: undefined };
   }
+  // The executor reports what Twitch answered the claim, never more.
+  if (event._tag === "ClaimResult") {
+    const misread = claimMisread(c, world, event);
+    if (misread !== undefined) fail("ClaimMisread", misread);
+    const claimAnswers = new Map(c.claimAnswers);
+    claimAnswers.delete(instanceOf(event.dropId));
+    c = { ...c, claimAnswers };
+  }
 
   for (const command of commands) {
     switch (command._tag) {
@@ -845,11 +1032,12 @@ const checkCommands = (
           watching: command.channelId,
           watchSince: o.now,
           lastWatch: { channelId: command.channelId, at: o.now, campaignId },
+          stoppedAt: undefined,
         };
         break;
       }
       case "StopWatching":
-        c = { ...c, watching: undefined };
+        c = { ...c, watching: undefined, stoppedAt: o.now };
         break;
       case "Subscribe": {
         // Churn: the same set twice without a restart, or a new set sooner than the settle time

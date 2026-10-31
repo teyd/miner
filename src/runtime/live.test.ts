@@ -1,22 +1,20 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Clock, Effect, Fiber, Layer, Redacted, Schema } from "effect";
+import { Effect, Fiber, Layer, Redacted, Schema } from "effect";
 import { HttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { Config } from "../config/schema.ts";
-import { HOUR, type ChannelId, type DropId, type DropInstanceId } from "../core/model.ts";
+import { HOUR, type DropId } from "../core/model.ts";
 import { Gzip, nodeGzip } from "../platform/Gzip.ts";
 import { Instance } from "../platform/instance.ts";
 import { decodeState } from "../store/codec.ts";
 import { memoryFileSystem, type MemoryFiles } from "../store/memoryFileSystem.ts";
 import { twinHttp } from "../twin/http.ts";
 import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Scenario } from "../twin/scenario.ts";
-import { makeTwin, type Twin } from "../twin/twin.ts";
+import { webSocketConstructor } from "../twin/edge.ts";
+import { bindClock, makeTwin, type Twin } from "../twin/twin.ts";
 import * as World from "../twin/world.ts";
-import token from "../twitch/fixtures/playback-token.json" with { type: "json" };
 import { parseRecording } from "../twitch/journal.ts";
-import { fakeEdge } from "../twitch/fakeSocket.ts";
 import { Connector } from "../twitch/PubSub.ts";
-import { stubPlayback } from "../twitch/stub.ts";
 import { Credentials } from "../twitch/Twitch.ts";
 import { LIVE_STATE, liveLayer } from "./live.ts";
 import { run } from "./run.ts";
@@ -57,7 +55,7 @@ const config = Schema.decodeSync(Config)({
 });
 
 const makeWorld = (): Twin => {
-  const twin = makeTwin(World.buildWorld(scenario));
+  const twin = makeTwin(World.buildWorld(scenario), { token: TOKEN, direct: true });
   const done = "c0-d0" as DropId;
   twin.world = {
     ...twin.world,
@@ -66,59 +64,56 @@ const makeWorld = (): Twin => {
   return twin;
 };
 
-/** A playback token that expires 20 minutes after it is issued, as Twitch's do. */
-const tokenAt = (now: number) => {
-  const recorded = token.body[0]!.data.streamPlaybackAccessToken;
-  const value = JSON.stringify({ ...JSON.parse(recorded.value), expires: now / 1000 + 1200 });
-  return {
-    status: 200,
-    body: [{ data: { streamPlaybackAccessToken: { ...recorded, value } } }],
-  };
-};
+type Step = "token" | "usher" | "media" | "segment" | "claim" | "read";
 
 /**
- * Reads from the twin; playback and claims from recorded answers. They apply to the twin as on
- * Twitch: usher opens its session, each media playlist read credits the watch, and a claim lands,
- * so the next inventory shows them.
+ * The twin's whole wire: reads, the playback token, usher, playlists and segments, claims. A
+ * claim's fiber can be made to die before Twitch sees it.
  */
 const liveHttp = (twin: Twin, claimsToKill = 0) => {
   let kill = claimsToKill;
-  const stub = stubPlayback({}, twinHttp(twin));
+  const twinClient = twinHttp(twin);
+  const requests: Array<{
+    readonly step: Step;
+    readonly url: string;
+    readonly headers: Record<string, string>;
+  }> = [];
   const http = HttpClient.make((request) =>
     Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      const sent =
+      const name =
         request.body._tag === "Uint8Array"
-          ? (JSON.parse(new TextDecoder().decode(request.body.body)) as ReadonlyArray<{
-              readonly operationName: string;
-              readonly variables: { readonly input?: { readonly dropInstanceID: string } };
-            }>)
-          : [];
-      const name = sent[0]?.operationName;
-      if (name === "PlaybackAccessToken") stub.state.token = tokenAt(now);
-      if (name === "DropsPage_ClaimDropRewards" && kill > 0) {
+          ? (
+              JSON.parse(new TextDecoder().decode(request.body.body)) as ReadonlyArray<{
+                readonly operationName: string;
+              }>
+            )[0]?.operationName
+          : undefined;
+      const step: Step =
+        name === "PlaybackAccessToken"
+          ? "token"
+          : name === "DropsPage_ClaimDropRewards"
+            ? "claim"
+            : request.url.includes("/api/channel/hls/")
+              ? "usher"
+              : request.url.includes("/v1/playlist/")
+                ? "media"
+                : request.url.includes("/v1/segment/")
+                  ? "segment"
+                  : "read";
+      requests.push({ step, url: request.url, headers: request.headers });
+      if (step === "claim" && kill > 0) {
         kill -= 1;
         return yield* Effect.die(new Error("the claim's fiber died before Twitch saw it"));
       }
-      if (name === "DropsPage_ClaimDropRewards") {
-        const id = sent[0]!.variables.input!.dropInstanceID as DropInstanceId;
-        twin.world = World.claim(twin.world, id, now).world;
-      }
-      const usher = /\/api\/channel\/hls\/chan(\d+)\.m3u8/.exec(request.url);
-      if (usher !== null)
-        twin.world = World.openSession(twin.world, `ch${usher[1]}` as ChannelId, now);
-      const session = twin.world.session;
-      if (request.url.includes("/v1/playlist/") && session !== undefined) {
-        twin.world = World.tick(twin.world, session.channelId, now).world;
-      }
-      return yield* stub.http.execute(request);
+      return yield* twinClient.execute(request);
     }),
   );
-  return { http, requests: stub.requests };
+  return { http, requests };
 };
 
 const liveRun = (twin: Twin, files: MemoryFiles, hours: number, claimsToKill = 0) =>
   Effect.gen(function* () {
+    yield* bindClock(twin);
     const { http, requests } = liveHttp(twin, claimsToKill);
     const services = liveLayer(DIR).pipe(
       Layer.provide(
@@ -128,7 +123,7 @@ const liveRun = (twin: Twin, files: MemoryFiles, hours: number, claimsToKill = 0
             Credentials,
             Credentials.of({ token: Redacted.make(TOKEN), deviceId: "0".repeat(32) }),
           ),
-          Layer.succeed(Connector, fakeEdge().connector),
+          Connector.webSocket.pipe(Layer.provide(webSocketConstructor(twin))),
           Gzip.layer,
           Layer.succeed(Instance, Instance.of({ version: "0.0.0-test", pid: 4242 })),
           files.layer,
@@ -195,11 +190,16 @@ describe("run with the live actuator", () => {
         assert.isAtMost(count("token"), 8);
         const ushers = requests.filter((r) => r.step === "usher");
         assert.isTrue(ushers.every((r) => new URL(r.url).pathname.endsWith("/chan0.m3u8")));
-        assert.strictEqual(count("segment"), media.length * 16);
+        // 15 or 16 segments a playlist, as live; the twin credited every beat.
+        assert.isAtLeast(count("segment"), media.length * 15);
+        assert.isAtMost(count("segment"), media.length * 16);
+        assert.isAtLeast(twin.world.session?.creditedSeconds ?? 0, 2 * 3600 - 300);
+        // The OAuth token goes to the API only, never to usher or the CDN.
         assert.isTrue(
           requests.every(
             (r) =>
-              r.step === "claim" || r.step === "token" || r.headers["authorization"] === undefined,
+              !["usher", "media", "segment"].includes(r.step) ||
+              r.headers["authorization"] === undefined,
           ),
         );
 

@@ -1,74 +1,67 @@
-import { Effect, Random } from "effect";
+import { Clock, Context, Effect, Random } from "effect";
 import type { ChannelId, DropId, DropInstanceId, Millis } from "../core/model.ts";
-import { TOKEN_MARGIN } from "../twitch/hls.ts";
+import type { Command } from "../core/protocol.ts";
 import { REQUEST_TIMEOUT } from "../twitch/Twitch.ts";
 import type { Operation } from "./scenario.ts";
 import { SIM_EPOCH } from "./scenario.ts";
-import { framesDownAt, type Credit, type Frame, type World } from "./world.ts";
+import type { TwinWebSocket } from "./edge.ts";
+import type { Credit, World } from "./world.ts";
 
 /**
- * One run's twin: the world plus what the twin saw since the simulator last looked. The HTTP
- * client and the actuator share it. Mutated only inside `Effect.sync`, on one fiber at a time.
+ * One run's twin: Twitch's world, and what the twin saw since the simulator last looked. Its
+ * HTTP surface (`http.ts`: GQL, usher, playlists, segments) and its PubSub edge (`edge.ts`) share
+ * it. Mutated only from Effect code on the one JS thread, so every change happens at a virtual
+ * instant the scheduler decides.
  */
 
-/**
- * A `timeout` fault: the reads hang until `Twitch`'s own timeout gives up; an actuator call fails
- * after this long, as the live actuator's request timeout would make it.
- */
+/** A hung request: the client's own timeout must give up (Twitch's API: `REQUEST_TIMEOUT`). */
 export const TWIN_TIMEOUT: Millis = REQUEST_TIMEOUT;
 
 /**
  * Twitch's per-IP limits as the twin enforces them: about 5 GQL requests a second and about 10
  * websockets (DevilXD, TDM #1153, 2026-08-29; research 02 §4b), 50 topics each (TDM
- * `WS_TOPICS_LIMIT`). A GQL request above the rate is answered 429, a socket above the count is
- * refused, and the topics it would carry are never heard.
+ * `WS_TOPICS_LIMIT`). A GQL request above the rate is answered 429; the edge refuses a socket
+ * above the count (`edge.ts`), and the topics it would carry are never heard.
  */
 export const TWITCH_GQL_PER_SECOND = 5;
 export const TWITCH_SOCKETS = 10;
 export const TWITCH_TOPICS_PER_SOCKET = 50;
 
-/**
- * The requests one typed watch tick stands for: a media playlist and a `HEAD` of each of its
- * 15–16 segments (live run 2026-10-30, research 02 §4).
- */
-export const TICK_REQUESTS = 17;
+/** The token the simulated process holds, unless a test gives the twin another. */
+export const TWIN_TOKEN = "twin-token";
 
 /**
- * A playback token lives 20 minutes (live 2026-10-30, `hls.ts`) and the HLS method fetches a new
- * one `TOKEN_MARGIN` early: a tick that resolves the stream (the first of a session, one after a
- * failure, one every 19 minutes) also sends the token request (GQL) and usher (one more CDN
- * request).
+ * The core command a request was sent for, set by the simulator around each command's fiber. The
+ * twin reads it to tell a request the miner sent from one it leaked (`orphans`), and to know what
+ * each `WatchTick` saw.
  */
-export const TOKEN_REFRESH: Millis = 20 * 60_000 - TOKEN_MARGIN;
+export interface Issue {
+  readonly id: number;
+  readonly command: Command;
+  readonly at: Millis;
+}
+
+export const Issued = Context.Reference<Issue | undefined>("miner/twin/Issued", {
+  defaultValue: () => undefined,
+});
 
 export interface TwinRequest {
   readonly at: Millis;
   readonly endedAt: Millis;
-  /** The playback token is a GQL request no fault window targets. */
-  readonly operation: Operation | "PlaybackAccessToken";
-  readonly status: number | "timeout";
+  readonly operation: Operation;
+  readonly status: number | "timeout" | "lost";
   /** Answered 429 because the miner went over `TWITCH_GQL_PER_SECOND`, not by a fault window. */
   readonly limited: boolean;
 }
 
 export type ActuatorCall =
-  | { readonly kind: "watch"; readonly at: Millis; readonly channelId: ChannelId }
-  | { readonly kind: "stop"; readonly at: Millis }
   | {
-      readonly kind: "subscribe";
-      readonly at: Millis;
-      readonly channelIds: ReadonlyArray<ChannelId>;
-      /** Sockets PubSub needs for these channels; above `TWITCH_SOCKETS` the rest is refused. */
-      readonly sockets: number;
-    }
-  | {
+      /** A beat: a media playlist and a `HEAD` of each of its segments, as the CDN saw them. */
       readonly kind: "tick";
       readonly at: Millis;
       readonly endedAt: Millis;
       readonly channelId: ChannelId;
       readonly result: string;
-      /** CDN requests the tick stands for: usher too when it resolved the stream. */
-      readonly requests: number;
     }
   | {
       readonly kind: "claim";
@@ -79,22 +72,122 @@ export type ActuatorCall =
       /** The twin had already applied a claim of this drop when this attempt arrived. */
       readonly alreadyApplied: boolean;
       readonly applied: boolean;
+      /** The twin sent an answer: 200 with a payload. A fault, a lost answer or a crash sent none. */
+      readonly answered: boolean;
       readonly outcome: string;
-      /** Answered 429 because the miner went over `TWITCH_GQL_PER_SECOND`. */
-      readonly limited: boolean;
+    }
+  | {
+      /** A socket opened, or a frame the client sent on one. */
+      readonly kind: "pubsub";
+      readonly at: Millis;
+      readonly socket: number;
+      readonly frame: string;
     };
 
 export interface Activity {
   readonly requests: Array<TwinRequest>;
   readonly calls: Array<ActuatorCall>;
   readonly credits: Array<Credit>;
+  /** Channel frames the edge delivered to at least one socket listening to them. */
+  readonly delivered: Array<{ readonly at: Millis; readonly channelId: ChannelId }>;
+  /** Requests no command in flight sent, and requests that broke a rule of Twitch's: violations. */
+  readonly orphans: Array<string>;
+  readonly leaks: Array<string>;
+  /** Requests and LISTENs that carried no token or one the twin never issued. */
+  readonly wrongTokens: Array<string>;
+  /** CDN requests without the identity headers the browser player sends. */
+  readonly identity: Array<string>;
+  /** Sockets that a `RECONNECT` asked to go and that stayed, or that never came back. */
+  readonly reconnects: Array<{
+    readonly socket: number;
+    /** When the edge sent the `RECONNECT`, and when it looked for the client's answer. */
+    readonly at: Millis;
+    readonly checkedAt: Millis;
+    readonly closed: boolean;
+    readonly reconnected: boolean;
+    /** Sockets open when the edge looked. */
+    readonly remaining: number;
+  }>;
+  /** Socket and topic limits the client went past. */
+  readonly budget: Array<string>;
+  /** Sockets the client closed; `excused` when the edge or a stopping process gave it cause. */
+  readonly closes: Array<{
+    readonly at: Millis;
+    readonly socket: number;
+    readonly excused: boolean;
+    /** Sockets still open after it closed. */
+    readonly remaining: number;
+  }>;
+  /** `WatchTick`s whose event disagrees with what the twin answered them. */
+  readonly misreads: Array<string>;
+}
+
+/**
+ * What the twin answered under one `WatchTick`: how Twitch would classify its last answer, and
+ * whether it saw a whole beat. The command's event must agree (`WatchMisread`).
+ */
+export type Label = "ok" | "offline" | "refused" | "network" | "auth";
+
+export interface TickView {
+  label: Label | undefined;
+  beat: boolean;
+}
+
+/** The CDN's memory: playback tokens it issued, and the beat each channel's player is in. */
+export interface Cdn {
+  readonly tokens: Map<
+    string,
+    {
+      readonly login: string;
+      readonly channelId: ChannelId;
+      readonly expiresAt: Millis;
+      /** The token's `value`, which usher wants beside its signature. */
+      readonly value: string;
+    }
+  >;
+  nextToken: number;
+  readonly beats: Map<
+    ChannelId,
+    {
+      readonly startedAt: Millis;
+      readonly remaining: Set<string>;
+      readonly issued: Issue | undefined;
+    }
+  >;
+}
+
+/** Something the edge does at a set time: deliver a frame, or a fault. */
+export interface Scheduled {
+  readonly at: Millis;
+  readonly seq: number;
+  readonly run: (twin: Twin, now: Millis) => void;
+}
+
+export interface Edge {
+  /** Open sockets by id. */
+  readonly sockets: Map<number, TwinWebSocket>;
+  nextSocket: number;
+  /** Sorted by time, then by when it was scheduled. */
+  pending: Array<Scheduled>;
+  seq: number;
+  /** Wakes the edge's pump when something was scheduled earlier than it sleeps. */
+  wake: () => void;
+  /** The process is stopping: its sockets close for that. */
+  stopping: boolean;
+  /** Processes stopped so far: a `RECONNECT` owed by a stopped one is void. */
+  stops: number;
 }
 
 export interface Twin {
   world: World;
+  /** The OAuth token the account holds: the API and the edge accept only it. */
+  readonly token: string;
+  /**
+   * A test that sends requests itself, with no command around them. The simulator's twin is
+   * never direct: there a request no command sent is an `Orphan`.
+   */
+  readonly direct: boolean;
   activity: Activity;
-  /** Frames waiting for the simulator's inbox. */
-  frames: Array<Frame>;
   /** Times of `lose-claim-answer` faults not yet used by a claim. */
   lostAnswers: Array<Millis>;
   /** Times of `in-claim` crashes not yet triggered. */
@@ -105,15 +198,36 @@ export interface Twin {
   backOffs: Array<Millis>;
   /** Starts of GQL requests in the last second, the twin's own count for its 429s. */
   gqlStarts: Array<Millis>;
-  /** The stream the miner's watch resolved: for which session, and until when. */
-  stream:
-    | { readonly openedAt: Millis; readonly channelId: ChannelId; readonly until: Millis }
-    | undefined;
+  readonly cdn: Cdn;
+  readonly edge: Edge;
+  /** Ids of the commands in flight, kept by the simulator. */
+  readonly live: Set<number>;
+  readonly ticks: Map<number, TickView>;
+  /** The virtual time now, for the edge's synchronous socket calls. */
+  now: () => Millis;
 }
 
-const emptyActivity = (): Activity => ({ requests: [], calls: [], credits: [] });
+export const emptyActivity = (): Activity => ({
+  requests: [],
+  calls: [],
+  credits: [],
+  delivered: [],
+  orphans: [],
+  leaks: [],
+  wrongTokens: [],
+  identity: [],
+  reconnects: [],
+  budget: [],
+  closes: [],
+  misreads: [],
+});
 
-export const makeTwin = (world: World): Twin => {
+export interface TwinOptions {
+  readonly token?: string;
+  readonly direct?: boolean;
+}
+
+export const makeTwin = (world: World, options?: TwinOptions): Twin => {
   const times = (kind: string, point?: string) =>
     world.faults
       .flatMap((f) =>
@@ -124,20 +238,41 @@ export const makeTwin = (world: World): Twin => {
       .toSorted((a, b) => a - b);
   return {
     world,
+    token: options?.token ?? TWIN_TOKEN,
+    direct: options?.direct ?? false,
     activity: emptyActivity(),
-    frames: [],
     lostAnswers: times("lose-claim-answer"),
     inClaimCrashes: times("crash", "in-claim"),
     crashRequested: false,
     backOffs: [],
     gqlStarts: [],
-    stream: undefined,
+    cdn: { tokens: new Map(), nextToken: 0, beats: new Map() },
+    edge: {
+      sockets: new Map(),
+      nextSocket: 0,
+      pending: [],
+      seq: 0,
+      wake: () => {},
+      stopping: false,
+      stops: 0,
+    },
+    live: new Set(),
+    ticks: new Map(),
+    now: () => SIM_EPOCH,
   };
 };
 
+/** Lets the edge's synchronous socket calls read the virtual time of the running `Clock`. */
+export const bindClock = (twin: Twin) =>
+  Clock.clockWith((clock) =>
+    Effect.sync(() => {
+      twin.now = () => clock.currentTimeMillisUnsafe();
+    }),
+  );
+
 /**
  * Counts a GQL request starting at `at` (a refused one counts too, as Twitch counts it) and says
- * whether it is over `TWITCH_GQL_PER_SECOND` in the second ending at `at`. Call in `Effect.sync`.
+ * whether it is over `TWITCH_GQL_PER_SECOND` in the second ending at `at`.
  */
 export const overGqlRate = (twin: Twin, at: Millis): boolean => {
   twin.gqlStarts = twin.gqlStarts.filter((t) => t > at - 1_000);
@@ -145,25 +280,10 @@ export const overGqlRate = (twin: Twin, at: Millis): boolean => {
   return twin.gqlStarts.length > TWITCH_GQL_PER_SECOND;
 };
 
-/** Sockets PubSub needs to follow `channels`: two topics each, plus the account's drop topic. */
-export const socketsFor = (channels: number): number =>
-  channels === 0 ? 0 : Math.ceil((2 * channels + 1) / TWITCH_TOPICS_PER_SOCKET);
-
-/** Frames sent while PubSub is down never arrive. */
-export const emit = (twin: Twin, frames: ReadonlyArray<Frame>): void => {
-  for (const frame of frames) if (!framesDownAt(twin.world, frame.at)) twin.frames.push(frame);
-};
-
 export const drainActivity = (twin: Twin): Activity => {
   const activity = twin.activity;
   twin.activity = emptyActivity();
   return activity;
-};
-
-export const drainFrames = (twin: Twin): ReadonlyArray<Frame> => {
-  const frames = twin.frames;
-  twin.frames = [];
-  return frames;
 };
 
 /** Takes the first pending time at or before `now`, if any. */
@@ -174,5 +294,19 @@ export const takeDue = (times: Array<Millis>, now: Millis): boolean => {
   return true;
 };
 
-/** Network latency of one request or call, drawn from the run's seeded `Random`. */
-export const latency = Effect.flatMap(Random.nextIntBetween(100, 400), (ms) => Effect.sleep(ms));
+/** Network latency of one request, drawn from the run's seeded `Random`. */
+export const latencyBetween = (min: number, max: number) =>
+  Effect.flatMap(Random.nextIntBetween(min, max), (ms) => Effect.sleep(ms));
+
+/** An API request's latency. */
+export const latency = latencyBetween(100, 400);
+
+/** Schedules `run` on the edge at `at`. */
+export const schedule = (twin: Twin, at: Millis, run: Scheduled["run"]): void => {
+  const item: Scheduled = { at, seq: twin.edge.seq++, run };
+  const pending = twin.edge.pending;
+  let i = pending.length;
+  while (i > 0 && pending[i - 1]!.at > at) i--;
+  pending.splice(i, 0, item);
+  if (i === 0) twin.edge.wake();
+};

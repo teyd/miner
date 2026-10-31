@@ -74,7 +74,8 @@ export class Connector extends Context.Service<
 
 const lost = (error: { readonly message: string }) => new PubSubLost({ detail: error.message });
 
-const webSocketConnection = (socket: Socket.Socket) =>
+/** A connection over its own `Socket` (exported so the twin can plant the shared-socket bug). */
+export const webSocketConnection = (socket: Socket.Socket) =>
   Effect.gen(function* () {
     const pull = yield* Socket.readerString(socket).pipe(Effect.mapError(lost));
     const writer = yield* socket.writer;

@@ -29,45 +29,55 @@ export const liveLayer = (dataDir: string, limits?: Limits) => {
       return Journal.rolling(`${dataDir}/recordings`, [Redacted.value(token)], limits);
     }),
   );
-  const services = Layer.unwrap(
-    Effect.gen(function* () {
-      const http = yield* HttpClient.HttpClient;
-      const budgets = yield* Budgets.make();
-      const credentials = yield* Credentials;
-      const recorder = yield* Journal;
-      const gql = makeGql(http, credentials, recorder, budgets.gql);
-      const method = hlsWatch({
-        gql,
-        cdn: http,
-        budget: budgets.cdn,
-        deviceId: credentials.deviceId,
-        journal: recorder,
-      });
-      const twitch = Twitch.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Layer.succeed(HttpClient.HttpClient, http),
-            Layer.succeed(Budgets, budgets),
-            Layer.succeed(Credentials, credentials),
-            Layer.succeed(Journal, recorder),
-          ),
-        ),
-      );
-      const pubsub = PubSub.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            twitch,
-            Layer.succeed(Credentials, credentials),
-            Layer.succeed(Journal, recorder),
-          ),
-        ),
-      );
-      const actuator = withListening(Layer.succeed(Actuator, liveActuator({ gql, method }))).pipe(
-        Layer.provide(pubsub),
-      );
-      return Layer.mergeAll(twitch, pubsub, actuator);
-    }),
-  ).pipe(Layer.provide(journal));
   const status = StatusSink.file(`${dataDir}/${STATUS_FILE}`, "live");
-  return Layer.mergeAll(services, Store.file(`${dataDir}/${LIVE_STATE}`), status);
+  return Layer.mergeAll(
+    liveServices.pipe(Layer.provide(Layer.merge(journal, Budgets.layer))),
+    Store.file(`${dataDir}/${LIVE_STATE}`),
+    status,
+  );
 };
+
+/**
+ * The reads, the live actuator and PubSub over one HTTP client and one set of request budgets,
+ * as a real run wires them; the simulator runs the same wiring over the twin, with budgets that
+ * outlive a simulated crash as Twitch's per-IP count does.
+ */
+export const liveServices = Layer.unwrap(
+  Effect.gen(function* () {
+    const http = yield* HttpClient.HttpClient;
+    const budgets = yield* Budgets;
+    const credentials = yield* Credentials;
+    const recorder = yield* Journal;
+    const gql = makeGql(http, credentials, recorder, budgets.gql);
+    const method = hlsWatch({
+      gql,
+      cdn: http,
+      budget: budgets.cdn,
+      deviceId: credentials.deviceId,
+      journal: recorder,
+    });
+    const twitch = Twitch.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(HttpClient.HttpClient, http),
+          Layer.succeed(Budgets, budgets),
+          Layer.succeed(Credentials, credentials),
+          Layer.succeed(Journal, recorder),
+        ),
+      ),
+    );
+    const pubsub = PubSub.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          twitch,
+          Layer.succeed(Credentials, credentials),
+          Layer.succeed(Journal, recorder),
+        ),
+      ),
+    );
+    const actuator = withListening(Layer.succeed(Actuator, liveActuator({ gql, method }))).pipe(
+      Layer.provide(pubsub),
+    );
+    return Layer.mergeAll(twitch, pubsub, actuator);
+  }),
+);

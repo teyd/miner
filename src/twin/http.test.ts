@@ -1,10 +1,12 @@
 import { Budgets, UNLIMITED, type Limits } from "../twitch/budget.ts";
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Exit, Fiber } from "effect";
+import { Effect, Exit, Fiber, Layer, Redacted } from "effect";
+import { HttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import type { ChannelId } from "../core/model.ts";
-import { Twitch } from "../twitch/Twitch.ts";
-import { twinTwitch } from "./http.ts";
+import { Journal } from "../twitch/journal.ts";
+import { Credentials, Twitch } from "../twitch/Twitch.ts";
+import { twinHttp, twinTwitch } from "./http.ts";
 import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Fault, type Scenario } from "./scenario.ts";
 import { TWITCH_GQL_PER_SECOND, makeTwin, type Twin } from "./twin.ts";
 import { ACCOUNT, buildWorld, openSession, tick } from "./world.ts";
@@ -83,7 +85,7 @@ const requests = (twin: Twin, operation: string) =>
 describe("twin http", () => {
   it.effect("serves the world's campaigns, equal after decoding: the encoding is conformant", () =>
     Effect.gen(function* () {
-      const twin = makeTwin(buildWorld(scenario()));
+      const twin = makeTwin(buildWorld(scenario()), { direct: true });
       const exit = yield* read(twin, (t) => t.catalog(account));
       assert.isTrue(Exit.isSuccess(exit));
       if (!Exit.isSuccess(exit)) return;
@@ -95,7 +97,7 @@ describe("twin http", () => {
 
   it.effect("serves validate, inventory, directory, streams and the current drop", () =>
     Effect.gen(function* () {
-      const twin = makeTwin(buildWorld(scenario()));
+      const twin = makeTwin(buildWorld(scenario()), { direct: true });
       let world = openSession(twin.world, "ch1" as ChannelId, SIM_EPOCH);
       for (let i = 1; i <= 3; i++)
         world = tick(world, "ch1" as ChannelId, SIM_EPOCH + i * 20_000).world;
@@ -141,7 +143,7 @@ describe("twin http", () => {
         atMinute: 1,
         durationSeconds: 5,
       };
-      const twin = makeTwin(buildWorld(scenario([blip])));
+      const twin = makeTwin(buildWorld(scenario([blip])), { direct: true });
       const exit = yield* read(twin, (t) => t.inventory);
       assert.isTrue(Exit.isSuccess(exit));
       assert.deepStrictEqual(
@@ -159,7 +161,7 @@ describe("twin http", () => {
         atMinute: 1,
         durationSeconds: 600,
       };
-      const twin = makeTwin(buildWorld(scenario([storm])));
+      const twin = makeTwin(buildWorld(scenario([storm])), { direct: true });
       const exit = yield* read(twin, (t) => t.inventory);
       assert.deepStrictEqual(errorTag(exit), ["TwitchUnavailable"]);
       assert.strictEqual(requests(twin, "Inventory").length, 4);
@@ -174,7 +176,7 @@ describe("twin http", () => {
         atMinute: 1,
         durationSeconds: 600,
       };
-      const twin = makeTwin(buildWorld(scenario([storm])));
+      const twin = makeTwin(buildWorld(scenario([storm])), { direct: true });
       const exit = yield* read(twin, (t) => t.inventory);
       assert.deepStrictEqual(errorTag(exit), ["BudgetExhausted"]);
       assert.strictEqual(requests(twin, "Inventory").length, 1);
@@ -185,7 +187,7 @@ describe("twin http", () => {
     Effect.gen(function* () {
       const burst = (n: number) =>
         Effect.gen(function* () {
-          const twin = makeTwin(buildWorld(scenario()));
+          const twin = makeTwin(buildWorld(scenario()), { direct: true });
           const exit = yield* read(
             twin,
             (t) =>
@@ -205,7 +207,7 @@ describe("twin http", () => {
       assert.lengthOf(limited, 1);
       assert.strictEqual(limited[0]!.status, 429);
       // Within the real budget, the same six start 300 ms apart and all pass.
-      const twin = makeTwin(buildWorld(scenario()));
+      const twin = makeTwin(buildWorld(scenario()), { direct: true });
       const budgeted = yield* read(twin, (t) =>
         Effect.all(
           Array.from({ length: 6 }, () => t.inventory),
@@ -225,17 +227,74 @@ describe("twin http", () => {
         atMinute: 1,
         durationSeconds: 60,
       };
-      const exit = yield* read(makeTwin(buildWorld(scenario([nul]))), (t) => t.catalog(account));
+      const exit = yield* read(makeTwin(buildWorld(scenario([nul])), { direct: true }), (t) =>
+        t.catalog(account),
+      );
       assert.deepStrictEqual(errorTag(exit), ["TwitchDrift"]);
     }),
   );
 
   it.effect("rejects a revoked token without retrying", () =>
     Effect.gen(function* () {
-      const twin = makeTwin(buildWorld(scenario([{ kind: "revoke-token", atMinute: 0 }])));
+      const twin = makeTwin(buildWorld(scenario([{ kind: "revoke-token", atMinute: 0 }])), {
+        direct: true,
+      });
       const exit = yield* read(twin, (t) => t.validate);
       assert.deepStrictEqual(errorTag(exit), ["AuthRejected"]);
       assert.strictEqual(requests(twin, "validate").length, 1);
+    }),
+  );
+
+  // B1 review P2 (a): the API checks the token before a 5xx window can answer.
+  it.effect("answers a revoked token 401 inside a 5xx window, so the client parks", () =>
+    Effect.gen(function* () {
+      const storm: Fault = {
+        kind: "http-5xx",
+        operation: "any",
+        atMinute: 0,
+        durationSeconds: 900,
+      };
+      const twin = makeTwin(buildWorld(scenario([storm, { kind: "revoke-token", atMinute: 0 }])), {
+        direct: true,
+      });
+      const exit = yield* read(twin, (t) => t.inventory);
+      assert.deepStrictEqual(errorTag(exit), ["AuthRejected"]);
+      assert.deepStrictEqual(
+        requests(twin, "Inventory").map((r) => r.status),
+        [401],
+      );
+    }),
+  );
+
+  // B1 review P1-1: the twin took any token, so a miner wired to the wrong one passed.
+  it.effect("answers 401 to a token it never issued, and records the request", () =>
+    Effect.gen(function* () {
+      const twin = makeTwin(buildWorld(scenario()), { direct: true });
+      const other = Twitch.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HttpClient.HttpClient, twinHttp(twin)),
+            Layer.succeed(
+              Credentials,
+              Credentials.of({ token: Redacted.make("not-the-twin-token"), deviceId: "0" }),
+            ),
+            Budgets.layer,
+            Journal.none,
+          ),
+        ),
+      );
+      yield* TestClock.setTime(SIM_EPOCH + MINUTE_ONE);
+      const fiber = yield* Effect.forkChild(
+        Effect.flatMap(Twitch, (t) => t.validate).pipe(Effect.provide(other)),
+      );
+      yield* TestClock.adjust("1 minute");
+      assert.deepStrictEqual(errorTag(yield* Fiber.await(fiber)), ["AuthRejected"]);
+      assert.deepStrictEqual(twin.activity.wrongTokens, [
+        "validate sent a token the twin never issued",
+      ]);
+      // The twin's own token passes.
+      assert.isTrue(Exit.isSuccess(yield* read(twin, (t) => t.validate)));
+      assert.lengthOf(twin.activity.wrongTokens, 1);
     }),
   );
 
@@ -247,7 +306,7 @@ describe("twin http", () => {
         atMinute: 1,
         durationSeconds: 3,
       };
-      const twin = makeTwin(buildWorld(scenario([fault])));
+      const twin = makeTwin(buildWorld(scenario([fault])), { direct: true });
       const exit = yield* read(twin, (t) => t.inventory);
       assert.isTrue(Exit.isSuccess(exit));
       assert.strictEqual(requests(twin, "Inventory").length, 3);
@@ -257,7 +316,7 @@ describe("twin http", () => {
   it.effect("times a hanging read out per request, within the bound of plan §3.3", () =>
     Effect.gen(function* () {
       const hang: Fault = { kind: "timeout", operation: "any", atMinute: 1, durationSeconds: 600 };
-      const twin = makeTwin(buildWorld(scenario([hang])));
+      const twin = makeTwin(buildWorld(scenario([hang])), { direct: true });
       const exit = yield* read(twin, (t) => t.inventory);
       assert.deepStrictEqual(errorTag(exit), ["TwitchUnavailable"]);
       const sent = requests(twin, "Inventory");

@@ -27,6 +27,7 @@ import { shadowLayer } from "./shadow.ts";
 import { MIN_GAP, STATUS_FILE } from "./status.ts";
 
 const DIR = "/data";
+const TOKEN = "twinsecrettoken0123456789";
 const PATH = `${DIR}/${STATUS_FILE}`;
 
 /** One game, one live channel; drop 0 is complete and claimable, drop 1 is long. */
@@ -64,7 +65,7 @@ const other = Schema.decodeSync(Config)({
 });
 
 const makeWorld = (faults: ReadonlyArray<Fault> = []): Twin => {
-  const twin = makeTwin(buildWorld(scenario(faults)));
+  const twin = makeTwin(buildWorld(scenario(faults)), { token: TOKEN, direct: true });
   twin.world = {
     ...twin.world,
     minutes: new Map([["c0-d0" as DropId, [{ at: SIM_EPOCH - HOUR, minutes: 1 }]]]),
@@ -99,7 +100,7 @@ const shadowRun = (
           Layer.succeed(
             Credentials,
             Credentials.of({
-              token: Redacted.make("twinsecrettoken0123456789"),
+              token: Redacted.make(TOKEN),
               deviceId: "0".repeat(32),
             }),
           ),

@@ -75,8 +75,7 @@ regexTarget = "line"
 regexes = ['''SECRET|USHERSIGTOKEN|INNERREDIRECT[12]''']
 
 # The twin's master playlist names a viewer IP; 192.0.2.1 is the documentation range (RFC 5737),
-# not anyone's address. It is in `src/twin/cdn.ts` on the wire-level twin branch, and a full-history
-# scan of this checkout sees that branch, so the exemption belongs here.
+# not anyone's address. It is in `src/twin/cdn.ts`.
 [[allowlists]]
 description = "the twin's fake viewer IP"
 condition = "AND"

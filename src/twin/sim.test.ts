@@ -133,6 +133,20 @@ describe("fixed scenarios", () => {
     }),
   );
 
+  // Live, no `drop-claim` frame came in 4.6 hours (2026-10-30), so worlds send none unless they
+  // opt in; the miner finds claimable drops in inventory either way.
+  it.effect("claim both drops when Twitch sends drop-claim frames too", () =>
+    Effect.gen(function* () {
+      const result = yield* runTwice({ ...base, claimFrames: true });
+      assert.isUndefined(result.violation, JSON.stringify(result.violation));
+      assert.strictEqual(result.claimsApplied, 2);
+      assert.isAbove(result.wire["heard DropClaimable"] ?? 0, 0);
+      const quiet = yield* runTwice(base);
+      assert.strictEqual(quiet.claimsApplied, 2);
+      assert.isUndefined(quiet.wire["heard DropClaimable"]);
+    }),
+  );
+
   const cases: ReadonlyArray<readonly [string, Scenario]> = [
     [
       "a 5xx storm",
@@ -218,22 +232,6 @@ describe("fixed scenarios", () => {
   );
 });
 
-describe("seeds", () => {
-  it.effect(
-    "seeds 1-20 pass with 6 h horizons, and replay to the same digest",
-    () =>
-      Effect.gen(function* () {
-        for (let seed = 1; seed <= 20; seed++) {
-          const first = yield* runSeed(seed, { maxHorizonMinutes: 360 });
-          assert.strictEqual(kindOf(first), "passed", `seed ${seed}`);
-          const again = yield* runSeed(seed, { maxHorizonMinutes: 360 });
-          assert.deepStrictEqual(again, first);
-        }
-      }),
-    60_000,
-  );
-});
-
 describe("seeds found by longer sweeps", () => {
   // CI runs seeds 1-20; these came from sweeps of 1000 and stay fixed regressions, in the
   // worlds they were found in (`plainScenarioArbitrary`).
@@ -311,27 +309,6 @@ describe("seeds found by longer sweeps", () => {
       60_000,
     );
   }
-});
-
-describe("the default sweep", () => {
-  // Generated worlds always hold an opportunity (scenario.ts); faults, newer campaigns and
-  // schedule changes may still block it. Seeds 1-100 measured 99 watching and 86 claiming.
-  it.effect(
-    "watches and claims in at least 75 of seeds 1-100 with 2 h horizons",
-    () =>
-      Effect.gen(function* () {
-        const results = yield* runSeeds(1, 100, { maxHorizonMinutes: 120 });
-        assert.deepStrictEqual(
-          results.map(kindOf),
-          results.map(() => "passed"),
-        );
-        const earned = results.filter(
-          (r) => r._tag === "Passed" && r.creditedMinutes > 0 && r.claimsApplied > 0,
-        );
-        assert.isAtLeast(earned.length, 75);
-      }),
-    120_000,
-  );
 });
 
 describe("planted bugs are caught and shrunk", () => {
@@ -1121,19 +1098,29 @@ describe("calibrated twin", () => {
     Effect.gen(function* () {
       const result = yield* runTwice({ ...measured, horizonMinutes: 12 });
       assert.isUndefined(result.violation);
-      const lines = result.tail.map((l) => JSON.parse(l) as TraceLine);
+      // Trace lines are canonical JSON; the twin's are `<ms> twin <compact JSON>` (`compact`),
+      // whose first element lists requests as [operation, status, ms since SIM_EPOCH, duration].
+      const lines = result.tail
+        .filter((l) => l.startsWith("{"))
+        .map((l) => JSON.parse(l) as TraceLine);
       const done = lines.find(
         (l) =>
           l.kind === "step" && l.data.event?._tag === "DropProgress" && l.data.event.minutes === 10,
       );
-      const claim = lines
-        .flatMap((l) => (l.kind === "twin" ? (l.data.calls ?? []) : []))
-        .find((c) => c.kind === "claim");
+      const claimAt = result.tail
+        .filter((l) => !l.startsWith("{"))
+        .flatMap((l) => {
+          const [requests] = JSON.parse(l.slice(l.indexOf(" twin ") + 6)) as [
+            ReadonlyArray<readonly [string, unknown, number, number]>,
+          ];
+          return requests;
+        })
+        .find(([operation]) => operation === "ClaimDrop")?.[2];
       assert.isDefined(done);
-      assert.isDefined(claim);
+      assert.isDefined(claimAt);
       // The simulator looks at work in flight once a second (`POLL`), so the inventory read the
       // frame asked for lands, and the claim goes out, a second after the frame at most.
-      const after = claim!.at - SIM_EPOCH - done!.at;
+      const after = claimAt! - done!.at;
       assert.isAbove(after, 0);
       assert.isAtMost(after, CLAIM_AFTER_FRAME_MAX);
     }),

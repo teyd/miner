@@ -108,7 +108,7 @@ describe("twin http", () => {
       if (!Exit.isSuccess(exit)) return;
       const v = exit.value;
       assert.deepStrictEqual(v.account, account);
-      const first = v.inventory.find((p) => p.dropId === "c0-d0");
+      const first = v.inventory.progress.find((p) => p.dropId === "c0-d0");
       assert.deepStrictEqual<ReadonlyArray<unknown>>(
         [first?.minutes, first?.instanceId, first?.claimed],
         [1, "c0-d0#i", false],

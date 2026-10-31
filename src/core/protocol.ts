@@ -1,5 +1,6 @@
 import { Data } from "effect";
 import type {
+  Award,
   Campaign,
   CampaignId,
   Channel,
@@ -25,7 +26,12 @@ export type Event = Data.TaggedEnum<{
   CatalogRead: { readonly campaigns: ReadonlyArray<Campaign> };
   /** The catalog came back `null` or failed after retries: discovery is broken, not empty. */
   CatalogUnavailable: { readonly reason: string };
-  InventoryRead: { readonly progress: ReadonlyArray<Progress> };
+  InventoryRead: {
+    /** Drops of the campaigns the inventory lists (`dropCampaignsInProgress`). */
+    readonly progress: ReadonlyArray<Progress>;
+    /** Every reward the account received (`gameEventDrops`), from any campaign, ever. */
+    readonly awarded: ReadonlyArray<Award>;
+  };
   /** PubSub `drop-progress`: Twitch credited minutes to this drop. */
   DropProgress: { readonly dropId: DropId; readonly minutes: number };
   /** PubSub `drop-claim`: the drop is complete and can be claimed with this instance id. */

@@ -116,6 +116,54 @@ export const remainingMinutes = (
   return own + Math.max(0, ...chain);
 };
 
+/**
+ * The account already received this drop's rewards. For a drop the inventory doesn't list:
+ * Twitch drops a campaign from `dropCampaignsInProgress` once its drops are claimed (Witchspire,
+ * live run 2026-10-30), and only `gameEventDrops` still names the rewards. TDM's rule
+ * (`inventory.py:71-90`, from `gameEventDrops` at `twitch.py:1499-1502`; master 99d12fd,
+ * 2026-10-28): a drop whose benefits Twitch lists as awarded is claimed if every listed award
+ * fell inside the drop's window. A benefit can repeat across campaigns, and an award from before
+ * this drop's window came from another one, so it doesn't count.
+ */
+export const isReceived = (drop: Drop, awarded: ReadonlyMap<string, Millis>): boolean => {
+  const times = drop.benefits.flatMap((b) => {
+    const at = awarded.get(b.id);
+    return at === undefined ? [] : [at];
+  });
+  return times.length > 0 && times.every((at) => drop.startsAt <= at && at < drop.endsAt);
+};
+
+/**
+ * Progress with every received drop the inventory doesn't list marked claimed, at its required
+ * minutes as TDM does (`inventory.py:228-230`). A listed drop keeps what the inventory says
+ * (TDM reads `self` first). Derived on every use, never stored: the next inventory decides again.
+ */
+export const withReceived = (
+  catalog: ReadonlyArray<Campaign>,
+  progress: ProgressMap,
+  awarded: ReadonlyMap<string, Millis>,
+  inventoried: ReadonlySet<DropId>,
+): ProgressMap => {
+  if (awarded.size === 0) return progress;
+  let out: Map<DropId, Progress> | undefined;
+  for (const campaign of catalog) {
+    for (const drop of campaign.drops) {
+      if (inventoried.has(drop.id) || isClaimed(progress, drop.id)) continue;
+      if (!isReceived(drop, awarded)) continue;
+      out ??= new Map(progress);
+      out.set(drop.id, {
+        dropId: drop.id,
+        campaignId: campaign.id,
+        campaignEndsAt: campaign.endsAt,
+        minutes: drop.requiredMinutes,
+        instanceId: undefined,
+        claimed: true,
+      });
+    }
+  }
+  return out ?? progress;
+};
+
 /** A completed, unclaimed drop whose claim window is still open, wherever the campaign stands. */
 export const isClaimable = (p: Progress, now: Millis): boolean =>
   p.instanceId !== undefined && !p.claimed && now < p.campaignEndsAt + CLAIM_GRACE;

@@ -28,6 +28,10 @@ import {
  * - A goal wants a drop whose reward type it lists for the game (an item only from a linked
  *   campaign unless `linkedOnly` is off), and every unclaimed drop such a drop waits on.
  *   `excludeGames` leaves games out of `"all"`; `excludeChannels` keeps the goal off channels.
+ * - A drop counts as claimed when the inventory says so, or, for a drop it doesn't list, when
+ *   every award of its rewards fell inside the drop's window (TDM `inventory.py:71-90`): an
+ *   award from before came from another campaign with the same reward.
+ * - A campaign the core gave up on (Twitch credited only drops it couldn't use) is not ranked.
  */
 
 /**
@@ -42,12 +46,20 @@ export const HYSTERESIS: Millis = 30 * 60_000;
  */
 const ANY_CHANNEL_GAMES: ReadonlySet<string> = new Set(["509663", "509672"]);
 
-/** What the core knew when it picked: its catalog, progress, channels and avoided channels. */
+/**
+ * What the core knew when it picked: its catalog, progress, received rewards, channels, and
+ * avoided channels and campaigns.
+ */
 export interface View {
   readonly catalog: ReadonlyArray<Campaign>;
   readonly progress: ReadonlyMap<DropId, Progress>;
+  /** `gameEventDrops`: benefit id to its last award. */
+  readonly awarded: ReadonlyMap<string, Millis>;
+  /** The drops the last inventory listed. */
+  readonly inventoried: ReadonlySet<DropId>;
   readonly channels: ReadonlyMap<ChannelId, Channel>;
   readonly avoid: ReadonlySet<ChannelId>;
+  readonly avoidCampaigns: ReadonlySet<CampaignId>;
   readonly now: Millis;
 }
 
@@ -95,7 +107,31 @@ interface Entry {
 }
 
 const minutesDone = (view: View, id: DropId) => view.progress.get(id)?.minutes ?? 0;
-const isClaimed = (view: View, id: DropId) => view.progress.get(id)?.claimed === true;
+
+/** Drops the account has the rewards of, though the inventory doesn't list them. */
+const receivedCache = new WeakMap<View, ReadonlySet<DropId>>();
+const receivedOf = (view: View): ReadonlySet<DropId> => {
+  const cached = receivedCache.get(view);
+  if (cached !== undefined) return cached;
+  const out = new Set<DropId>();
+  for (const campaign of view.catalog) {
+    for (const drop of campaign.drops) {
+      if (view.inventoried.has(drop.id)) continue;
+      const awards = drop.benefits.flatMap((b) => {
+        const at = view.awarded.get(b.id);
+        return at === undefined ? [] : [at];
+      });
+      if (awards.length > 0 && awards.every((at) => at >= drop.startsAt && at < drop.endsAt)) {
+        out.add(drop.id);
+      }
+    }
+  }
+  receivedCache.set(view, out);
+  return out;
+};
+
+const isClaimed = (view: View, id: DropId) =>
+  view.progress.get(id)?.claimed === true || receivedOf(view).has(id);
 
 /**
  * Earns now: a drop that takes minutes, window open, unclaimed, unfinished, and every drop it
@@ -127,7 +163,9 @@ const watchable = (view: View, goal: DropsGoal, campaign: Campaign, channel: Cha
 
 /** The drops a goal wants from a campaign that earn now. */
 const earning = (view: View, goal: DropsGoal, campaign: Campaign): ReadonlyArray<Drop> =>
-  view.now < campaign.startsAt || view.now >= campaign.endsAt
+  view.now < campaign.startsAt ||
+  view.now >= campaign.endsAt ||
+  view.avoidCampaigns.has(campaign.id)
     ? []
     : goalDrops(goal, campaign, (id) => isClaimed(view, id)).filter((d) => earnsNow(view, d));
 

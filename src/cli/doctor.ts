@@ -62,7 +62,7 @@ export const diagnose: Effect.Effect<Report, never, Twitch> = Effect.gen(functio
     Effect.catch((e) => Effect.sync(() => problems.push(describe(e))).pipe(Effect.as(undefined))),
   );
   const inventory = yield* twitch.inventory.pipe(
-    Effect.map((progress) => ({
+    Effect.map(({ progress }) => ({
       drops: progress.length,
       inProgress: progress.filter((p) => !p.claimed && p.minutes > 0).length,
       claimable: progress.filter((p) => isClaimable(p, now)).length,

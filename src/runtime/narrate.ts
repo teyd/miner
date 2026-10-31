@@ -1,4 +1,12 @@
-import type { Campaign, ChannelId, Drop, DropId, Millis } from "../core/model.ts";
+import {
+  MINUTE,
+  type Campaign,
+  type ChannelId,
+  type Drop,
+  type DropId,
+  type Millis,
+} from "../core/model.ts";
+import { withReceived } from "../core/rules.ts";
 import type { Event } from "../core/protocol.ts";
 import type { State, Watch } from "../core/state.ts";
 
@@ -49,6 +57,54 @@ export const progressLines = (before: State, after: State): ReadonlyArray<string
     if (p.claimed && old?.claimed !== true) lines.push(`claimed ${dropName(after, dropId)}`);
     else if (old === undefined || old.minutes !== p.minutes)
       lines.push(`progress ${dropName(after, dropId)} ${minutesOf(after, dropId)}`);
+  }
+  return lines;
+};
+
+/**
+ * Channels and campaigns this step gave up on: a channel until the next start, when it refused
+ * playback or credited nothing the plan can use for `STALL_AFTER`; a campaign for a while, when
+ * Twitch kept crediting a drop of it that earns nothing (received, past its requirement).
+ */
+export const avoidLines = (before: State, after: State, now: Millis): ReadonlyArray<string> => {
+  const lines: Array<string> = [];
+  for (const id of after.avoid) {
+    if (before.avoid.has(id)) continue;
+    lines.push(
+      `skipping ${channelName(after, id)} until restart: it refused playback or never credited what the plan wants`,
+    );
+  }
+  for (const [id, until] of after.avoidCampaigns) {
+    if (before.avoidCampaigns.get(id) === until) continue;
+    const campaign = after.catalog?.find((c) => c.id === id);
+    const name = campaign === undefined ? id : `${campaign.game.name}: ${campaign.name}`;
+    const minutes = Math.round((until - now) / MINUTE);
+    lines.push(
+      `skipping ${name} for ${minutes} min: Twitch credited only a drop of it that earns nothing`,
+    );
+  }
+  return lines;
+};
+
+/**
+ * Drops the inventory doesn't list that now count as received, by `gameEventDrops` (`isReceived`),
+ * once each. A benefit id shared with an overlapping campaign can mark a drop received that
+ * isn't; this line is how a person sees it.
+ */
+export const receivedLines = (before: State, after: State): ReadonlyArray<string> => {
+  const catalog = after.catalog ?? [];
+  const was = withReceived(
+    before.catalog ?? [],
+    before.progress,
+    before.awarded,
+    before.inventoried,
+  );
+  const is = withReceived(catalog, after.progress, after.awarded, after.inventoried);
+  const lines: Array<string> = [];
+  for (const [dropId, p] of is) {
+    if (!p.claimed || after.progress.get(dropId)?.claimed === true) continue;
+    if (was.get(dropId)?.claimed === true) continue;
+    lines.push(`received already: ${dropName(after, dropId)}, by the inventory's awarded rewards`);
   }
   return lines;
 };

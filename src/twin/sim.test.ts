@@ -9,6 +9,7 @@ import { step, stepWith } from "../core/step.ts";
 import {
   Capsule,
   DEFAULT_GOAL_SPEC,
+  plainScenarioArbitrary,
   scenarioArbitrary,
   type Fault,
   type GoalSpec,
@@ -189,7 +190,8 @@ describe("seeds", () => {
 });
 
 describe("seeds found by longer sweeps", () => {
-  // CI runs seeds 1-20; these came from sweeps of 1000 and stay fixed regressions.
+  // CI runs seeds 1-20; these came from sweeps of 1000 and stay fixed regressions, in the
+  // worlds they were found in (`plainScenarioArbitrary`).
   const found: ReadonlyArray<readonly [number, string]> = [
     // The doomed campaign's drop runs out of time and the core rightly moves to one that can
     // finish: WatchFlip took it for a switch without a cause.
@@ -203,6 +205,32 @@ describe("seeds found by longer sweeps", () => {
     [22972, "a channel that never credits, its target changing"],
   ];
   for (const [seed, name] of found) {
+    it.effect(
+      `seed ${seed}: ${name}`,
+      () =>
+        Effect.gen(function* () {
+          assert.strictEqual(kindOf(yield* runProperty(plainScenarioArbitrary, seed)), "passed");
+        }),
+      60_000,
+    );
+  }
+  // Found with the quirks of the 4 h live run (`scenarioArbitrary`).
+  const quirky: ReadonlyArray<readonly [number, string]> = [
+    // Twitch credited only a locked drop of the newest campaign on the channel; giving up that
+    // campaign restarted the channel's clock for the next target there, which it never credited.
+    [40277, "a campaign given up, the channel kept for another it never credits"],
+    // The only channel the core knew on the game was given up after a stall (its change of game
+    // was lost with the frames); another turned to the game unheard, and the core sat idle until
+    // the hourly catalog read.
+    [50138, "no live channel for what earns, the directory read again within 15 min"],
+    // A campaign skip that ended put the core back on it, where Twitch still credited the drop
+    // it was skipped for: a stall each hour, given up at once now (`skipCauses`).
+    [106, "a skipped campaign retried, Twitch still on the same drop"],
+    // That at-once skip followed the channel's credits to another campaign: the fairness check
+    // looks at the campaign's own credits.
+    [50613, "a retry given up at once after another campaign's credits"],
+  ];
+  for (const [seed, name] of quirky) {
     it.effect(
       `seed ${seed}: ${name}`,
       () =>
@@ -577,6 +605,291 @@ describe("the twin's goal oracle catches planted planner bugs (WrongPick)", () =
       for (const [, scenario] of planted.filter(([name]) => name.includes("reverted"))) {
         assert.strictEqual((yield* runTwice(scenario, { core: old })).violation?.kind, "WrongPick");
       }
+    }),
+  );
+});
+
+/**
+ * The 4 h live run of 2026-10-30 (roadmap A6): Witchspire's Logo and Gold Stamp were received the
+ * day before and listed only in `gameEventDrops`, which the wire ignored, and Twitch credited the
+ * Gold Stamp past its requirement, which kept the stall clock from ever firing. Another campaign
+ * on another game was there to mine all along.
+ */
+describe("rewards already received, and credit the plan can't use (the 4 h live run)", () => {
+  const badge = (requiredMinutes: number, received?: "in-window") => ({
+    requiredMinutes,
+    after: null,
+    benefit: "BADGE" as const,
+    ...(received === undefined ? {} : { received }),
+  });
+  const witchspire = (logo: "in-window" | undefined): Scenario => ({
+    ...base,
+    // Giving up Witchspire after one stall, the other campaign's drop is claimed by +65 min;
+    // giving up its two channels one stall each, not before +95.
+    horizonMinutes: 80,
+    campaigns: [
+      {
+        game: 0,
+        startMinute: -24 * 60,
+        durationMinutes: 48 * 60,
+        linked: false,
+        allowList: [],
+        drops: [badge(60, logo), badge(240, "in-window")],
+        creditsOnly: 1,
+      },
+      // Ends after Witchspire, so `ending-soonest` tries Witchspire first.
+      {
+        game: 1,
+        startMinute: -60,
+        durationMinutes: 2880,
+        linked: true,
+        allowList: [],
+        drops: [{ requiredMinutes: 30, after: null, benefit: "DIRECT_ENTITLEMENT" }],
+      },
+    ],
+    channels: [
+      base.channels[0]!,
+      { ...base.channels[0]!, viewers: 20 },
+      { ...base.channels[0]!, game: 1, viewers: 5 },
+    ],
+  });
+
+  /** The wire before this fix: `gameEventDrops` never reached the core. */
+  const blindToAwards: Core = {
+    nextDeadline,
+    step: (state, event, now) =>
+      step(state, event._tag === "InventoryRead" ? { ...event, awarded: [] } : event, now),
+  };
+
+  /** The stall clock before this fix: any credit of a known drop restarts it. */
+  const anyCreditCounts: Core = {
+    nextDeadline,
+    step: (state, event, now) => {
+      const result = step(state, event, now);
+      const w = result.state.watch;
+      const credit =
+        (event._tag === "DropProgress" || event._tag === "CurrentDropRead") &&
+        state.catalog?.some((c) => c.drops.some((d) => d.id === event.dropId)) === true;
+      if (!credit || w._tag !== "Watching") return result;
+      return { ...result, state: { ...result.state, watch: { ...w, confirmedAt: now } } };
+    },
+  };
+
+  it.effect("the miner skips received rewards and mines the other campaign", () =>
+    Effect.gen(function* () {
+      for (const logo of ["in-window", undefined] as const) {
+        const result = yield* runTwice(witchspire(logo));
+        assert.isUndefined(result.violation, String(logo));
+        assert.strictEqual(result.claimsApplied, 1, String(logo));
+      }
+    }),
+  );
+
+  it.effect("ignoring gameEventDrops watches for a received Logo: WatchedClaimed", () =>
+    Effect.gen(function* () {
+      const result = yield* runTwice(witchspire("in-window"), { core: blindToAwards });
+      assert.strictEqual(result.violation?.kind, "WatchedClaimed");
+    }),
+  );
+
+  it.effect("taking any credit as progress holds the channel for good: Unproductive", () =>
+    Effect.gen(function* () {
+      const result = yield* runTwice(witchspire(undefined), { core: anyCreditCounts });
+      assert.include(["Unproductive", "Idle"], result.violation?.kind);
+    }),
+  );
+
+  /**
+   * Seed 150534, shrunk, faults past its horizon dropped. A badge campaign starts unseen and is
+   * credited on ch0 for two minutes; its frames can't be filed, so the core learns the second
+   * minute from the inventory read at +10.1m, a read late, and confirms its watch then. From +4.4m
+   * Twitch credits only an unwanted emote there and never the linked badge the core targets.
+   */
+  const unplacedCredit: Scenario = {
+    latencySeed: 0,
+    horizonMinutes: 60,
+    inventoryLagMinutes: 1,
+    settings: {
+      goals: [{ ...DEFAULT_GOAL_SPEC, rewards: ["item", "badge"] }],
+    },
+    campaigns: [
+      {
+        game: 0,
+        startMinute: -23,
+        durationMinutes: 1100,
+        linked: true,
+        allowList: [],
+        drops: [{ requiredMinutes: 1, after: null, benefit: "BADGE" }],
+      },
+      {
+        game: 0,
+        startMinute: 1,
+        durationMinutes: 30,
+        linked: false,
+        creditsUnlinked: false,
+        allowList: [],
+        drops: [
+          {
+            requiredMinutes: 2,
+            after: null,
+            benefit: "BADGE",
+            window: { startMinute: 2, durationMinutes: 30 },
+          },
+          { requiredMinutes: 1, after: null, benefit: "BADGE" },
+        ],
+      },
+      {
+        game: 0,
+        startMinute: 0,
+        durationMinutes: 1306,
+        linked: false,
+        creditsUnlinked: false,
+        allowList: [5, 6],
+        drops: [
+          { requiredMinutes: 77, after: 2, benefit: "EMOTE" },
+          { requiredMinutes: 4, after: 0, benefit: "DIRECT_ENTITLEMENT" },
+        ],
+      },
+    ],
+    channels: [
+      {
+        game: 0,
+        viewers: 6310,
+        dropsEnabled: true,
+        refuses: false,
+        liveAtStart: true,
+        changes: [],
+      },
+      {
+        game: 2,
+        viewers: 5625,
+        dropsEnabled: true,
+        refuses: false,
+        liveAtStart: true,
+        changes: [{ atMinute: 0, to: "game-1" }],
+      },
+    ],
+    faults: [],
+  };
+
+  it.effect("a credit first heard through the inventory restarts the stall clock there", () =>
+    Effect.gen(function* () {
+      const result = yield* runTwice(unplacedCredit);
+      assert.isUndefined(result.violation, JSON.stringify(result.violation));
+      // The emote credited every minute still must not hold the channel.
+      const old = yield* runTwice(unplacedCredit, { core: anyCreditCounts });
+      assert.strictEqual(old.violation?.kind, "Unproductive");
+    }),
+  );
+
+  it.effect(
+    "both at once, the miner of the live run, on random worlds with these quirks",
+    () =>
+      Effect.gen(function* () {
+        const old: Core = {
+          nextDeadline,
+          step: (state, event, now) =>
+            anyCreditCounts.step(
+              state,
+              event._tag === "InventoryRead" ? { ...event, awarded: [] } : event,
+              now,
+            ),
+        };
+        // The live run's Twitch stayed on its drop: worlds where it moves on spare the old miner.
+        const quirky = scenarioArbitrary.filter(
+          (s) =>
+            s.campaigns.some(
+              (c) => c.creditsOnly !== undefined || c.drops.some((d) => d.received),
+            ) && s.campaigns.every((c) => c.creditsMoveOn !== true),
+        );
+        const result = yield* runProperty(quirky, 1, {
+          core: old,
+          maxShrinks: 30,
+          maxHorizonMinutes: 240,
+        });
+        assert.strictEqual(result._tag, "Failed");
+        if (result._tag !== "Failed") return;
+        assert.include(["WatchedClaimed", "Unproductive", "Idle"], result.capsule.violation.kind);
+      }),
+    60_000,
+  );
+});
+
+/**
+ * Twitch credits one drop of a campaign, a drop the goal filters out (review of A6, P1-1): it
+ * earns alongside the wanted one, or moves on to it once complete, so the watch is no stall.
+ */
+describe("credit to a drop the goal filters out", () => {
+  const filtered = (moveOn: boolean): Scenario => ({
+    ...base,
+    horizonMinutes: 180,
+    settings: { goals: [{ ...DEFAULT_GOAL_SPEC, rewards: ["item"] }] },
+    campaigns: [
+      {
+        game: 0,
+        startMinute: -10,
+        durationMinutes: 600,
+        linked: true,
+        allowList: [],
+        drops: [
+          { requiredMinutes: 40, after: null, benefit: "BADGE" },
+          { requiredMinutes: 30, after: null, benefit: "DIRECT_ENTITLEMENT" },
+        ],
+        creditsOnly: 0,
+        ...(moveOn ? { creditsMoveOn: true } : {}),
+      },
+    ],
+  });
+
+  it.effect("keeps the watch while the badge earns, and earns the item once Twitch moves on", () =>
+    Effect.gen(function* () {
+      const result = yield* runTwice(filtered(true));
+      assert.isUndefined(result.violation, JSON.stringify(result.violation));
+      // The badge, then the item.
+      assert.strictEqual(result.claimsApplied, 2);
+    }),
+  );
+
+  it.effect("skips the campaign for a while when Twitch stays on the badge past its end", () =>
+    Effect.gen(function* () {
+      // Skipped after a stall past the badge's 40 min, tried again an hour later and given up at
+      // once: the invariants hold the skip to `CAMPAIGN_SKIP` and the watch to a stall.
+      const result = yield* runTwice(filtered(false));
+      assert.isUndefined(result.violation, JSON.stringify(result.violation));
+      assert.strictEqual(result.claimsApplied, 1);
+    }),
+  );
+});
+
+/**
+ * A reward another campaign gave inside a drop's window, sharing the benefit id (review of A6,
+ * P2-2). TDM's rule takes the drop as received; the account reads nothing that says otherwise, so
+ * the miner skips it and logs it once (`receivedLines`). Pinned: a change that mines it fails here.
+ */
+describe("a reward an overlapping campaign gave", () => {
+  it.effect("counts the drop as received: the miner doesn't mine it", () =>
+    Effect.gen(function* () {
+      const scenario: Scenario = {
+        ...base,
+        campaigns: [
+          {
+            ...base.campaigns[0]!,
+            drops: [
+              { requiredMinutes: 10, after: null, benefit: "BADGE", received: "overlapping" },
+            ],
+          },
+        ],
+      };
+      const result = yield* runTwice(scenario);
+      assert.isUndefined(result.violation, JSON.stringify(result.violation));
+      assert.strictEqual(result.creditedMinutes, 0);
+      // Without the shared reward it is mined.
+      const plain = { requiredMinutes: 10, after: null, benefit: "BADGE" } as const;
+      const mined = yield* runTwice({
+        ...scenario,
+        campaigns: [{ ...scenario.campaigns[0]!, drops: [plain] }],
+      });
+      assert.strictEqual(mined.claimsApplied, 1);
     }),
   );
 });

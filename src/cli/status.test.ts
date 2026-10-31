@@ -33,6 +33,7 @@ const state: State = {
     confirmedMinutes: 12,
     estimatedMinutes: 12,
     lastCurrentDropRead: undefined,
+    wasted: undefined,
   },
 };
 

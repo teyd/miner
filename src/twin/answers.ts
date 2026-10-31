@@ -13,6 +13,7 @@ import {
 import {
   ACCOUNT,
   GAMES,
+  awardsAt,
   channelOf,
   currentDropView,
   gameAt,
@@ -106,6 +107,10 @@ export const inventory = (world: World, now: Millis) =>
               dropInstanceID: d.instanceId ?? null,
             },
           })),
+        })),
+        gameEventDrops: awardsAt(world, now).map((a) => ({
+          id: a.benefitId,
+          lastAwardedAt: a.at,
         })),
       },
     },

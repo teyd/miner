@@ -5,6 +5,7 @@ import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Scenario } from "./scenario.ts";
 import {
   GAMES,
   CLAIMED_FLAG_LAG,
+  awardsAt,
   buildWorld,
   channelFrames,
   claim,
@@ -242,5 +243,58 @@ describe("world", () => {
       frames.map((f) => [f.at - T, f.event._tag]),
       [[5 * MINUTE + 1_000, "StreamUp"]],
     );
+  });
+});
+
+describe("rewards received before the run, and Twitch crediting one drop only", () => {
+  const witchspire = campaignSpec({
+    startMinute: -24 * 60,
+    durationMinutes: 48 * 60,
+    drops: [
+      { requiredMinutes: 60, after: null, benefit: "BADGE" },
+      { requiredMinutes: 240, after: null, benefit: "BADGE", received: "in-window" },
+    ],
+    creditsOnly: 1,
+  });
+
+  it("credits only the chosen drop, past its requirement and claimed, never the other", () => {
+    const watched = watchFor(world([witchspire]), ch(0), 5);
+    assert.strictEqual(minutesAt(watched.world, drop("c0-d1"), T + HOUR), 245);
+    assert.strictEqual(minutesAt(watched.world, drop("c0-d0"), T + HOUR), 0);
+    // Claimed already: progress frames, never a claim frame.
+    assert.deepStrictEqual(
+      new Set(watched.frames.map((f) => f.event._tag)),
+      new Set(["DropProgress"]),
+    );
+    assert.deepStrictEqual(currentDropView(watched.world, ch(0), T + 5 * MINUTE), {
+      dropId: drop("c0-d1"),
+      minutes: 245,
+    });
+  });
+
+  it("lists a received drop in gameEventDrops only, as Twitch did for Witchspire", () => {
+    const watched = watchFor(world([witchspire]), ch(0), 5).world;
+    assert.deepStrictEqual(inventoryView(watched, T + HOUR), []);
+    assert.deepStrictEqual(awardsAt(watched, T), [{ benefitId: "c0-d1-b", at: T - 24 * HOUR }]);
+  });
+
+  it("names a reward another campaign gave before the drop opened, and the drop still earns", () => {
+    const repeat = campaignSpec({
+      drops: [{ requiredMinutes: 2, after: null, benefit: "BADGE", received: "before-window" }],
+    });
+    const w = world([repeat]);
+    assert.deepStrictEqual(awardsAt(w, T), [
+      { benefitId: "c0-d0-b", at: T - 10 * MINUTE - 24 * HOUR },
+    ]);
+    assert.strictEqual(minutesAt(watchFor(w, ch(0), 2).world, drop("c0-d0"), T + HOUR), 2);
+  });
+
+  it("claims after the run show in gameEventDrops with the claimed flag's lag", () => {
+    const watched = watchFor(world([campaignSpec()]), ch(0), 2).world;
+    const claimed = claim(watched, instanceOf(drop("c0-d0")), T + 3 * MINUTE).world;
+    assert.deepStrictEqual(awardsAt(claimed, T + 3 * MINUTE + CLAIMED_FLAG_LAG - 1), []);
+    assert.deepStrictEqual(awardsAt(claimed, T + 3 * MINUTE + CLAIMED_FLAG_LAG), [
+      { benefitId: "c0-d0-b", at: T + 3 * MINUTE },
+    ]);
   });
 });

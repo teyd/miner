@@ -46,6 +46,7 @@ const watching: Watching = {
   confirmedMinutes: 12,
   estimatedMinutes: 13,
   lastCurrentDropRead: undefined,
+  wasted: undefined,
 };
 
 const running: State = {
@@ -151,7 +152,13 @@ describe("observe", () => {
 
   it("records the time of each successful read", () => {
     const facts = observe(startFacts(T0), running, running, Event.TokenValid(), T0 + 1);
-    const later = observe(facts, running, running, Event.InventoryRead({ progress: [] }), T0 + 2);
+    const later = observe(
+      facts,
+      running,
+      running,
+      Event.InventoryRead({ progress: [], awarded: [] }),
+      T0 + 2,
+    );
     assert.strictEqual(later.reads.validate, T0 + 1);
     assert.strictEqual(later.reads.inventory, T0 + 2);
     assert.isUndefined(later.reads.catalog);
@@ -163,7 +170,7 @@ describe("observe", () => {
     assert.deepStrictEqual(observe(startFacts(T0), withIntent, claimed, answer, T0 + 9).claimed, [
       { campaignId: cid("c1"), dropId: did("c1-d1"), at: T0 + 9 },
     ]);
-    const inventory = Event.InventoryRead({ progress: [] });
+    const inventory = Event.InventoryRead({ progress: [], awarded: [] });
     assert.lengthOf(observe(startFacts(T0), withIntent, claimed, inventory, T0).claimed, 1);
     // An unknown claim dropped after its recheck failed was not claimed.
     const failed = { ...claimed, progress: withIntent.progress };

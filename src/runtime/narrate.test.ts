@@ -1,8 +1,15 @@
 import { assert, describe, it } from "@effect/vitest";
-import { campaign, channel, chid, did, drop, progress, settings } from "../core/fixtures.ts";
+import { campaign, channel, chid, cid, did, drop, progress, settings } from "../core/fixtures.ts";
 import { initial, type State } from "../core/state.ts";
 import { Event } from "../core/protocol.ts";
-import { describeWatch, discoveryExpired, progressLines } from "./narrate.ts";
+import { MINUTE } from "../core/model.ts";
+import {
+  avoidLines,
+  describeWatch,
+  discoveryExpired,
+  progressLines,
+  receivedLines,
+} from "./narrate.ts";
 
 const c = campaign("c1", { drops: [drop("c1-d1", { name: "Hoodie", requiredMinutes: 15 })] });
 const base: State = {
@@ -27,6 +34,38 @@ const watching = {
 } as unknown as State["watch"];
 
 describe("narrate", () => {
+  it("says which channel or campaign it gives up, by name", () => {
+    const after: State = {
+      ...base,
+      avoid: new Set([chid("ch1")]),
+      avoidCampaigns: new Map([
+        [c.id, 60 * MINUTE],
+        [cid("gone"), 30 * MINUTE],
+      ]),
+    };
+    assert.deepStrictEqual(avoidLines(base, after, 0), [
+      "skipping oilrats until restart: it refused playback or never credited what the plan wants",
+      "skipping Game game-1: Campaign c1 for 60 min: Twitch credited only a drop of it that earns nothing",
+      "skipping gone for 30 min: Twitch credited only a drop of it that earns nothing",
+    ]);
+    assert.deepStrictEqual(avoidLines(after, after, 0), []);
+  });
+
+  it("says once which drop counts as received by the awarded rewards alone", () => {
+    const shared = drop("c1-d1", { name: "Hoodie", requiredMinutes: 15 });
+    const received: State = {
+      ...base,
+      awarded: new Map([[shared.benefits[0]!.id, shared.startsAt + MINUTE]]),
+    };
+    assert.deepStrictEqual(receivedLines(base, received), [
+      "received already: Game game-1: Hoodie, by the inventory's awarded rewards",
+    ]);
+    assert.deepStrictEqual(receivedLines(received, received), []);
+    // The inventory lists the drop: its own claim state wins, nothing to say.
+    const listed: State = { ...received, inventoried: new Set([shared.id]) };
+    assert.deepStrictEqual(receivedLines(base, listed), []);
+  });
+
   it("names the channel, game and drop, with progress of the total", () => {
     assert.strictEqual(
       describeWatch(withMinutes(base, 6), watching),

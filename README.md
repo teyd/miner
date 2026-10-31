@@ -220,22 +220,26 @@ On a terminal, or with `LOG_FORMAT=pretty`, a healthy start looks like this (tim
   the claim still goes through with a warning, and Twitch delivers the item once you link it.
 - `progress <game>: <drop> n/m min` reports each drop whose minutes changed: the one being
   watched, and others that the same stream also counts for.
-- `runtime: skipping <channel or campaign> until restart: …` (a warning) means the miner gave up
-  on it. A channel that refuses playback, or credits nothing the miner wants for 30 minutes, is
-  skipped. So is a campaign when Twitch keeps crediting a drop of it that earns you nothing, such
-  as one you already have: Twitch counted a received reward past its requirement for two hours
-  in one live run. Rewards you already received (listed on Twitch's inventory page, even from
-  campaigns it no longer shows there) are never watched for.
+- `runtime: skipping <channel> until restart: …` (a warning) means the miner gave up on a channel
+  that refuses playback, or credits nothing the miner wants for 30 minutes.
+  `runtime: skipping <campaign> for <n> min: …` means Twitch kept crediting a drop of that
+  campaign that earns you nothing, such as one you already have: Twitch counted a received reward
+  past its requirement for two hours in one live run. The miner tries the campaign again after at
+  most an hour, and gives it up again at once if Twitch is still on that drop.
+- `runtime: received already: <game>: <drop>, …` means the miner takes a drop as yours from the
+  rewards on Twitch's inventory page (even from campaigns it no longer shows there), and won't
+  watch for it. Twitch names a reward, not the campaign that gave it, so a reward another campaign
+  gave during the drop's dates counts too; if you see a drop here you don't have, that's why.
 - `runtime: idle (<reason>)` means nothing is being watched right now:
 
-  | Reason                | Meaning                                                                       |
-  | --------------------- | ----------------------------------------------------------------------------- |
-  | `starting`            | Checking the token and reading the campaigns (logged only after a resume).    |
-  | `discovering`         | Reading which channels stream the campaigns; a watch starts once they answer. |
-  | `nothing-to-mine`     | No active campaign matches your config, or everything is claimed.             |
-  | `no-live-channel`     | There are drops to earn, but no channel streaming them is live now.           |
-  | `catalog-unavailable` | Twitch didn't return the campaign list. The miner tries again.                |
-  | `needs-login`         | The token was refused. See [section 5](#5-when-it-needs-you).                 |
+  | Reason                | Meaning                                                                                                     |
+  | --------------------- | ----------------------------------------------------------------------------------------------------------- |
+  | `starting`            | Checking the token and reading the campaigns (logged only after a resume).                                  |
+  | `discovering`         | Reading which channels stream the campaigns; a watch starts once they answer.                               |
+  | `nothing-to-mine`     | No active campaign matches your config, or everything is claimed.                                           |
+  | `no-live-channel`     | There are drops to earn, but no channel streaming them is live now. The miner looks again every 15 minutes. |
+  | `catalog-unavailable` | Twitch didn't return the campaign list. The miner tries again.                                              |
+  | `needs-login`         | The token was refused. See [section 5](#5-when-it-needs-you).                                               |
 
 `LOG_LEVEL=Debug` adds every watch tick and PubSub event.
 

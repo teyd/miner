@@ -9,6 +9,7 @@ import {
 } from "../core/model.ts";
 import { Command, Event } from "../core/protocol.ts";
 import {
+  CAMPAIGN_SKIP,
   CATALOG_INTERVAL,
   CLAIM_RECHECK,
   ONLINE_DELAY,
@@ -439,7 +440,7 @@ describe("invariants 8 and 9: no watch for a received drop, none that earns noth
   it("flags giving up a campaign that credited minutes ago, and allows it after a stall", () => {
     const given: State = {
       ...knowing,
-      avoidCampaigns: new Set([c0]),
+      avoidCampaigns: new Map([[c0, at((STALL_AFTER / MINUTE) * 60) + CAMPAIGN_SKIP]]),
       watch: { _tag: "Idle", reason: "nothing-to-mine" },
     };
     const giveUp = (minutes: number) =>
@@ -449,6 +450,13 @@ describe("invariants 8 and 9: no watch for a received drop, none that earns noth
       });
     assert.include(kinds([watch(session), look(session, 5, d0), giveUp(6)]), "AvoidedUnfairly");
     assert.deepStrictEqual(kinds([watch(session), giveUp(STALL_AFTER / MINUTE)]), []);
+    // A skip longer than `CAMPAIGN_SKIP` could outlive its cause: Twitch may move on.
+    const forever: State = { ...given, avoidCampaigns: new Map([[c0, at(24 * 3600)]]) };
+    const longer = observation(at(STALL_AFTER / 1000), {
+      world: session,
+      step: record(Event.WatchTicked({ channelId: ch0 }), [], knowing, forever),
+    });
+    assert.include(kinds([watch(session), longer]), "AvoidedTooLong");
   });
 
   it("flags watching a drop the account has once an inventory read could show it", () => {

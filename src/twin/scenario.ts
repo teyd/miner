@@ -71,6 +71,8 @@ const CRASH_POINTS = ["before-persist", "after-persist", "in-claim"] as const;
 const BENEFITS = ["BADGE", "EMOTE", "DIRECT_ENTITLEMENT"] as const;
 const CHANGES = ["up", "down", "game-0", "game-1", "game-2"] as const;
 const RECEIVED = ["in-window", "before-window"] as const;
+/** Not drawn by the arbitraries, so seeds keep their worlds: named scenarios only. */
+const RECEIVED_ANY = [...RECEIVED, "overlapping"] as const;
 const REWARDS = ["item", "badge", "emote"] as const;
 const ORDERS = ["ending-soonest", "least-slack"] as const;
 
@@ -114,9 +116,11 @@ const DropSpec = Schema.Struct({
    * The account has this drop's reward already, listed in `gameEventDrops` only. `in-window`:
    * the drop was claimed at its start, before the run (a drop opening later is left alone).
    * `before-window`: another campaign gave the same reward a day before this drop opened, so the
-   * drop is still to earn (TDM `inventory.py:71-90`). Omitted: neither.
+   * drop is still to earn (TDM `inventory.py:71-90`). `overlapping`: another campaign gave the
+   * same reward inside this drop's window, so TDM's rule takes the drop as received though Twitch
+   * still credits it; the account can't tell the two apart. Omitted: none of these.
    */
-  received: Schema.optionalKey(Schema.Literals(RECEIVED)),
+  received: Schema.optionalKey(Schema.Literals(RECEIVED_ANY)),
 });
 
 const CampaignSpec = Schema.Struct({
@@ -139,6 +143,12 @@ const CampaignSpec = Schema.Struct({
    * campaign's other drop never moved (live run, 2026-10-30). Omitted: every earnable drop.
    */
   creditsOnly: Schema.optionalKey(int("game")),
+  /**
+   * With `creditsOnly`: Twitch credits that drop only while it can earn, then moves on to every
+   * earnable drop, as it does once a drop completes. A campaign given up on its account is worth
+   * trying again. Omitted: false, the drop is credited whatever its state.
+   */
+  creditsMoveOn: Schema.optionalKey(Schema.Boolean),
 });
 
 const ChannelSpec = Schema.Struct({
@@ -379,7 +389,7 @@ const quirkArbitrary = fc.option(
 
 type Quirk = NonNullable<typeof quirkArbitrary extends fc.Arbitrary<infer Q> ? Q : never>;
 
-const withQuirk = (scenario: Scenario, quirk: Quirk | null): Scenario => {
+const withQuirk = (scenario: Scenario, quirk: Quirk | null, moveOn: boolean): Scenario => {
   if (quirk === null) return scenario;
   const campaigns = scenario.campaigns.map((c, i) => {
     if (i !== quirk.campaign % scenario.campaigns.length) return c;
@@ -387,9 +397,9 @@ const withQuirk = (scenario: Scenario, quirk: Quirk | null): Scenario => {
     const drops = c.drops.map((d, j) =>
       j === target && quirk.received !== null ? { ...d, received: quirk.received } : d,
     );
-    return quirk.creditsOnly === null
-      ? { ...c, drops }
-      : { ...c, drops, creditsOnly: quirk.creditsOnly % c.drops.length };
+    if (quirk.creditsOnly === null) return { ...c, drops };
+    const only = { ...c, drops, creditsOnly: quirk.creditsOnly % c.drops.length };
+    return moveOn ? { ...only, creditsMoveOn: true } : only;
   });
   return { ...scenario, campaigns };
 };
@@ -401,11 +411,12 @@ const REWARD_OF = { BADGE: "badge", EMOTE: "emote", DIRECT_ENTITLEMENT: "item" }
  * Campaign 0 on channel 0 is always an opportunity one of the goals wants; three times in four
  * campaign 1 on channel 1 is a rival (`rivalArbitrary`). The rest is random,
  * so faults, newer campaigns, other goals and schedule changes may still stand in its way. Half
- * the seeds add a quirk the live run found (`quirkArbitrary`).
+ * the seeds add a quirk the live run found (`quirkArbitrary`); half of those crediting one drop
+ * move on once it completes (`creditsMoveOn`), drawn last so earlier seeds keep their worlds.
  */
 export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
-  .tuple(randomScenario, opportunityArbitrary, rivalArbitrary, quirkArbitrary)
-  .map(([s, o, r, q]): Scenario => withQuirk(baseScenario(s, o, r), q));
+  .tuple(randomScenario, opportunityArbitrary, rivalArbitrary, quirkArbitrary, fc.boolean())
+  .map(([s, o, r, q, moveOn]): Scenario => withQuirk(baseScenario(s, o, r), q, moveOn));
 
 /**
  * The worlds of `scenarioArbitrary` before quirks existed: a seed's world as it was then. The

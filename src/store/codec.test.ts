@@ -27,7 +27,7 @@ const watching: Watching = {
   confirmedMinutes: 3,
   estimatedMinutes: 4,
   lastCurrentDropRead: undefined,
-  wasted: cid("c"),
+  wasted: did("c-d1"),
 };
 
 /** Every kind of value `State` holds: Maps, Sets, `undefined` fields, both claim statuses. */
@@ -51,7 +51,14 @@ const populated: State = {
   ]),
   inventoried: new Set([did("c-d1"), did("c-d2")]),
   avoid: new Set([chid("z"), chid("y")]),
-  avoidCampaigns: new Set([cid("old"), cid("stuck")]),
+  avoidCampaigns: new Map([
+    [cid("old"), T0 + 30 * MINUTE],
+    [cid("stuck"), T0 + 60 * MINUTE],
+  ]),
+  skipCauses: new Map([
+    [cid("old"), did("old-d1")],
+    [cid("stuck"), did("stuck-d2")],
+  ]),
   watch: watching,
 
   claims: new Map([
@@ -111,6 +118,7 @@ const version2 = (): string => {
     awarded: ___,
     inventoried: ____,
     avoidCampaigns: _____,
+    skipCauses: ______,
     ...rest
   } = populated;
   const settings = { badgesAndEmotes: true, excludeChannels: ["x"], games: ["game-1"] };
@@ -119,7 +127,7 @@ const version2 = (): string => {
 
 /** A state file as version 3 wrote it (the live miner's of 2026-10-30): no received rewards. */
 const version3 = (): string => {
-  const { awarded: _, inventoried: __, avoidCampaigns: ___, ...rest } = populated;
+  const { awarded: _, inventoried: __, avoidCampaigns: ___, skipCauses: ____, ...rest } = populated;
   return `{"state":${canonical({ ...rest, watch: watch3() })},"version":3}`;
 };
 
@@ -144,12 +152,24 @@ describe("decodeState", () => {
       ...populated,
       awarded: new Map(),
       inventoried: new Set(),
-      avoidCampaigns: new Set(),
+      avoidCampaigns: new Map(),
+      skipCauses: new Map(),
       watch: { ...watching, wasted: undefined },
     };
     assert.deepStrictEqual(decoded, expected);
     assert.deepStrictEqual(decodeState(encodeState(decoded)), decoded);
     assert.match(encodeState(decoded), /"version":4}$/);
+  });
+
+  it("reads the unmerged first version 4, which saved skipped campaigns as a set", () => {
+    const { skipCauses: _, ...rest } = populated;
+    const text = `{"state":${canonical({ ...rest, avoidCampaigns: new Set([cid("old")]) })},"version":4}`;
+    const decoded = decodeState(text);
+    assert.deepStrictEqual(decoded, {
+      ...populated,
+      avoidCampaigns: new Map(),
+      skipCauses: new Map(),
+    });
   });
 
   it("refuses another version and text that isn't a state", () => {

@@ -17,6 +17,8 @@ import {
 import { HOUR, MINUTE, type Campaign, type Channel, type Millis } from "./model.ts";
 import { Command, Event, readKey } from "./protocol.ts";
 import {
+  CAMPAIGN_SKIP,
+  CATALOG_OPENING_GAP,
   CATALOG_RETRY,
   CLAIM_RECHECK,
   READ_GAP,
@@ -548,9 +550,10 @@ describe("rewards already received, and credit the plan can't use", () => {
     }
     const w = d.state.watch;
     assert.strictEqual(w._tag === "Watching" ? `${w.dropId}:${w.confirmedAt}` : "", `w-logo:${T0}`);
-    assert.strictEqual(w._tag === "Watching" ? w.wasted : undefined, "w");
+    assert.strictEqual(w._tag === "Watching" ? w.wasted : undefined, "w-stamp");
     const commands = d.send(Event.WatchTicked({ channelId: chid("a") }), T0 + STALL_AFTER);
-    assert.isTrue(d.state.avoidCampaigns.has(witch.id));
+    // For an hour at most: Twitch may move off the drop.
+    assert.strictEqual(d.state.avoidCampaigns.get(witch.id), T0 + STALL_AFTER + CAMPAIGN_SKIP);
     // Twitch credits the wrong drop wherever we watch: the channel itself isn't to blame.
     assert.isFalse(d.state.avoid.has(chid("a")));
     assert.deepStrictEqual(
@@ -559,6 +562,86 @@ describe("rewards already received, and credit the plan can't use", () => {
     );
     d.send(Event.Started(), T0 + STALL_AFTER + MINUTE);
     assert.strictEqual(d.state.avoidCampaigns.size, 0);
+  });
+
+  /** Watching `y` for the other campaign, the Witchspire campaign skipped for the Gold Stamp. */
+  const skippedWitch = () => {
+    const d = watchingWitch();
+    d.send(Event.CurrentDropRead({ channelId: chid("a"), dropId: did("w-stamp"), minutes: 300 }));
+    d.send(Event.WatchTicked({ channelId: chid("a") }), T0 + STALL_AFTER);
+    assert.strictEqual(watchedCampaign(d.state), "o");
+    return d;
+  };
+
+  /** A tick at `at`, with the catalog and channel reads it starts answered. */
+  const tickAnswered = (d: ReturnType<typeof driver>, at: Millis) => {
+    const commands = [...d.send(Event.Tick(), at)];
+    if (commands.some((c) => c._tag === "ReadCatalog")) {
+      for (const command of reads(d.send(Event.CatalogRead({ campaigns: [witch, other] })))) {
+        const answer =
+          command._tag === "ReadDirectory" && command.gameId === "game-2"
+            ? [channel("y", { gameId: "game-2" })]
+            : [channel("a", { viewers: 500 }), channel("b")];
+        commands.push(...d.send(read(answer, readKey(command))));
+      }
+    }
+    return commands;
+  };
+
+  it("tries a skipped campaign again once its skip ends, and gives it up at once on the same drop", () => {
+    const d = skippedWitch();
+    const until = d.state.avoidCampaigns.get(witch.id)!;
+    assert.strictEqual(nextDeadline(d.state)! <= until, true);
+    tickAnswered(d, until);
+    assert.strictEqual(d.state.avoidCampaigns.size, 0);
+    assert.strictEqual(watchedCampaign(d.state), "w");
+    // Twitch still credits the Gold Stamp: the cause stands, no second stall.
+    const at = until + MINUTE;
+    d.send(Event.DropProgress({ dropId: did("w-stamp"), minutes: 400 }), at);
+    assert.strictEqual(d.state.avoidCampaigns.get(witch.id), at + CAMPAIGN_SKIP);
+    assert.strictEqual(watchedCampaign(d.state), "o");
+  });
+
+  it("gives the channel a fresh stall for its next target after a campaign skip", () => {
+    const d = watchingWitch();
+    const third = campaign("t", { endsAt: T0 + 30 * HOUR });
+    d.send(Event.CatalogRead({ campaigns: [witch, other, third] }), T0 + MINUTE);
+    for (const command of reads(d.send(Event.Tick(), T0 + MINUTE))) {
+      d.send(read([channel("a", { viewers: 500 })], readKey(command)));
+    }
+    d.send(Event.CurrentDropRead({ channelId: chid("a"), dropId: did("w-stamp"), minutes: 300 }));
+    d.send(Event.WatchTicked({ channelId: chid("a") }), T0 + STALL_AFTER);
+    // `t` on `a`, the channel Twitch credited the skipped campaign on, keeps the channel for now.
+    const w = d.state.watch;
+    assert.strictEqual(w._tag === "Watching" ? `${w.campaignId}:${w.channelId}` : "", "t:a");
+    assert.strictEqual(w._tag === "Watching" ? w.confirmedAt : 0, T0 + STALL_AFTER);
+    d.send(Event.WatchTicked({ channelId: chid("a") }), T0 + STALL_AFTER + WATCH_INTERVAL);
+    assert.isFalse(d.state.avoid.has(chid("a")));
+  });
+
+  it("confirms the watch on a credit to a drop of the campaign the goal filters out", () => {
+    // The goal wants the item; Twitch reports the badge drop, earning alongside it.
+    const both = campaign("p", {
+      drops: [drop("p-badge", { benefits: [badge] }), drop("p-item", { requiredMinutes: 120 })],
+    });
+    const d = driver(initial(settings({ rewards: ["item"] })));
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    for (const command of reads(d.send(Event.CatalogRead({ campaigns: [both] })))) {
+      d.send(read([channel("a")], readKey(command)));
+    }
+    for (let minute = 1; minute <= 40; minute++) {
+      const at = T0 + minute * MINUTE;
+      d.send(Event.WatchTicked({ channelId: chid("a") }), at);
+      d.send(Event.DropProgress({ dropId: did("p-badge"), minutes: minute }), at);
+    }
+    const w = d.state.watch;
+    assert.strictEqual(
+      w._tag === "Watching" ? `${w.dropId}:${w.confirmedAt}:${String(w.wasted)}` : "",
+      `p-item:${T0 + 40 * MINUTE}:undefined`,
+    );
+    assert.strictEqual(d.state.avoidCampaigns.size, 0);
+    assert.strictEqual(d.state.avoid.size, 0);
   });
 
   it("doesn't take minutes past a drop's requirement as progress, from any source", () => {
@@ -602,6 +685,30 @@ describe("rewards already received, and credit the plan can't use", () => {
     assert.isTrue(d.state.avoid.has(chid("a")));
     assert.strictEqual(d.state.avoidCampaigns.size, 0);
     assert.strictEqual(watchedChannel(d.state), "b");
+  });
+});
+
+describe("no live channel for what earns", () => {
+  it("reads the catalog and directories again within CATALOG_OPENING_GAP, not the hour", () => {
+    // Twin seed 50138: the only channel the core knew on the game was given up after a stall
+    // (its change of game was lost with the frames); another turned to the game unheard.
+    const c = campaign("c");
+    const d = startedWatching([c], [channel("a")]);
+    d.send(Event.WatchTicked({ channelId: chid("a") }), T0 + STALL_AFTER);
+    assert.strictEqual(watchedChannel(d.state), "no-live-channel");
+    const due = T0 + STALL_AFTER + CATALOG_OPENING_GAP;
+    assert.strictEqual(d.state.deadlines.catalog, due);
+    assert.include(tags(d.send(Event.Tick(), due)), "ReadCatalog");
+    const directory = reads(d.send(Event.CatalogRead({ campaigns: [c] }), due));
+    assert.deepStrictEqual(tags(directory), ["ReadDirectory"]);
+    d.send(read([channel("b")], readKey(directory[0]!)));
+    assert.strictEqual(watchedChannel(d.state), "b");
+  });
+
+  it("keeps the hourly catalog read while nothing is wanted", () => {
+    const d = startedWatching([], []);
+    assert.strictEqual(watchedChannel(d.state), "nothing-to-mine");
+    assert.strictEqual(d.state.deadlines.catalog, T0 + HOUR);
   });
 });
 

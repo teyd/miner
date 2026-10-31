@@ -1,4 +1,12 @@
-import type { Campaign, ChannelId, Drop, DropId, Millis } from "../core/model.ts";
+import {
+  MINUTE,
+  type Campaign,
+  type ChannelId,
+  type Drop,
+  type DropId,
+  type Millis,
+} from "../core/model.ts";
+import { withReceived } from "../core/rules.ts";
 import type { Event } from "../core/protocol.ts";
 import type { State, Watch } from "../core/state.ts";
 
@@ -54,11 +62,11 @@ export const progressLines = (before: State, after: State): ReadonlyArray<string
 };
 
 /**
- * Channels and campaigns this step gave up on, until the next start: a channel that refused
- * playback or credited nothing the plan can use for `STALL_AFTER`, a campaign whose watch Twitch
- * kept crediting with drops the plan can't use (received, past their requirement, unwanted).
+ * Channels and campaigns this step gave up on: a channel until the next start, when it refused
+ * playback or credited nothing the plan can use for `STALL_AFTER`; a campaign for a while, when
+ * Twitch kept crediting a drop of it that earns nothing (received, past its requirement).
  */
-export const avoidLines = (before: State, after: State): ReadonlyArray<string> => {
+export const avoidLines = (before: State, after: State, now: Millis): ReadonlyArray<string> => {
   const lines: Array<string> = [];
   for (const id of after.avoid) {
     if (before.avoid.has(id)) continue;
@@ -66,11 +74,37 @@ export const avoidLines = (before: State, after: State): ReadonlyArray<string> =
       `skipping ${channelName(after, id)} until restart: it refused playback or never credited what the plan wants`,
     );
   }
-  for (const id of after.avoidCampaigns) {
-    if (before.avoidCampaigns.has(id)) continue;
+  for (const [id, until] of after.avoidCampaigns) {
+    if (before.avoidCampaigns.get(id) === until) continue;
     const campaign = after.catalog?.find((c) => c.id === id);
     const name = campaign === undefined ? id : `${campaign.game.name}: ${campaign.name}`;
-    lines.push(`skipping ${name} until restart: Twitch credited only drops the plan can't use`);
+    const minutes = Math.round((until - now) / MINUTE);
+    lines.push(
+      `skipping ${name} for ${minutes} min: Twitch credited only a drop of it that earns nothing`,
+    );
+  }
+  return lines;
+};
+
+/**
+ * Drops the inventory doesn't list that now count as received, by `gameEventDrops` (`isReceived`),
+ * once each. A benefit id shared with an overlapping campaign can mark a drop received that
+ * isn't; this line is how a person sees it.
+ */
+export const receivedLines = (before: State, after: State): ReadonlyArray<string> => {
+  const catalog = after.catalog ?? [];
+  const was = withReceived(
+    before.catalog ?? [],
+    before.progress,
+    before.awarded,
+    before.inventoried,
+  );
+  const is = withReceived(catalog, after.progress, after.awarded, after.inventoried);
+  const lines: Array<string> = [];
+  for (const [dropId, p] of is) {
+    if (!p.claimed || after.progress.get(dropId)?.claimed === true) continue;
+    if (was.get(dropId)?.claimed === true) continue;
+    lines.push(`received already: ${dropName(after, dropId)}, by the inventory's awarded rewards`);
   }
   return lines;
 };

@@ -42,8 +42,9 @@ const revive = (value: unknown): unknown => {
  * Bumped whenever `State` changes shape. A file with another version is refused rather than
  * guessed at: a misread claim intent could send a claim twice, so only a version with a
  * written migration is read. 2: `deadlines.subscribe`. 3: `discovery`, and `settings` as a list
- * of drops goals (2 migrates). 4: `awarded`, `inventoried`, `avoidCampaigns` and the watch's
- * `wasted` (2 and 3 migrate).
+ * of drops goals (2 migrates). 4: `awarded`, `inventoried`, `avoidCampaigns`, `skipCauses` and
+ * the watch's `wasted` (2 and 3 migrate). A file of the unmerged first version 4, which saved
+ * `avoidCampaigns` as a set, reads with nothing avoided: a start resets both anyway.
  */
 export const STATE_VERSION = 4;
 
@@ -69,7 +70,8 @@ const fromVersion3 = (state: Record<string, unknown>): Record<string, unknown> =
   ...state,
   awarded: new Map(),
   inventoried: new Set(),
-  avoidCampaigns: new Set(),
+  avoidCampaigns: new Map(),
+  skipCauses: new Map(),
   watch:
     Predicate.isObject(state["watch"]) && state["watch"]["_tag"] === "Watching"
       ? { ...state["watch"], wasted: undefined }
@@ -92,7 +94,11 @@ export const decodeState = (text: string): State => {
   if (parsed.version !== STATE_VERSION) {
     throw new Error(`state version ${String(parsed.version)}, this miner reads ${STATE_VERSION}`);
   }
-  return checked(revive(parsed.state));
+  const state = revive(parsed.state);
+  if (Predicate.isObject(state) && state["avoidCampaigns"] instanceof Set) {
+    return checked({ ...state, avoidCampaigns: new Map(), skipCauses: new Map() });
+  }
+  return checked(state);
 };
 
 type Check = (value: unknown) => boolean;
@@ -161,7 +167,8 @@ const fields: { readonly [K in keyof State]-?: Check } = {
   inventoried: setOf(isString),
   channels: mapOf(isString, isObject),
   avoid: (v) => v instanceof Set,
-  avoidCampaigns: setOf(isString),
+  avoidCampaigns: mapOf(isString, isNumber),
+  skipCauses: mapOf(isString, isString),
   watch: (v) => record({ _tag: oneOf("Watching", "Idle") })(v),
   claims: mapOf(isString, claimIntent),
   subscriptions: arrayOf(isString),

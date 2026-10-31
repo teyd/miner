@@ -1,6 +1,6 @@
 import { Cause, Clock, Effect, FiberSet, Option, Queue, Ref, Schema } from "effect";
 import type { Config } from "../config/schema.ts";
-import type { Campaign, Channel } from "../core/model.ts";
+import type { Campaign, Channel, Millis } from "../core/model.ts";
 import { Event, type Command } from "../core/protocol.ts";
 import { initial, nextDeadline, type State } from "../core/state.ts";
 import { step } from "../core/step.ts";
@@ -8,7 +8,13 @@ import { canonical } from "../store/codec.ts";
 import { Store } from "../store/Store.ts";
 import { emptyMemory, execute, type Memory } from "./execute.ts";
 import { forwardFrames } from "./listen.ts";
-import { avoidLines, describeWatch, discoveryExpired, progressLines } from "./narrate.ts";
+import {
+  avoidLines,
+  describeWatch,
+  discoveryExpired,
+  progressLines,
+  receivedLines,
+} from "./narrate.ts";
 import { toSettings, unresolvedGames } from "./settings.ts";
 import { makeReporter } from "./status.ts";
 import { observe, startFacts } from "../status/snapshot.ts";
@@ -113,7 +119,7 @@ export const run = (config: Config) =>
           saved = key;
         }
       }
-      yield* report(state, result.state);
+      yield* report(state, result.state, now);
       const expired = discoveryExpired(state, result.state, event, now);
       if (expired !== undefined) yield* Effect.logWarning(`runtime: ${expired}`);
       if (event._tag === "CatalogRead") {
@@ -185,11 +191,14 @@ const durableChanged = (before: State, after: State): boolean =>
   before.inventoried !== after.inventoried ||
   before.claims !== after.claims;
 
-const report = (before: State, after: State) =>
+const report = (before: State, after: State, now: Millis) =>
   Effect.gen(function* () {
     const a = describeWatch(before, before.watch);
     const b = describeWatch(after, after.watch);
     if (a !== b) yield* Effect.logInfo(`runtime: ${b}`);
     for (const line of progressLines(before, after)) yield* Effect.logInfo(line);
-    for (const line of avoidLines(before, after)) yield* Effect.logWarning(`runtime: ${line}`);
+    if (durableChanged(before, after)) {
+      for (const line of receivedLines(before, after)) yield* Effect.logInfo(`runtime: ${line}`);
+    }
+    for (const line of avoidLines(before, after, now)) yield* Effect.logWarning(`runtime: ${line}`);
   });

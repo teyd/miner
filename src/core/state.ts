@@ -40,6 +40,12 @@ export const CLAIM_RECHECK: Millis = MINUTE;
  * two hours on a channel where Twitch kept crediting a received drop past its requirement.
  */
 export const STALL_AFTER: Millis = 30 * MINUTE;
+/**
+ * How long a campaign stays given up after a stall on credit it can't use, at most: Twitch may
+ * stop crediting that drop (its window closes first, then the skip ends with it) or move on to
+ * another, so the campaign is tried again rather than lost until restart.
+ */
+export const CAMPAIGN_SKIP: Millis = HOUR;
 /** Upper bound on followed channels (TDM fits 199 in 8 sockets of 50 topics). */
 export const WATCHLIST_LIMIT = 100;
 /**
@@ -95,11 +101,12 @@ export interface Watching {
   readonly estimatedMinutes: number;
   readonly lastCurrentDropRead: Millis | undefined;
   /**
-   * The campaign of the last credit since `confirmedAt` that the plan couldn't use. When it is the
-   * watched campaign, a stall means Twitch credits the wrong drop of it, on any channel: the
-   * campaign is avoided, not just the channel.
+   * The drop of the last credit since `confirmedAt` that earned nothing: received, complete, past
+   * its requirement, or in a campaign the plan doesn't want. When it is a drop of the watched
+   * campaign, a stall means Twitch credits the wrong drop of it, on any channel: the campaign is
+   * avoided for a while (`CAMPAIGN_SKIP`), not the channel.
    */
-  readonly wasted: CampaignId | undefined;
+  readonly wasted: DropId | undefined;
 }
 
 export type Idle =
@@ -156,8 +163,17 @@ export interface State {
   readonly channels: ReadonlyMap<ChannelId, Channel>;
   /** Channels that refused playback or never credited us, skipped until restart. */
   readonly avoid: ReadonlySet<ChannelId>;
-  /** Campaigns whose watch Twitch kept crediting with drops the plan can't use, until restart. */
-  readonly avoidCampaigns: ReadonlySet<CampaignId>;
+  /**
+   * Campaigns whose watch Twitch kept crediting with a drop that earns nothing, each until when
+   * (`CAMPAIGN_SKIP`). An entry is dropped at the first tick past its time.
+   */
+  readonly avoidCampaigns: ReadonlyMap<CampaignId, Millis>;
+  /**
+   * The drop each campaign was last given up for, kept past the skip while the catalog lists the
+   * campaign: on a retry, a credit to that same drop shows the cause stands, and the campaign is
+   * given up again at once instead of after another stall.
+   */
+  readonly skipCauses: ReadonlyMap<CampaignId, DropId>;
   readonly watch: Watch;
   readonly claims: ReadonlyMap<string, ClaimIntent>;
   readonly subscriptions: ReadonlyArray<ChannelId>;
@@ -175,7 +191,8 @@ export const initial = (settings: Settings): State => ({
   inventoried: new Set(),
   channels: new Map(),
   avoid: new Set(),
-  avoidCampaigns: new Set(),
+  avoidCampaigns: new Map(),
+  skipCauses: new Map(),
   watch: { _tag: "Idle", reason: "starting" },
   claims: new Map(),
   subscriptions: [],
@@ -208,6 +225,7 @@ export const nextDeadline = (state: State): Millis | undefined => {
         d.subscribe ?? Infinity,
         state.discovery?.until ?? Infinity,
         ...d.online.values(),
+        ...state.avoidCampaigns.values(),
       );
   }
 };

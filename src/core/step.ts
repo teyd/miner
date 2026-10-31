@@ -4,6 +4,7 @@ import {
   type Campaign,
   type Channel,
   type ChannelId,
+  type Drop,
   type DropId,
   type Millis,
   type Progress,
@@ -12,14 +13,16 @@ import {
   minable,
   plan,
   usableOn,
+  wantedOn,
   watchlist,
   type PlanInput,
   type Rank,
   type Target,
 } from "./plan.ts";
 import { Command, readKey, type ChannelRead, type Event } from "./protocol.ts";
-import { channelCanEarn, isClaimable, wantedDrops, withReceived } from "./rules.ts";
+import { canEarn, channelCanEarn, isClaimable, wantedDrops, withReceived } from "./rules.ts";
 import {
+  CAMPAIGN_SKIP,
   CATALOG_INTERVAL,
   CATALOG_OPENING_GAP,
   CATALOG_RETRY,
@@ -89,7 +92,8 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
           watch: { _tag: "Idle", reason: "starting" },
           channels: new Map(),
           avoid: new Set(),
-          avoidCampaigns: new Set(),
+          avoidCampaigns: new Map(),
+          skipCauses: new Map(),
           subscriptions: [],
           discovery: undefined,
           // A claim in flight when the process died may have succeeded: inventory decides, once
@@ -142,9 +146,11 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
       ];
 
     case "CatalogRead": {
+      const listed = new Set(event.campaigns.map((c) => c.id));
       const next: State = {
         ...s,
         catalog: event.campaigns,
+        skipCauses: new Map([...s.skipCauses].filter(([id]) => listed.has(id))),
         catalogStatus: "ok",
         deadlines: {
           ...s.deadlines,
@@ -277,8 +283,9 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
   }
 };
 
-const tick = (s: State, now: Millis): Handled => {
+const tick = (state: State, now: Millis): Handled => {
   const commands: Array<Command> = [];
+  const s = expireSkips(state, now);
   let d = s.deadlines;
   if (now >= d.validate) {
     commands.push(Command.ValidateToken());
@@ -300,6 +307,15 @@ const tick = (s: State, now: Millis): Handled => {
     }
   }
   return [{ ...s, deadlines: d }, commands];
+};
+
+/** A campaign skip ends at its time (`CAMPAIGN_SKIP`), so `nextDeadline` never points back. */
+const expireSkips = (s: State, now: Millis): State => {
+  if (![...s.avoidCampaigns.values()].some((until) => now >= until)) return s;
+  return {
+    ...s,
+    avoidCampaigns: new Map([...s.avoidCampaigns].filter(([, until]) => now < until)),
+  };
 };
 
 /**
@@ -335,20 +351,16 @@ const ticked = (s: State, channelId: ChannelId, now: Millis): Handled => {
   if (w._tag !== "Watching" || w.channelId !== channelId) return [s, []];
   const estimatedMinutes = w.estimatedMinutes + WATCH_INTERVAL / MINUTE;
   // Twitch confirmed nothing the plan can use on this channel for a long time. If it kept
-  // crediting another drop of the watched campaign, it picks that drop for this account wherever
-  // we watch: skip the campaign. The channel keeps its clock: Twitch credits one campaign per
-  // stream, so a next target there must be credited by the next tick, or the channel goes too.
-  // Otherwise the channel doesn't credit us: skip the channel.
+  // crediting a drop of the watched campaign that earns nothing (received, past its requirement),
+  // it picks that drop for this account wherever we watch: skip the campaign for a while
+  // (`CAMPAIGN_SKIP`), and give the channel a fresh clock for the next target, since that skip was
+  // the campaign's fault. Twitch credits one campaign per stream, so if it keeps crediting the
+  // skipped one there, the next stall skips the channel. Otherwise the channel doesn't credit
+  // us: skip the channel.
   if (now - w.confirmedAt >= STALL_AFTER) {
-    if (w.wasted === w.campaignId) {
-      return [
-        {
-          ...s,
-          avoidCampaigns: new Set([...s.avoidCampaigns, w.campaignId]),
-          watch: { ...w, estimatedMinutes, wasted: undefined },
-        },
-        [],
-      ];
+    const wasted = w.wasted === undefined ? undefined : findDrop(s.catalog, w.wasted);
+    if (wasted !== undefined && wasted.campaign.id === w.campaignId) {
+      return [skipCampaign({ ...s, watch: { ...w, estimatedMinutes } }, wasted.drop, now), []];
     }
     return [
       { ...s, avoid: new Set([...s.avoid, channelId]), watch: { ...w, estimatedMinutes } },
@@ -366,11 +378,31 @@ const ticked = (s: State, channelId: ChannelId, now: Millis): Handled => {
 };
 
 /**
- * Twitch credited minutes to `dropId`. Record them. Only a credit the plan can use confirms the
- * watch (`STALL_AFTER`): new minutes, within its requirement, for a drop a goal wants and that
- * could still earn before this credit. If it is another drop than the watched one, adopt it: several
- * campaigns can share a stream and Twitch picks which one progresses. A credit to anything else
- * (complete, received, unwanted) is noted in `wasted` and changes nothing else.
+ * Give up the watched campaign until Twitch may have moved off `drop`: its window's end, or
+ * `CAMPAIGN_SKIP`. The channel gets a fresh clock for its next target (the stall was the
+ * campaign's fault).
+ */
+const skipCampaign = (s: State, drop: Drop, now: Millis): State => {
+  const w = s.watch;
+  if (w._tag !== "Watching") return s;
+  const until = Math.max(now + WATCH_INTERVAL, Math.min(drop.endsAt, now + CAMPAIGN_SKIP));
+  return {
+    ...s,
+    avoidCampaigns: new Map([...s.avoidCampaigns, [w.campaignId, until]]),
+    skipCauses: new Map([...s.skipCauses, [w.campaignId, drop.id]]),
+    watch: { ...w, confirmedAt: now, wasted: undefined },
+  };
+};
+
+/**
+ * Twitch credited minutes to `dropId`. Record them. Only a credit that earns something confirms
+ * the watch (`STALL_AFTER`): new minutes, within the requirement, for a drop that could still
+ * earn before this credit. A drop a goal wants is adopted if it isn't the watched one: several
+ * campaigns can share a stream and Twitch picks which one progresses. Another drop of a campaign
+ * a goal works on (a badge while the goal wants the item) confirms without adoption: Twitch
+ * reports one drop, and moves on to the next once it completes. A credit to anything else
+ * (received, complete, past its requirement, a campaign no goal works on) is noted in `wasted`;
+ * if it is the drop the watched campaign was last given up for, the campaign is given up again.
  */
 const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Rank): State => {
   const updated = withProgress(s, dropId, (p) => ({ ...p, minutes: Math.max(p.minutes, minutes) }));
@@ -391,11 +423,19 @@ const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Ra
   const before = input.progress.get(dropId)?.minutes ?? 0;
   // Minutes past the requirement are no progress, even as the first number we hear: Twitch kept
   // counting a received drop to 352 of 240.
-  const usable =
+  const earns =
     before < minutes &&
     minutes <= found.drop.requiredMinutes &&
-    usableOn(input, found.campaign, found.drop, w.channelId, rank);
-  if (!usable) return { ...updated, watch: { ...w, wasted: found.campaign.id } };
+    canEarn(found.drop, input.progress, now) &&
+    wantedOn(input, found.campaign, w.channelId, rank);
+  if (!earns) {
+    const again = w.campaignId === found.campaign.id && s.skipCauses.get(w.campaignId) === dropId;
+    if (again) return skipCampaign(updated, found.drop, now);
+    return { ...updated, watch: { ...w, wasted: dropId } };
+  }
+  if (!usableOn(input, found.campaign, found.drop, w.channelId, rank)) {
+    return { ...updated, watch: { ...w, confirmedAt: now, wasted: undefined } };
+  }
   return {
     ...updated,
     watch: {
@@ -441,7 +481,9 @@ const planInput = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis): P
   channels: s.channels,
   settings: s.settings,
   refused: s.avoid,
-  avoidedCampaigns: s.avoidCampaigns,
+  avoidedCampaigns: new Set(
+    [...s.avoidCampaigns].filter(([, until]) => now < until).map(([id]) => id),
+  ),
   now,
   watching: s.watch._tag === "Watching" ? s.watch.campaignId : undefined,
 });
@@ -458,10 +500,18 @@ const replan = (s: State, now: Millis, rank: Rank): Handled => {
   if (typeof target === "string") {
     const reason =
       target === "no-live-channel" && s.discovery !== undefined ? "discovering" : target;
+    // Something wanted earns now but no channel we know plays it: read the catalog and the
+    // directories again within `CATALOG_OPENING_GAP`, as a person would refresh the directory,
+    // rather than at the hourly read. A channel that turns to the game isn't followed (it played
+    // another), and its frames may have been lost: seed 50138 sat idle for most of an hour.
+    const catalog =
+      reason === "no-live-channel"
+        ? Math.min(s.deadlines.catalog, now + CATALOG_OPENING_GAP)
+        : s.deadlines.catalog;
     const idle: State = {
       ...s,
       watch: { _tag: "Idle", reason },
-      deadlines: { ...s.deadlines, tick: undefined },
+      deadlines: { ...s.deadlines, tick: undefined, catalog },
     };
     return [idle, w._tag === "Watching" ? [Command.StopWatching()] : []];
   }

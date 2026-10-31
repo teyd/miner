@@ -84,6 +84,8 @@ export interface World {
   readonly awardedElsewhere: ReadonlyMap<string, Millis>;
   /** Campaigns whose watch credits one drop only (`creditsOnly`), by campaign. */
   readonly creditsOnly: ReadonlyMap<CampaignId, DropId>;
+  /** `creditsOnly` campaigns that credit their drop only while it can earn (`creditsMoveOn`). */
+  readonly creditsMoveOn: ReadonlySet<CampaignId>;
   readonly revokedAt: Millis | undefined;
   readonly session: Session | undefined;
   readonly subscriptions: ReadonlySet<ChannelId>;
@@ -183,10 +185,12 @@ export const buildWorld = (scenario: Scenario): World => {
   >();
   const awardedElsewhere = new Map<string, Millis>();
   const creditsOnly = new Map<CampaignId, DropId>();
+  const creditsMoveOn = new Set<CampaignId>();
   for (const [i, spec] of scenario.campaigns.entries()) {
     const campaign = campaigns[i]!;
     if (spec.creditsOnly !== undefined) {
       creditsOnly.set(campaign.id, campaign.drops[spec.creditsOnly % campaign.drops.length]!.id);
+      if (spec.creditsMoveOn === true) creditsMoveOn.add(campaign.id);
     }
     for (const [j, d] of spec.drops.entries()) {
       const drop = campaign.drops[j]!;
@@ -197,6 +201,9 @@ export const buildWorld = (scenario: Scenario): World => {
       }
       if (d.received === "before-window") {
         for (const b of drop.benefits) awardedElsewhere.set(b.id, drop.startsAt - 24 * HOUR);
+      }
+      if (d.received === "overlapping") {
+        for (const b of drop.benefits) awardedElsewhere.set(b.id, drop.startsAt);
       }
     }
   }
@@ -215,6 +222,7 @@ export const buildWorld = (scenario: Scenario): World => {
     claimed,
     awardedElsewhere,
     creditsOnly,
+    creditsMoveOn,
     revokedAt: revokes.length === 0 ? undefined : Math.min(...revokes),
     session: undefined,
     subscriptions: new Set(),
@@ -346,6 +354,7 @@ export const earnable = (world: World, drop: Drop, now: Millis): boolean =>
  * 2026-10-30 (research 02 §3): `DropCurrentSessionContext` showed Witchspire's "Golden Stamp" at
  * 263, then 352 of 240 minutes, a drop received the day before, while the campaign's unreceived
  * drops never moved. Why Twitch picks such a drop is unknown; the twin only replays that it does.
+ * A `creditsMoveOn` campaign credits its drop only while it can earn, then every earnable drop.
  */
 export const creditedDrops = (
   world: World,
@@ -354,7 +363,15 @@ export const creditedDrops = (
 ): ReadonlyArray<Drop> => {
   const only = world.creditsOnly.get(campaign.id);
   const stuck = campaign.drops.find((d) => d.id === only);
-  if (stuck !== undefined && stuck.startsAt <= now && now < stuck.endsAt) return [stuck];
+  const moveOn = world.creditsMoveOn.has(campaign.id);
+  if (
+    stuck !== undefined &&
+    stuck.startsAt <= now &&
+    now < stuck.endsAt &&
+    (!moveOn || earnable(world, stuck, now))
+  ) {
+    return [stuck];
+  }
   return campaign.drops.filter((d) => earnable(world, d, now));
 };
 
@@ -568,6 +585,20 @@ export const awardsAt = (
     .map(([benefitId, at]) => ({ benefitId, at }))
     .toSorted((a, b) => a.benefitId.localeCompare(b.benefitId));
 };
+
+/**
+ * The account looks like it has this drop's rewards though it never claimed it: another campaign
+ * awarded each of them inside the drop's window (`received: "overlapping"`), and the inventory
+ * doesn't list the drop. TDM's rule, which the miner follows (`isReceived` in `rules.ts`), takes it
+ * as received; nothing the account reads tells otherwise, so it is no opportunity.
+ */
+export const looksReceived = (world: World, drop: Drop, now: Millis): boolean =>
+  drop.benefits.length > 0 &&
+  drop.benefits.every((b) => {
+    const at = world.awardedElsewhere.get(b.id);
+    return at !== undefined && drop.startsAt <= at && at < drop.endsAt;
+  }) &&
+  minutesAt(world, drop.id, now) === 0;
 
 /**
  * Whether a credited minute was one the settings could use: the drop earned at that moment

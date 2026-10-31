@@ -35,7 +35,7 @@ export interface PlanInput {
   readonly channels: ReadonlyMap<ChannelId, Channel>;
   readonly settings: Settings;
   readonly refused: ReadonlySet<ChannelId>;
-  /** Campaigns whose watch stalled on credit the plan couldn't use (`STALL_AFTER`). */
+  /** Campaigns given up for now: their watch stalled on credit that earned nothing (`STALL_AFTER`). */
   readonly avoidedCampaigns: ReadonlySet<CampaignId>;
   readonly now: Millis;
   /** The campaign being watched, if any: `least-slack` gives it `SLACK_HYSTERESIS`. */
@@ -171,6 +171,20 @@ export const usableOn = (
       p.campaign.id === campaign.id &&
       p.drops.some((d) => d.id === drop.id) &&
       !goalOf(input, p).excludeChannels.includes(channelId),
+  );
+
+/**
+ * Whether a goal that may watch `channelId` works on this campaign: the ranking has it, with a
+ * wanted drop that can earn now.
+ */
+export const wantedOn = (
+  input: PlanInput,
+  campaign: Campaign,
+  channelId: ChannelId,
+  rank: Rank = minable,
+): boolean =>
+  rank(input).some(
+    (p) => p.campaign.id === campaign.id && !goalOf(input, p).excludeChannels.includes(channelId),
   );
 
 /** Live channels that can credit the campaign for its goal, most viewers first. */

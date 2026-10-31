@@ -26,32 +26,33 @@ absorb it").
 
 Each wave starts when what it builds on is merged. Inside a wave the steps run in parallel.
 
-### Wave A — make it operable (started 2026-10-30 18:45)
+### Wave A — make it operable (merged #19–#25)
 
-| Step | What                                                                                                           | Done when                                                               |
-| ---- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| A0   | 4 h live run (systemd `miner-live`, 18:42–22:42 CET), memory sampled per minute                                | analysed: drops, progress rate, switches, errors, requests, RSS, MB/day |
-| A1   | Recordings store a repeated answer once; decide gzip with numbers; a reader that expands them                  | merged, measured on real recordings, P3 answered                        |
-| A2   | `miner status [--json]`: health, watch with names, "discovery broken" apart from "nothing to mine", exit codes | merged, decoded by a Schema in tests                                    |
-| A3   | Core: no plan flip at startup; every drops-goal option of decision 28                                          | merged, sim covers the new settings, `unmapped` lists only points goals |
-| A4   | README tutorial, Dockerfile, compose, systemd unit                                                             | image builds and runs `sim`; unit passes `systemd-analyze verify`       |
-| A5   | Secret guard: gitleaks (pinned), lefthook pre-commit, token check, CI step                                     | each layer shown to block a planted secret; full history clean          |
+| Step | What                                                                                                           | Done when                                                                   |
+| ---- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| A0   | 4 h live run (systemd `miner-live`, 18:42–22:42 CET), memory sampled per minute                                | analysed: 3 claims, 1 credit/min, RSS flat 126–131 MB, 8.1 MiB/day recorded |
+| A1   | Recordings store a repeated answer once; decide gzip with numbers; a reader that expands them                  | #19                                                                         |
+| A2   | `miner status [--json]`: health, watch with names, "discovery broken" apart from "nothing to mine", exit codes | #21                                                                         |
+| A3   | Core: no plan flip at startup; every drops-goal option of decision 28                                          | #25                                                                         |
+| A4   | README tutorial, Dockerfile, compose, systemd unit                                                             | #23                                                                         |
+| A5   | Secret guard: gitleaks (pinned), lefthook pre-commit, token check, CI step                                     | #20                                                                         |
+| A6   | Skip rewards already received (`gameEventDrops`); stop on credit the plan can't use (the 2 h Witchspire waste) | branch `fix/already-received-rewards`, open: seed 150534                    |
 
-### Wave B — a twin we can trust
+### Wave B — a twin we can trust (built, in review)
 
-| Step | What                                                                                                                                                                                                                                             | Builds on |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
-| B1   | Wire-level HLS and PubSub in the twin: usher, playlists and segment `HEAD`s over the real `hlsWatch`, socket frames over the real `PubSub` (critique §6.2; the #15 socket bug was invisible to the typed twin)                                   | A1        |
-| B2   | Classed budgets (GQL, CDN, sockets), rate and concurrency apart; exhaustion is an event for the core, never a wait in the seam (critique CF-5); the twin answers 429 above ~5 GQL/s (plan 09 §6)                                                 | —         |
-| B3   | Calibration: the twin's guessed rules (inventory lag, progress cadence, skipped frames, concurrent drops, claim timing, stream-up bursts, settings-update rate) set from the A0 recordings, each with its recording id and date (research 04 §2) | A0, A1    |
-| B4   | Conformance: replay a recording's answers and frames through the twin's rules and report every disagreement (research 04 lane B point 2). Runs in `pnpm check` on committed, redacted recordings                                                 | B1, B3    |
+| Step | What                                                                                           | State                                                  |
+| ---- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| B1   | Wire-level HLS and PubSub in the twin (`twin-wire-hls-pubsub`)                                 | review done: 2 P1s (token, claim truth), fixes owed    |
+| B2   | Classed request budgets with an event the core sees (`feat/classed-request-budgets`)           | review done: P1 (refusals unreachable), fixes owed     |
+| B3   | Calibration from the 2026-10-30 recordings (`calibrate-twin-timings`)                          | review done, fixes committed (2169cc9), merge after A6 |
+| B4   | Conformance: replay a recording's answers and frames through the twin and report disagreements | after B1+B3                                            |
 
 ### Wave C — the agent harness
 
 | Step | What                                                                                                                                                        | Builds on  |
 | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
 | C1   | `verify-miner` skill (decision 13, research 06): launch (sim, shadow), status, evidence (trace digest, recordings, status JSON), cleanup, and a feature map | A2, B4     |
-| C2   | A simulated week with a heap bound (research 03 §2); bring RSS toward the ≤ 90 MB target (the live run sat at 118–122 MB)                                   | B1         |
+| C2   | A simulated week with a heap bound (research 03 §2); bring RSS toward the ≤ 90 MB target (the live run sat at 126–131 MB)                                   | B1         |
 | C3   | `config.json` reloads while the miner runs (decision 28)                                                                                                    | A3         |
 | C4   | Scheduled `doctor` on the homelab, catching hash and header changes (research 02 §7)                                                                        | A2, A4, D1 |
 
@@ -83,3 +84,20 @@ Favourites and a second stream wait for experiments E2/E3 of research 05 (decisi
   tests, a crash loop reads as "starting", validate retries hourly while `auth` is unknown, gitleaks rules for
   signed URL paths and `user_ip`, `journal cat` streaming, digest-pinned base images, and logging failed
   reads in `run` (now only visible in `status`).
+- 2026-10-30 22:50 — A0 analysed. The 4 h run: 3 claims (APEX Pack, Respawning Holospray, Destiny 2
+  Emblem), 1 credited minute per watched minute, no warnings, 5 PubSub reconnects handled, 313 GQL
+  requests, RSS flat at 126–131 MB. It wasted ~2 h on a campaign whose drops were already received
+  (`gameEventDrops`, which the core did not read) while Twitch credited one past its requirement: A6.
+  Recording size: 132.8 MiB/day plain, 23.6 gzip, 8.1 deduplicated + gzip (now on `dev`).
+- 2026-10-30 23:40 — A3 merged (#25) after three review rounds: least-slack ranked future drops; a doomed
+  goal starved the others (6 h, nothing claimed); an inventory read without the drop re-sent a lost claim;
+  two WatchFlip false alarms; a stale channel held by a reset stall clock. The twin gained an independent
+  decision-28 oracle (`WrongPick`) that catches 10 planted ranking bugs.
+- 2026-10-31 00:40 — Wave B delegated: A6 (Witchspire), B1 (wire-level HLS/PubSub), B2 (classed budgets),
+  B3 (calibration from the recordings). All four built; reviews done.
+- 2026-10-31 03:40 — Reviews in: A6 one P1 (a skip outlived its cause; a stale frame cost a fresh hour),
+  B1 two P1s (twin never checks the token; a service-error claim is applied), B2 one P1 (refusals
+  unreachable, so a dropped refused claim passed), B3 one P1 (blind re-claims unbounded). Supervisor
+  fixes on A6's branch (`769394d`) plus an open seed: **150534** (`Unproductive`, core confirms on a
+  credit the twin's oracle does not count; one-read disagreement, capsule saved), to be settled by A6's
+  delegate together with the B1/B2 fix rounds after the 05:10 model reset.

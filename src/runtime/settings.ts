@@ -1,4 +1,5 @@
 import type { Config, Goal } from "../config/schema.ts";
+import { compareText } from "../core/plan.ts";
 import type {
   Campaign,
   Channel,
@@ -111,7 +112,7 @@ const closest = (games: ReadonlyArray<Game>, name: string): Game | undefined => 
     game,
     d: Math.min(distance(key(name), key(game.name)), distance(key(name), key(game.slug))),
   }));
-  const best = scored.toSorted((a, b) => a.d - b.d || a.game.name.localeCompare(b.game.name))[0];
+  const best = scored.toSorted((a, b) => a.d - b.d || compareText(a.game.name, b.game.name))[0];
   return best !== undefined && best.d <= Math.max(2, Math.floor(name.length / 4))
     ? best.game
     : undefined;

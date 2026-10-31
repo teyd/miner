@@ -7,7 +7,14 @@ import {
   type DropsGoal,
   type Settings,
 } from "../core/model.ts";
-import { compareNumbers, minable, SLACK_HYSTERESIS, type Pick, type Rank } from "../core/plan.ts";
+import {
+  compareNumbers,
+  compareText,
+  minable,
+  SLACK_HYSTERESIS,
+  type Pick,
+  type Rank,
+} from "../core/plan.ts";
 import { Command, Event } from "../core/protocol.ts";
 import { canEarn, isActive, minutesOf, slackOf, wantedDrops } from "../core/rules.ts";
 import { nextDeadline } from "../core/state.ts";
@@ -625,7 +632,7 @@ const oldRank =
           (a.goal === b.goal ? gameRank(goal, a) - gameRank(goal, b) : 0) ||
           compareNumbers(a.key, b.key) ||
           compareNumbers(a.campaign.endsAt, b.campaign.endsAt) ||
-          a.campaign.id.localeCompare(b.campaign.id)
+          compareText(a.campaign.id, b.campaign.id)
         );
       });
   };

@@ -17,6 +17,7 @@ import {
   type Millis,
   type Settings,
 } from "../core/model.ts";
+import { compareText } from "../core/plan.ts";
 import { Event } from "../core/protocol.ts";
 import { WATCH_INTERVAL } from "../core/state.ts";
 import { CREDIT_SECONDS } from "./calibration.ts";
@@ -531,7 +532,7 @@ const creditable = (world: World, id: ChannelId, now: Millis): ReadonlyArray<Cam
         channelCredits(world, c, id, now) &&
         creditedDrops(world, c, now).length > 0,
     )
-    .toSorted((a, b) => b.startsAt - a.startsAt || a.id.localeCompare(b.id));
+    .toSorted((a, b) => b.startsAt - a.startsAt || compareText(a.id, b.id));
 
 /**
  * Campaigns Twitch credits on this channel besides the one `creditedCampaign` names, and lists in
@@ -577,7 +578,7 @@ const spentCampaign = (world: World, id: ChannelId, now: Millis): Campaign | und
         channelCredits(world, c, id, now) &&
         c.drops.every((d) => doneAt(world, d, now)),
     )
-    .toSorted((a, b) => b.startsAt - a.startsAt || a.id.localeCompare(b.id))[0];
+    .toSorted((a, b) => b.startsAt - a.startsAt || compareText(a.id, b.id))[0];
 
 export const instanceOf = (dropId: DropId) => `${dropId}#i` as DropInstanceId;
 
@@ -875,7 +876,7 @@ export const awardsAt = (
   }
   return [...last]
     .map(([benefitId, at]) => ({ benefitId, at }))
-    .toSorted((a, b) => a.benefitId.localeCompare(b.benefitId));
+    .toSorted((a, b) => compareText(a.benefitId, b.benefitId));
 };
 
 /**

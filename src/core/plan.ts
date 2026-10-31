@@ -69,6 +69,12 @@ export type Rank = (input: PlanInput) => ReadonlyArray<Pick>;
 /** A total order on numbers: `Infinity - Infinity` is `NaN`, which a comparator must never return. */
 export const compareNumbers = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
 
+/**
+ * Ids and names in code-unit order. `localeCompare` would make the order depend on the host's
+ * locale, and its first call loads ICU's collation data: 2 MB of RSS (research 03 §2).
+ */
+export const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 /** The game's place in the goal's list; `"all"` ranks every game alike. */
 const gameRank = (goal: DropsGoal, campaign: Campaign): number => {
   if (goal.games === "all") return 0;
@@ -132,7 +138,7 @@ export const minable: Rank = (input) =>
         compareNumbers(goalRank(input, a), goalRank(input, b)) ||
         compareNumbers(a.key, b.key) ||
         compareNumbers(a.campaign.endsAt, b.campaign.endsAt) ||
-        a.campaign.id.localeCompare(b.campaign.id),
+        compareText(a.campaign.id, b.campaign.id),
     );
 
 const goalRank = (input: PlanInput, pick: Pick): number =>
@@ -148,7 +154,7 @@ export const nextDrop = (input: PlanInput, pick: Pick): Drop | undefined =>
         remainingMinutes(pick.campaign, b, input.progress),
       ) ||
       compareNumbers(a.endsAt, b.endsAt) ||
-      a.id.localeCompare(b.id),
+      compareText(a.id, b.id),
   )[0];
 
 const goalOf = (input: PlanInput, pick: Pick): DropsGoal => input.settings.goals[pick.goal]!;
@@ -195,8 +201,7 @@ export const candidates = (input: PlanInput, pick: Pick): ReadonlyArray<Channel>
     )
     .toSorted(
       (a, b) =>
-        compareNumbers(b.live?.viewers ?? 0, a.live?.viewers ?? 0) ||
-        a.login.localeCompare(b.login),
+        compareNumbers(b.live?.viewers ?? 0, a.live?.viewers ?? 0) || compareText(a.login, b.login),
     );
 
 /**

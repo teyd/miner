@@ -11,6 +11,7 @@ import {
   type Progress,
 } from "./model.ts";
 import {
+  compareText,
   minable,
   plan,
   usableOn,
@@ -605,7 +606,7 @@ const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Ra
  */
 const creditShown = (s: State, shown: ReadonlyArray<Progress>, now: Millis, rank: Rank): State => {
   let next = s;
-  for (const read of shown.toSorted((a, b) => a.dropId.localeCompare(b.dropId))) {
+  for (const read of shown.toSorted((a, b) => compareText(a.dropId, b.dropId))) {
     if (read.claimed || read.minutes <= (next.progress.get(read.dropId)?.minutes ?? 0)) continue;
     const w = next.watch;
     const found = findDrop(next.catalog, read.dropId);
@@ -780,7 +781,7 @@ const sendClaims = (s: State, now: Millis): Handled => {
   if (s.auth !== "valid") return [s, []];
   const commands: Array<Command> = [];
   const claims = new Map(s.claims);
-  for (const p of [...s.progress.values()].toSorted((a, b) => a.dropId.localeCompare(b.dropId))) {
+  for (const p of [...s.progress.values()].toSorted((a, b) => compareText(a.dropId, b.dropId))) {
     const key = claimKey(p.campaignId, p.dropId);
     if (p.instanceId === undefined || !isClaimable(p, now) || claims.has(key)) continue;
     claims.set(key, {

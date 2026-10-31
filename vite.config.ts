@@ -32,8 +32,8 @@ export default defineConfig({
     },
     // Not app code, like scripts/hooks/*.sh: plain Node CLIs that spawn the built miner and read
     // files. They never run under the simulator, so the determinism rules do not apply to them,
-    // and the override list below stays what AGENTS.md says it is.
-    ignorePatterns: ["scripts/verify/**"],
+    // and the override list below stays what AGENTS.md says it is. Their test is linted.
+    ignorePatterns: ["scripts/verify/**/*.mjs"],
     overrides: [
       {
         files: ["src/bin.ts", "src/platform/**"],

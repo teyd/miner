@@ -67,6 +67,15 @@ const sweep = (first: number, count: number, json: boolean, options: SeedOptions
     // A sweep that never earns checks little: show how many seeds watched and claimed.
     const watched = results.filter((r) => r._tag === "Passed" && r.creditedMinutes > 0).length;
     const claimed = results.filter((r) => r._tag === "Passed" && r.claimsApplied > 0).length;
+    // And how many had a request budget refuse each kind of command, so refusals stay reached.
+    const refused: Record<string, number> = {};
+    for (const r of results) {
+      if (r._tag === "Passed") for (const tag of r.refused) refused[tag] = (refused[tag] ?? 0) + 1;
+    }
+    const refusedLine = Object.entries(refused)
+      .toSorted(([a], [b]) => a.localeCompare(b))
+      .map(([tag, n]) => `${tag} ${n}`)
+      .join(", ");
     if (json) {
       yield* Console.log(
         JSON.stringify(
@@ -76,6 +85,7 @@ const sweep = (first: number, count: number, json: boolean, options: SeedOptions
             passed,
             watched,
             claimed,
+            refused,
             failures,
           },
           null,
@@ -89,6 +99,9 @@ const sweep = (first: number, count: number, json: boolean, options: SeedOptions
       yield* Console.log(
         `${count} seeds, ${passed} passed, ${failures.length} failed; ` +
           `${watched} earned watch minutes, ${claimed} claimed a drop`,
+      );
+      yield* Console.log(
+        `seeds where a budget refused: ${refusedLine === "" ? "none" : refusedLine}`,
       );
       for (const capsule of failures) {
         yield* Console.log(`\nseed ${capsule.seed} capsule:`);

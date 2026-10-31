@@ -3,6 +3,7 @@ import { Command, Flag } from "effect/cli";
 import { FetchHttpClient } from "effect/http";
 import { DEFAULT_GOAL } from "../core/model.ts";
 import { isActive, isClaimable, isEligible } from "../core/rules.ts";
+import { Budgets } from "../twitch/budget.ts";
 import type { TwitchError } from "../twitch/errors.ts";
 import { Journal } from "../twitch/journal.ts";
 import { Credentials, Twitch, type Account } from "../twitch/Twitch.ts";
@@ -20,6 +21,8 @@ const describe = (error: TwitchError): string => {
       return `${error.operation}: Twitch unavailable after retries (${error.detail})`;
     case "TwitchDrift":
       return `${error.operation}: Twitch's answer changed shape or was null (${error.detail})`;
+    case "BudgetExhausted":
+      return `${error.operation}: not sent, the ${error.budget} request budget refused it (${error.detail})`;
   }
 };
 
@@ -103,7 +106,7 @@ export const doctor = Command.make(
     });
     const live = Twitch.layer.pipe(
       Layer.provide(journal),
-      Layer.provide(Layer.mergeAll(FetchHttpClient.layer, Credentials.layer)),
+      Layer.provide(Layer.mergeAll(FetchHttpClient.layer, Credentials.layer, Budgets.layer)),
     );
     const report = yield* Effect.provide(diagnose, live).pipe(
       Effect.catchTag("AuthRejected", (e): Effect.Effect<Report> =>

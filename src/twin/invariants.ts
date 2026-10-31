@@ -1,10 +1,15 @@
 import {
   CATALOG_INTERVAL,
   CAMPAIGN_SKIP,
+  CLAIM_RECHECK,
   INVENTORY_INTERVAL,
   ONLINE_DELAY,
+  READ_BATCH,
+  READ_WORST_CASE,
   STALL_AFTER,
   SUBSCRIBE_SETTLE,
+  THROTTLE_FLOOR,
+  WATCHLIST_LIMIT,
   WATCH_INTERVAL,
   type State,
 } from "../core/state.ts";
@@ -21,7 +26,8 @@ import type { Command, Event } from "../core/protocol.ts";
 import { canonical, decodeState, encodeState } from "../store/codec.ts";
 import { allowedPicks, allowedWatch, canFinishOn, goalDrops, type View } from "./oracle.ts";
 import { SIM_EPOCH, type Violation } from "./scenario.ts";
-import { TWIN_TIMEOUT, type Activity } from "./twin.ts";
+import { CDN_LIMITS, GQL_LIMITS } from "../twitch/budget.ts";
+import { TWIN_TIMEOUT, TWITCH_GQL_PER_SECOND, TWITCH_SOCKETS, type Activity } from "./twin.ts";
 import {
   channelOf,
   claimShows,
@@ -34,6 +40,7 @@ import {
   faultWindows,
   framesDownAt,
   gameAt,
+  cooldownWindows,
   instanceOf,
   isClaimedAt,
   looksReceived,
@@ -75,9 +82,55 @@ export interface Observation {
   readonly restart: { readonly saved: string | undefined; readonly resumed: State } | undefined;
 }
 
-/** A command issued, or a request started, this long after it should have stopped is a defect. */
-export const COMMAND_DEADLINE: Millis = 5 * MINUTE;
+/**
+ * The most requests one command sends one after the other: a stream read of a full watchlist, in
+ * batches of `READ_BATCH`, or a catalog read (validation, dashboard, details).
+ */
+export const MOST_REQUESTS = Math.max(Math.ceil(WATCHLIST_LIMIT / READ_BATCH), 3);
+/**
+ * A command still in flight this long, or a request started this long after the core parked, is
+ * a defect: each of its requests at its worst (`READ_WORST_CASE`), one after the other, and a
+ * minute. A fixed 5 min was shorter than a three-batch read whose every attempt hangs (582 s).
+ */
+export const COMMAND_DEADLINE: Millis = MOST_REQUESTS * READ_WORST_CASE + MINUTE;
+/**
+ * The same command (kind and arguments) in flight at most this often: a read that outlives its
+ * interval may overlap the next, a storm may not. Different commands of one kind may all be out
+ * at once (a catalog read starts one directory read per game, 14 live on 2026-10-30); what
+ * reaches Twitch at once is bounded by the request budgets, invariant 8.
+ */
 export const IN_FLIGHT_LIMIT = 4;
+/**
+ * All commands in flight at once, at most: two discoveries' worth of reads (a directory read per
+ * game and one of allow-listed channels each, as when a catalog read comes while the last one's
+ * reads still hang), plus room for the core's own reads, claims, ticks and subscriptions. A
+ * storm of distinct reads, each paced by the budget, passes `IN_FLIGHT_LIMIT` but not this.
+ */
+export const inFlightCap = (games: number): number => 2 * (games + 1) + 10;
+/**
+ * 9: a drop the twin would let the account claim (complete, unclaimed, inside its claim window) is
+ * claimed within this long, unless the token is revoked or a fault window is open. The core hears
+ * of it from a frame, or from the next inventory read once inventory shows it (`inventoryLag`);
+ * a refused or lost claim waits `CLAIM_RECHECK` and another inventory read; each of the two reads
+ * may take `READ_WORST_CASE`; a 429 just before cools the budget down `GQL_LIMITS.cooldown`.
+ */
+export const claimLiveness = (world: World): Millis =>
+  world.inventoryLag +
+  INVENTORY_INTERVAL +
+  CLAIM_RECHECK +
+  2 * READ_WORST_CASE +
+  GQL_LIMITS.cooldown +
+  2 * MINUTE;
+/** A refused read must be sent again by its retry time (`Throttled`), give or take this. */
+const RESEND_SLACK: Millis = 1_000;
+/** Refused commands the core must send again itself; a claim goes through inventory (9). */
+const RESENT = new Set<Command["_tag"]>([
+  "ValidateToken",
+  "ReadCatalog",
+  "ReadInventory",
+  "ReadDirectory",
+  "ReadChannels",
+]);
 export const BUSY_STEPS = 20;
 /**
  * A `Watch` this soon after the previous one needs a cause (`WatchFlip`). The startup flip seen
@@ -171,7 +224,27 @@ export interface Checker {
   readonly lastSubscribe:
     | { readonly at: Millis; readonly channelIds: ReadonlyArray<ChannelId> }
     | undefined;
+  /** API requests (GQL, validation, claims) that ended within `SPAN_MEMORY`, for concurrency. */
+  readonly apiSpans: ReadonlyArray<Span>;
+  /** CDN requests (as watch ticks) within the last `CDN_LIMITS.window`, and the last tick. */
+  readonly cdnStarts: ReadonlyArray<Millis>;
+  readonly lastTickSpan: Span | undefined;
+  /** Refused commands (canonical) the core owes, and by when it must send them again. */
+  readonly owed: ReadonlyMap<string, Millis>;
+  /** Drops claimable by twin truth, and since when, while nothing excuses the wait. */
+  readonly claimableSince: ReadonlyMap<DropId, Millis>;
 }
+
+interface Span {
+  readonly at: Millis;
+  readonly endedAt: Millis;
+}
+
+/**
+ * How long a finished request is kept to count what overlapped it: longer than any request lasts
+ * (`TWIN_TIMEOUT`), so the last of a set of overlapping requests to end still sees the others.
+ */
+const SPAN_MEMORY: Millis = 2 * MINUTE;
 
 export const initialChecker: Checker = {
   watching: undefined,
@@ -202,6 +275,11 @@ export const initialChecker: Checker = {
   lastCatalogChangeAt: undefined,
   lastReadFailureAt: undefined,
   lastSubscribe: undefined,
+  apiSpans: [],
+  cdnStarts: [],
+  lastTickSpan: undefined,
+  owed: new Map(),
+  claimableSince: new Map(),
 };
 
 /** The campaigns a skip covers at `now`. */
@@ -375,6 +453,8 @@ export const checkStep = (
       lastReadFailureAt: undefined,
       unplacedCredit: new Map(),
       unplacedHeardAt: new Map(),
+      // The new run starts its reads over.
+      owed: new Map(),
     };
   }
 
@@ -479,6 +559,7 @@ export const checkStep = (
     unplacedCredit,
     wantedCredits,
   };
+  c = checkBudgets(c, o, fail);
   const session = world.session;
   if (session !== undefined && session.creditedSeconds * 1000 > o.now - session.openedAt + 1) {
     fail("TwinBroken", `session on ${session.channelId} credited more than its open time`);
@@ -486,15 +567,20 @@ export const checkStep = (
 
   // s3, s5: executor outcomes and in-flight work.
   for (const defect of o.defects) fail("Defect", defect);
-  const perKind = new Map<string, number>();
+  const perCommand = new Map<string, number>();
   for (const f of o.inFlight) {
-    perKind.set(f.command._tag, (perKind.get(f.command._tag) ?? 0) + 1);
+    const same = canonical(f.command);
+    perCommand.set(same, (perCommand.get(same) ?? 0) + 1);
     if (o.now - f.since > COMMAND_DEADLINE) {
       fail("Defect", `${f.command._tag} in flight since +${minutesSince(f.since)}m`);
     }
   }
-  for (const [kind, n] of perKind) {
+  for (const [kind, n] of perCommand) {
     if (n > IN_FLIGHT_LIMIT) fail("TooManyInFlight", `${n} ${kind} in flight`);
+  }
+  const cap = inFlightCap(new Set(world.campaigns.map((x) => x.game.id)).size);
+  if (o.inFlight.length > cap) {
+    fail("TooManyInFlight", `${o.inFlight.length} commands in flight, more than ${cap}`);
   }
 
   if (o.step !== undefined) c = checkCommands(c, o, o.step, fail);
@@ -520,6 +606,8 @@ export const checkStep = (
 
   c = checkIdle(c, o, fail);
   checkUnproductive(c, o, fail);
+  c = checkOwed(c, o, fail);
+  c = checkClaimLiveness(c, o, fail);
   return [{ ...c, lastObservedAt: o.now }, found];
 };
 
@@ -568,6 +656,68 @@ const hears = (event: Event, credit: HeardCredit): boolean => {
   return credit.totals.some(([dropId, total]) =>
     shown.some((p) => p.dropId === dropId && p.minutes >= total),
   );
+};
+
+/**
+ * 8: the miner keeps within Twitch's per-IP limits and its own request budgets (`budget.ts`,
+ * critique 08 CF-5): no GQL request answered 429 for the rate (`TWITCH_GQL_PER_SECOND`), at most
+ * `GQL_LIMITS.concurrency` API requests in flight, CDN requests one at a time and at most
+ * `CDN_LIMITS.max` a window, and no more than `TWITCH_SOCKETS` sockets. Twitch counts per IP, so
+ * a restart forgets nothing here.
+ */
+const checkBudgets = (
+  checker: Checker,
+  o: Observation,
+  fail: (kind: string, detail: string) => void,
+): Checker => {
+  let c = checker;
+  const spans: Array<Span> = [];
+  for (const request of o.activity.requests) {
+    spans.push(request);
+    if (request.limited) {
+      fail(
+        "OverBudget",
+        `Twitch answered ${request.operation} 429: over ${TWITCH_GQL_PER_SECOND} GQL requests a second`,
+      );
+    }
+  }
+  for (const call of o.activity.calls) {
+    if (call.kind === "claim") {
+      spans.push(call);
+      if (call.limited) {
+        fail("OverBudget", `Twitch answered a claim 429: over ${TWITCH_GQL_PER_SECOND} a second`);
+      }
+    }
+    if (call.kind === "subscribe" && call.sockets > TWITCH_SOCKETS) {
+      fail("OverBudget", `${call.channelIds.length} channels need ${call.sockets} sockets`);
+    }
+    if (call.kind === "tick") {
+      const last = c.lastTickSpan;
+      if (last !== undefined && call.at < last.endedAt && last.at < call.endedAt) {
+        fail("OverBudget", `two watch ticks at once, from +${minutesSince(last.at)}m`);
+      }
+      const cdnStarts = [
+        ...c.cdnStarts.filter((t) => t > call.at - CDN_LIMITS.window),
+        ...Array.from({ length: call.requests }, () => call.at),
+      ];
+      if (cdnStarts.length > CDN_LIMITS.max) {
+        fail("OverBudget", `${cdnStarts.length} CDN requests within ${CDN_LIMITS.window} ms`);
+      }
+      c = { ...c, lastTickSpan: call, cdnStarts };
+    }
+  }
+  if (spans.length > 0) {
+    const kept = [...c.apiSpans.filter((s) => s.endedAt > o.now - SPAN_MEMORY), ...spans];
+    for (const span of kept) {
+      const open = kept.filter((s) => s.at <= span.at && span.at < s.endedAt).length;
+      if (open > GQL_LIMITS.concurrency) {
+        fail("OverBudget", `${open} API requests in flight at +${minutesSince(span.at)}m`);
+        break;
+      }
+    }
+    c = { ...c, apiSpans: kept };
+  }
+  return c;
 };
 
 const countClaims = (commands: ReadonlyArray<Command>) =>
@@ -642,8 +792,44 @@ const checkCommands = (
   ) {
     c = { ...c, lastCatalogChangeAt: o.now };
   }
-  if (event._tag === "ChannelsReadFailed" || event._tag === "CatalogUnavailable") {
+  if (
+    event._tag === "ChannelsReadFailed" ||
+    event._tag === "CatalogUnavailable" ||
+    (event._tag === "Throttled" &&
+      event.refusals.some((r) =>
+        ["ReadCatalog", "ReadDirectory", "ReadChannels"].includes(r.command._tag),
+      ))
+  ) {
     c = { ...c, lastReadFailureAt: o.now };
+  }
+
+  // 10: what a budget refused, the core sends again by its retry time (a claim: 9).
+  const owed = new Map(c.owed);
+  if (event._tag === "Started" || after.auth === "needs-login") owed.clear();
+  if (event._tag === "Throttled") {
+    for (const r of event.refusals) {
+      // Only a validation goes out without a valid token.
+      const needsToken = r.command._tag !== "ValidateToken";
+      if (!RESENT.has(r.command._tag) || (needsToken && before.auth !== "valid")) continue;
+      const due = Math.max(r.retryAt, o.now + THROTTLE_FLOOR) + RESEND_SLACK;
+      const key = canonical(r.command);
+      owed.set(key, Math.min(owed.get(key) ?? Infinity, due));
+    }
+  }
+  for (const command of commands) owed.delete(canonical(command));
+  c = { ...c, owed };
+  // A refused subscription never reached Twitch: sending the set again is no churn.
+  const last = c.lastSubscribe;
+  if (
+    event._tag === "Throttled" &&
+    last !== undefined &&
+    event.refusals.some(
+      (r) =>
+        r.command._tag === "Subscribe" &&
+        canonical(r.command.channelIds) === canonical(last.channelIds),
+    )
+  ) {
+    c = { ...c, lastSubscribe: undefined };
   }
 
   for (const command of commands) {
@@ -1018,7 +1204,12 @@ const checkIdle = (
     return inCatalog && (seenLive || checker.heard.has(chance.channelId));
   });
   const knownSince = known ? (checker.knownSince ?? o.now) : undefined;
-  const recentFault = windows.some((w) => w.to <= o.now && o.now - w.to < CATALOG_INTERVAL);
+  // An idle core learns only from GQL reads, so a GQL cooldown holds its news back like a fault
+  // window (a claim's outcome, seed 80053). A watching core still ticks through one (CDN), so the
+  // stall clock below takes no excuse from it.
+  const recentFault = [...windows, ...cooldownWindows(world)].some(
+    (w) => w.from <= o.now && o.now - w.to < CATALOG_INTERVAL,
+  );
   // Watching a channel the core believes credits: stream info can't tell `dropsEnabled`
   // (`wire.ts`), so only the stall rule can find out.
   const watching = o.state.watch._tag === "Watching";
@@ -1088,6 +1279,56 @@ const checkUnproductive = (
         `(core: ${canonical(w)})`,
     );
   }
+};
+
+/** 10: a refused command not sent again by its retry time. */
+const checkOwed = (
+  checker: Checker,
+  o: Observation,
+  fail: (kind: string, detail: string) => void,
+): Checker => {
+  const late = [...checker.owed].filter(([, due]) => o.now > due);
+  if (late.length === 0) return checker;
+  for (const [key, due] of late) {
+    fail("RefusalDropped", `${key}, refused, not sent again by +${minutesSince(due)}m`);
+  }
+  return { ...checker, owed: new Map([...checker.owed].filter(([, due]) => o.now <= due)) };
+};
+
+/**
+ * 9: every drop the twin would let the account claim gets claimed within `claimLiveness`. A
+ * revoked token, a parked core or an open fault window stops the clock (it starts again after).
+ */
+const checkClaimLiveness = (
+  checker: Checker,
+  o: Observation,
+  fail: (kind: string, detail: string) => void,
+): Checker => {
+  const world = o.world;
+  const excused =
+    o.state.auth === "needs-login" ||
+    isRevoked(world, o.now) ||
+    [...faultWindows(world), ...cooldownWindows(world)].some(
+      (w) => w.from <= o.now && o.now < w.to,
+    );
+  if (excused)
+    return checker.claimableSince.size === 0 ? checker : { ...checker, claimableSince: new Map() };
+  const bound = claimLiveness(world);
+  const claimableSince = new Map<DropId, Millis>();
+  for (const campaign of world.campaigns) {
+    // A hidden campaign is in no answer: the miner can't know its drop is there to claim.
+    if (world.hidden.has(campaign.id)) continue;
+    for (const drop of campaign.drops) {
+      if (!claimableAt(world, drop.id, o.now)) continue;
+      const since = checker.claimableSince.get(drop.id) ?? o.now;
+      if (o.now - since > bound) {
+        fail("ClaimLate", `${drop.id} claimable since +${minutesSince(since)}m, never claimed`);
+        continue;
+      }
+      claimableSince.set(drop.id, since);
+    }
+  }
+  return { ...checker, claimableSince };
 };
 
 const roundTrips = (text: string): boolean => {

@@ -51,17 +51,25 @@ export const WATCHLIST_LIMIT = 100;
 /**
  * A change to the followed channels waits this long, so the burst of directory and channel reads
  * after a catalog read ends in one `Subscribe`, not one per answer (the first shadow run sent six
- * in 1.5 s, each moving 3 to 28 of 100 channels). Reads start 300 ms apart (`pace.ts`), so 10 s
+ * in 1.5 s, each moving 3 to 28 of 100 channels). Reads start 300 ms apart (`budget.ts`), so 10 s
  * covers about 30 of them.
  */
 export const SUBSCRIBE_SETTLE: Millis = 10_000;
+/** The longest a request waits for its turn at the API budget (`GQL_LIMITS.maxWait`). */
+export const READ_MAX_WAIT: Millis = 15_000;
 /**
- * One request's worst case: four attempts of 30 s (`REQUEST_TIMEOUT`) and 2 + 4 + 8 s between
- * them (`retryReads`). `Twitch.test.ts` checks the constants here against the client's.
+ * One request's worst case: four attempts, each waiting up to `READ_MAX_WAIT` for its turn and
+ * then 30 s (`REQUEST_TIMEOUT`) for its answer, and 2 + 4 + 8 s between them (`retryReads`).
+ * `Twitch.test.ts` checks the constants here against the client's.
  */
-export const READ_WORST_CASE: Millis = 4 * 30_000 + 14_000;
-/** Request starts are paced this far apart (`REQUEST_GAP`, `pace.ts`), retries included. */
+export const READ_WORST_CASE: Millis = 4 * (READ_MAX_WAIT + 30_000) + 14_000;
+/** Request starts are paced this far apart (`GQL_LIMITS.gap`, `budget.ts`), retries included. */
 export const READ_GAP: Millis = 300;
+/**
+ * A command a request budget refused (`Throttled`) is due again no sooner than this, so a budget
+ * that keeps refusing can't wake the core in a loop.
+ */
+export const THROTTLE_FLOOR: Millis = 5_000;
 /** Channels per stream-info request (`GQL_BATCH_LIMIT`); a longer read sends several in turn. */
 export const READ_BATCH = 35;
 /** Slack for the answer to reach the core after the read gives up. */
@@ -142,6 +150,8 @@ export interface Deadlines {
   readonly online: ReadonlyMap<ChannelId, Millis>;
   /** The followed channels differ from what the plan wants: send the plan's set then. */
   readonly subscribe: Millis | undefined;
+  /** Channel reads a request budget refused, by `readKey`, sent again then (`Throttled`). */
+  readonly deferred: ReadonlyMap<string, Millis>;
 }
 
 /** The channel reads a catalog read started, by `readKey`, and when to stop waiting for them. */
@@ -204,6 +214,7 @@ export const initial = (settings: Settings): State => ({
     tick: undefined,
     online: new Map(),
     subscribe: undefined,
+    deferred: new Map(),
   },
 });
 
@@ -226,6 +237,7 @@ export const nextDeadline = (state: State): Millis | undefined => {
         state.discovery?.until ?? Infinity,
         ...d.online.values(),
         ...state.avoidCampaigns.values(),
+        ...d.deferred.values(),
       );
   }
 };

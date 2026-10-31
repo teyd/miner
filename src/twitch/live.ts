@@ -13,7 +13,8 @@ export const CLAIM_TIMEOUT = Duration.seconds(30);
 /**
  * `DropsPage_ClaimDropRewards`, sent once and never retried (AGENTS.md: a lost answer may still
  * have succeeded). Every failure, the timeout included, reaches the executor, which reports the
- * outcome as `unknown` and lets inventory decide.
+ * outcome as `unknown` and lets inventory decide; a refusal of the request budget
+ * (`BudgetExhausted`) means it was never sent.
  */
 export const claimDrop =
   (gql: Gql) =>
@@ -55,7 +56,11 @@ export const claimDrop =
         }),
         Effect.tap((answer) => Effect.logInfo(`claim: ${instanceId} ${answer}`)),
         Effect.tapError((e) =>
-          Effect.logWarning(`claim: ${instanceId} outcome unknown (${e._tag}), inventory decides`),
+          e._tag === "BudgetExhausted"
+            ? Effect.logWarning(`claim: ${instanceId} not sent, the request budget refused it`)
+            : Effect.logWarning(
+                `claim: ${instanceId} outcome unknown (${e._tag}), inventory decides`,
+              ),
         ),
       );
   };

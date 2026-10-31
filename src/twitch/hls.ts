@@ -2,7 +2,8 @@ import { Clock, Data, Duration, Effect, Option, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type { ChannelId, Millis } from "../core/model.ts";
 import { WatchFailure } from "./Actuator.ts";
-import { AuthRejected } from "./errors.ts";
+import type { Budget } from "./budget.ts";
+import { AuthRejected, type BudgetExhausted } from "./errors.ts";
 import { single, type Gql } from "./gql.ts";
 import { Queries, USHER_URL, livePlayback, playbackHeaders } from "./identity.ts";
 import type { Journal } from "./journal.ts";
@@ -14,9 +15,13 @@ export interface WatchTarget {
   readonly login: string;
 }
 
-/** One open watch on one channel. Each `tick` is one `WATCH_INTERVAL` of watching. */
+/**
+ * One open watch on one channel. Each `tick` is one `WATCH_INTERVAL` of watching. A tick the
+ * request budget cut short fails with `BudgetExhausted`: it credited nothing, and the channel did
+ * nothing wrong.
+ */
 export interface WatchSession {
-  readonly tick: Effect.Effect<void, WatchFailure | AuthRejected>;
+  readonly tick: Effect.Effect<void, WatchFailure | AuthRejected | BudgetExhausted>;
 }
 
 /**
@@ -80,10 +85,11 @@ const classify = (status: number): HlsFailure["reason"] | "ok" | "auth" => {
  * session; a 403, 404 or 410 on a cached URL resolves the stream again once before it counts.
  */
 export const hlsWatch = (deps: {
-  /** Twitch's API: the playback token goes through the paced, recorded GQL client. */
+  /** Twitch's API: the playback token goes through the budgeted, recorded GQL client. */
   readonly gql: Gql;
-  /** Twitch's CDN: usher, playlists and segments. */
+  /** Twitch's CDN: usher, playlists and segments, each request a turn of `budget`. */
   readonly cdn: HttpClient.HttpClient;
+  readonly budget: Budget;
   readonly deviceId: string;
   readonly journal: Journal["Service"];
 }): WatchMethod => {
@@ -91,6 +97,7 @@ export const hlsWatch = (deps: {
 
   const get = (target: WatchTarget, step: Step, request: HttpClientRequest.HttpClientRequest) =>
     deps.cdn.execute(HttpClientRequest.setHeaders(request, headers)).pipe(
+      Effect.tap((response) => (response.status === 429 ? deps.budget.backOff : Effect.void)),
       Effect.flatMap((response) =>
         request.method === "HEAD"
           ? Effect.succeed({ status: response.status, text: "" })
@@ -106,6 +113,7 @@ export const hlsWatch = (deps: {
       Effect.catchTag("HttpClientError", (e) =>
         Effect.fail(new HlsFailure({ reason: "network", step, detail: e.message })),
       ),
+      (exchange) => deps.budget.run(step, exchange),
     );
 
   const check = (step: Step, status: number) => {

@@ -29,6 +29,8 @@ import {
   ONLINE_DELAY,
   STALL_AFTER,
   SUBSCRIBE_SETTLE,
+  THROTTLE_FLOOR,
+  VALIDATE_INTERVAL,
   WATCH_INTERVAL,
   type State,
 } from "./state.ts";
@@ -884,6 +886,181 @@ describe("claims", () => {
       campaignEndsAt: T0 - 25 * HOUR,
     });
     assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [late], awarded: [] }))), 0);
+  });
+});
+
+describe("request budgets (Throttled)", () => {
+  const c = campaign("c");
+  const throttled = (command: Command, retryAt: Millis) =>
+    Event.Throttled({ refusals: [{ command, budget: "gql", retryAt }] });
+
+  it("moves a refused read's deadline to when the budget has room, not a whole interval", () => {
+    const d = driver();
+    d.send(Event.Started());
+    // A refused validation at start-up is tried again in seconds, not in an hour.
+    assert.deepStrictEqual(tags(d.send(throttled(Command.ValidateToken(), T0 + 30_000))), []);
+    assert.strictEqual(nextDeadline(d.state), T0 + 30_000);
+    assert.deepStrictEqual(tags(d.send(Event.Tick(), T0 + 30_000)), ["ValidateToken"]);
+    d.send(Event.TokenValid());
+    const at = d.now + 60_000;
+    d.send(throttled(Command.ReadCatalog(), at));
+    d.send(throttled(Command.ReadInventory(), at));
+    // A refusal is not a broken catalog.
+    assert.strictEqual(d.state.catalogStatus, "unknown");
+    assert.strictEqual(watchedChannel(d.state), "starting");
+    assert.strictEqual(nextDeadline(d.state), at);
+    assert.deepStrictEqual(tags(d.send(Event.Tick(), at)), ["ReadCatalog", "ReadInventory"]);
+  });
+
+  it("never wakes sooner than THROTTLE_FLOOR, whatever retryAt says", () => {
+    const d = startedWatching([c], [channel("a")]);
+    d.send(throttled(Command.ReadInventory(), d.now - 1_000));
+    assert.strictEqual(d.state.deadlines.inventory, d.now + THROTTLE_FLOOR);
+  });
+
+  it("sends a refused channel read again, and discovery waits for its answer", () => {
+    const top = campaign("top", { game: game("top") });
+    const low = campaign("low", { game: game("low") });
+    const d = driver(initial(settings({ games: games(["top", "low"]) })));
+    d.send(Event.Started());
+    d.send(Event.TokenValid());
+    const issued = reads(d.send(Event.CatalogRead({ campaigns: [low, top] })));
+    const until = d.state.discovery!.until;
+    d.send(read([channel("b", { gameId: "low" })], "directory:low"));
+    const retryAt = T0 + 20_000;
+    d.send(throttled(issued[0]!, retryAt));
+    // The refused read stays pending: no watch on the half picture, and discovery waits longer.
+    assert.strictEqual(watchedChannel(d.state), "discovering");
+    assert.deepStrictEqual(d.state.discovery?.pending, ["directory:top"]);
+    assert.isAbove(d.state.discovery!.until, until);
+    assert.strictEqual(d.state.deadlines.deferred.get("directory:top"), retryAt);
+    assert.deepStrictEqual(reads(d.send(Event.Tick(), retryAt - 1)), []);
+    assert.deepStrictEqual(reads(d.send(Event.Tick(), retryAt)), [issued[0]!]);
+    assert.strictEqual(d.state.deadlines.deferred.size, 0);
+    const commands = d.send(read([channel("a", { gameId: "top" })], "directory:top"));
+    assert.deepStrictEqual(tags(commands), ["Watch"]);
+    assert.strictEqual(watchedChannel(d.state), "a");
+  });
+
+  it("sends a refused re-read of a channel that went live again, by its key", () => {
+    const d = startedWatching([c], [channel("a")]);
+    const again = Command.ReadChannels({ channelIds: [chid("x"), chid("y")] });
+    d.send(throttled(again, d.now + 10_000));
+    assert.deepStrictEqual(reads(d.send(Event.Tick(), d.now + 10_000)), [again]);
+  });
+
+  it("forgets deferred reads on a restart and on a refused token", () => {
+    const d = startedWatching([c], [channel("a")]);
+    d.send(throttled(Command.ReadDirectory({ gameId: game("c").id }), d.now + 10_000));
+    assert.strictEqual(d.state.deadlines.deferred.size, 1);
+    d.send(Event.Started());
+    assert.strictEqual(d.state.deadlines.deferred.size, 0);
+    const e = startedWatching([c], [channel("a")]);
+    e.send(throttled(Command.ReadDirectory({ gameId: game("c").id }), e.now + 10_000));
+    e.send(Event.AuthFailed());
+    assert.strictEqual(e.state.deadlines.deferred.size, 0);
+  });
+
+  it("settles a refused claim through inventory, as a lost answer: never blindly resent", () => {
+    const d = startedWatching([c], [channel("a")]);
+    const claim = d
+      .send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }))
+      .find((x) => x._tag === "Claim")!;
+    const retryAt = T0 + 2 * MINUTE;
+    assert.deepStrictEqual(tags(d.send(throttled(claim, retryAt))), []);
+    const intent = d.state.claims.get("c/c-d1");
+    assert.strictEqual(intent?.status, "unknown");
+    assert.strictEqual(intent?.recheckAt, retryAt);
+    assert.strictEqual(d.state.deadlines.inventory, retryAt);
+    const unclaimed = progress(c, "c-d1", { minutes: 60, instanceId: iid("i1") });
+    // A read before the budget has room sends nothing.
+    assert.lengthOf(
+      d
+        .send(Event.InventoryRead({ progress: [unclaimed], awarded: [] }))
+        .filter((x) => x._tag === "Claim"),
+      0,
+    );
+    assert.deepStrictEqual(tags(d.send(Event.Tick(), retryAt)), ["ReadInventory"]);
+    const again = d.send(Event.InventoryRead({ progress: [unclaimed], awarded: [] }));
+    assert.deepStrictEqual(
+      again.filter((x) => x._tag === "Claim"),
+      [claim],
+    );
+    // Inventory showing it claimed (the refusal was wrong about nothing) sends none.
+    const e = startedWatching([c], [channel("a")]);
+    const sent = e
+      .send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }))
+      .find((x) => x._tag === "Claim")!;
+    e.send(throttled(sent, retryAt));
+    e.send(Event.Tick(), retryAt);
+    const done = progress(c, "c-d1", { minutes: 60, instanceId: iid("i1"), claimed: true });
+    const none = e.send(Event.InventoryRead({ progress: [done], awarded: [] }));
+    assert.lengthOf(
+      none.filter((x) => x._tag === "Claim"),
+      0,
+    );
+    assert.strictEqual(e.state.claims.size, 0);
+  });
+
+  it("needs nothing for a refused watch tick: the next one is due on its own", () => {
+    const d = startedWatching([c], [channel("a")]);
+    const before = d.state;
+    assert.deepStrictEqual(
+      d.send(throttled(Command.WatchTick({ channelId: chid("a") }), d.now + 10_000)),
+      [],
+    );
+    assert.strictEqual(d.state.deadlines, before.deadlines);
+    assert.isBelow(d.state.deadlines.validate, d.now + VALIDATE_INTERVAL + 1);
+  });
+
+  it("asks again for a refused current-drop read once the budget has room, not 5 min later", () => {
+    const d = startedWatching([c], [channel("a")]);
+    settle(d);
+    const asked: Array<Millis> = [];
+    let refused = false;
+    for (let i = 1; i <= 50; i++) {
+      const at = T0 + i * WATCH_INTERVAL;
+      const commands = d.send(Event.WatchTicked({ channelId: chid("a") }), at);
+      for (const command of commands.filter((x) => x._tag === "ReadCurrentDrop")) {
+        asked.push(at);
+        if (!refused) {
+          refused = true;
+          d.send(throttled(command, at + 30_000));
+        }
+      }
+    }
+    assert.lengthOf(asked, 2);
+    // The first tick at or after the refusal's retry time asks again.
+    assert.strictEqual(asked[1]! - asked[0]!, 2 * WATCH_INTERVAL);
+  });
+
+  it("sends a refused subscription again once the budget has room", () => {
+    const d = startedWatching([c], [channel("a"), channel("b")]);
+    const sent = d.send(Event.Tick(), d.now + SUBSCRIBE_SETTLE);
+    const subscribe = sent.find((x) => x._tag === "Subscribe")!;
+    assert.deepStrictEqual(subscribe.channelIds, [chid("a"), chid("b")]);
+    const retryAt = d.now + 20_000;
+    assert.deepStrictEqual(d.send(throttled(subscribe, retryAt)), []);
+    assert.strictEqual(d.state.deadlines.subscribe, retryAt);
+    assert.deepStrictEqual(subscribes(d.send(Event.Tick(), retryAt - 1)), []);
+    assert.deepStrictEqual(subscribes(d.send(Event.Tick(), retryAt)), [subscribe.channelIds]);
+    // A refusal of a set already replaced by a newer one changes nothing.
+    const e = startedWatching([c], [channel("a")]);
+    e.send(Event.Tick(), e.now + SUBSCRIBE_SETTLE);
+    const before = e.state;
+    e.send(throttled(Command.Subscribe({ channelIds: [chid("z")] }), e.now + 20_000));
+    assert.strictEqual(e.state.subscriptions, before.subscriptions);
+  });
+
+  it("steps once for refusals that arrive together, each handled", () => {
+    const d = startedWatching([c], [channel("a")]);
+    const at = d.now + 60_000;
+    const refusals = [Command.ReadInventory(), Command.ReadDirectory({ gameId: game("c").id })].map(
+      (command) => ({ command, budget: "gql" as const, retryAt: at }),
+    );
+    d.send(Event.Throttled({ refusals }));
+    assert.strictEqual(d.state.deadlines.inventory, at);
+    assert.strictEqual(d.state.deadlines.deferred.get(`directory:${game("c").id}`), at);
   });
 });
 

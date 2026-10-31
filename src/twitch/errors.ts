@@ -29,4 +29,21 @@ export class TwitchDrift extends Schema.TaggedError<
   detail: Schema.String,
 }) {}
 
-export type TwitchError = AuthRejected | TwitchUnavailable | TwitchDrift;
+/**
+ * A request budget (`budget.ts`) refused a request before it was sent: no turn within the
+ * budget's longest wait, or Twitch answered 429 and the budget is cooling down. Nothing of this
+ * request reached Twitch, so a refused claim was not sent. Never retried inside the seam: the
+ * core gets it as a `Throttled` event and tries again at `retryAt`.
+ */
+export class BudgetExhausted extends Schema.TaggedError<
+  BudgetExhausted,
+  { readonly brand: unique symbol }
+>()("BudgetExhausted", {
+  budget: Schema.Literals(["gql", "cdn"]),
+  operation: Schema.String,
+  detail: Schema.String,
+  /** Epoch ms from which the budget expects room again. */
+  retryAt: Schema.Finite,
+}) {}
+
+export type TwitchError = AuthRejected | TwitchUnavailable | TwitchDrift | BudgetExhausted;

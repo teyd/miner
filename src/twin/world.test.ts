@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { CLAIM_GRACE, HOUR, MINUTE, type ChannelId, type DropId } from "../core/model.ts";
 import { WATCH_INTERVAL } from "../core/state.ts";
+import { GQL_LIMITS } from "../twitch/budget.ts";
 import { CLAIMED_FLAG_LAG_MAX, FRAME_GAPS } from "./calibration.ts";
 import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Scenario } from "./scenario.ts";
 import {
@@ -17,6 +18,7 @@ import {
   minutesAt,
   openSession,
   sessionDrop,
+  startCooldown,
   tick,
   type World,
 } from "./world.ts";
@@ -498,5 +500,38 @@ describe("calibrated rules", () => {
     assert.isUndefined(creditedCampaign(watched, ch(0), T + 6 * MINUTE));
     assert.strictEqual(minutesAt(watched, drop("c0-d0"), T + HOUR), 2);
     assert.strictEqual(minutesAt(watched, drop("c1-d0"), T + HOUR), 6);
+  });
+});
+
+describe("gql-cooldown", () => {
+  const cooled = (durationSeconds: number) =>
+    world([campaignSpec()], [channelSpec()], 0, {
+      faults: [{ kind: "gql-cooldown", atMinute: 1, durationSeconds }],
+    });
+
+  it("begins at the first inventory answer from its minute on that shows a drop to claim", () => {
+    // The drop completes at +2m; before that, and before +1m, nothing begins.
+    const early = watchFor(cooled(180), ch(0), 1).world;
+    assert.deepStrictEqual(startCooldown(early, T + MINUTE, inventoryView(early, T + MINUTE)), [
+      early,
+      [],
+    ]);
+    const done = watchFor(cooled(180), ch(0), 2).world;
+    const at = T + 2 * MINUTE;
+    const [started, calls] = startCooldown(done, at, inventoryView(done, at));
+    assert.deepStrictEqual(started.cooldowns, [{ from: at, to: at + 3 * MINUTE }]);
+    // Backed off a cooldown apart, the last one a cooldown before the end.
+    assert.deepStrictEqual(calls, [at, at + GQL_LIMITS.cooldown, at + 2 * GQL_LIMITS.cooldown]);
+    // Once only.
+    const later = at + 10 * MINUTE;
+    assert.deepStrictEqual(startCooldown(started, later, inventoryView(started, later))[1], []);
+  });
+
+  it("lasts at least the one cooldown a 429 starts", () => {
+    const done = watchFor(cooled(1), ch(0), 2).world;
+    const at = T + 2 * MINUTE;
+    const [started, calls] = startCooldown(done, at, inventoryView(done, at));
+    assert.deepStrictEqual(started.cooldowns, [{ from: at, to: at + GQL_LIMITS.cooldown }]);
+    assert.deepStrictEqual(calls, [at]);
   });
 });

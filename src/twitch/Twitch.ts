@@ -1,6 +1,7 @@
 import { Config, Context, Effect, Layer, Random, Redacted, Schedule } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type { Campaign, Channel, ChannelId, DropId } from "../core/model.ts";
+import { Budgets } from "./budget.ts";
 import { AuthRejected, TwitchDrift, type TwitchError } from "./errors.ts";
 import { decode, makeGql, single, type Decodable } from "./gql.ts";
 
@@ -75,7 +76,8 @@ export class Twitch extends Context.Service<
       const http = yield* HttpClient.HttpClient;
       const credentials = yield* Credentials;
       const journal = yield* Journal;
-      return make(http, credentials, journal);
+      const budgets = yield* Budgets;
+      return make(http, credentials, journal, budgets);
     }),
   );
 }
@@ -104,7 +106,10 @@ export const deviceIdOf = Effect.gen(function* () {
   return id;
 });
 
-/** Reads retry three times, 2, 4 and 8 s apart, and only when the failure may pass. */
+/**
+ * Reads retry three times, 2, 4 and 8 s apart, and only when the failure may pass. A budget's
+ * refusal is not retried here: the core reschedules the command (`BudgetExhausted`).
+ */
 export const retryReads = <A, E extends TwitchError>(effect: Effect.Effect<A, E>) =>
   effect.pipe(
     Effect.retry({
@@ -118,8 +123,9 @@ const make = (
   http: HttpClient.HttpClient,
   credentials: Credentials["Service"],
   journal: Journal["Service"],
+  budgets: Budgets["Service"],
 ): Twitch["Service"] => {
-  const { oauth, send, request } = makeGql(http, credentials, journal);
+  const { oauth, send, request } = makeGql(http, credentials, journal, budgets.gql);
 
   /** One persisted query, sent in batches of up to 35 variable sets; results keep their order. */
   const gql = <S extends Decodable>(

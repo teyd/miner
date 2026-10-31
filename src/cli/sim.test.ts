@@ -73,10 +73,14 @@ const trace = (path: string, json = false) => ({
 describe("miner sim", () => {
   it.effect("runs a range of seeds and prints the summary", () =>
     Effect.gen(function* () {
-      yield* Command.runWith(miner, { version: "0" })(["sim", "--seed", "6", "--seeds", "2"]);
+      yield* Command.runWith(miner, { version: "0" })(["sim", "--seed", "11", "--seeds", "2"]);
       assert.include(
         yield* output,
         "2 seeds, 2 passed, 0 failed; 2 earned watch minutes, 2 claimed a drop",
+      );
+      assert.include(
+        yield* output,
+        "seeds where a budget refused: Claim 2, ReadDirectory 1, ReadInventory 2",
       );
     }).pipe(Effect.provide([NodeServices.layer, TestConsole.layer])),
   );
@@ -99,7 +103,7 @@ describe("miner sim", () => {
       yield* Command.runWith(miner, { version: "0" })([
         "sim",
         "--seed",
-        "2",
+        "17",
         "--seeds",
         "1",
         "--json",
@@ -107,10 +111,11 @@ describe("miner sim", () => {
       const document = JSON.parse(yield* output);
       assert.deepStrictEqual(document, {
         ok: true,
-        seeds: { first: 2, count: 1 },
+        seeds: { first: 17, count: 1 },
         passed: 1,
         watched: 1,
         claimed: 1,
+        refused: { Claim: 1, ReadCatalog: 1, ReadInventory: 1, WatchTick: 1 },
         failures: [],
       });
     }).pipe(Effect.provide([NodeServices.layer, TestConsole.layer])),

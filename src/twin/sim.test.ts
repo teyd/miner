@@ -1,10 +1,17 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import { MINUTE, type DropId, type DropsGoal, type Settings } from "../core/model.ts";
+import {
+  MINUTE,
+  type ChannelId,
+  type DropId,
+  type DropsGoal,
+  type Settings,
+} from "../core/model.ts";
 import { compareNumbers, minable, SLACK_HYSTERESIS, type Pick, type Rank } from "../core/plan.ts";
-import type { Command } from "../core/protocol.ts";
+import { Command, Event } from "../core/protocol.ts";
 import { canEarn, isActive, minutesOf, slackOf, wantedDrops } from "../core/rules.ts";
 import { nextDeadline } from "../core/state.ts";
+import { GQL_LIMITS, UNLIMITED } from "../twitch/budget.ts";
 import { step, stepWith } from "../core/step.ts";
 import { CLAIM_AFTER_FRAME_MAX, FRAME_GAPS } from "./calibration.ts";
 import {
@@ -94,6 +101,16 @@ const plant = (f: (commands: ReadonlyArray<Command>) => ReadonlyArray<Command>):
   },
 });
 
+const plantWith = (
+  f: (commands: ReadonlyArray<Command>, event: Event, now: number) => ReadonlyArray<Command>,
+): Core => ({
+  nextDeadline,
+  step: (state, event, now) => {
+    const result = step(state, event, now);
+    return { ...result, commands: f(result.commands, event, now) };
+  },
+});
+
 const claimTwice = (commands: ReadonlyArray<Command>) =>
   commands.flatMap((c): ReadonlyArray<Command> => (c._tag === "Claim" ? [c, c] : [c]));
 
@@ -177,6 +194,19 @@ describe("fixed scenarios", () => {
       }),
     );
   }
+
+  it.effect("a large catalog's discovery refused at once is one step, not one per read", () =>
+    Effect.gen(function* () {
+      // Thirty games more than the live catalog's 14, read with a 1 s wait for a turn: four
+      // reads get one, and the rest are refused at one instant as each frees its slot. One step
+      // per refusal was more than `BUSY_STEPS`.
+      const large: Scenario = { ...base, otherGames: 30, gqlMaxWait: 1_000 };
+      const result = yield* runTwice(large);
+      assert.isUndefined(result.violation);
+      assert.include(result.refused, "ReadDirectory");
+      assert.isAbove(result.claimsApplied, 0);
+    }),
+  );
 
   it.effect("park on a revoked token and poll nothing afterwards", () =>
     Effect.gen(function* () {
@@ -436,6 +466,106 @@ describe("planted bugs are caught and shrunk", () => {
       });
       expectCaught(result, ["ClaimedTwice", "MutationRetried"]);
     }),
+  );
+
+  it.effect("no GQL budget: a large catalog's discovery burst gets 429s", () =>
+    Effect.gen(function* () {
+      const unbudgeted = { limits: { gql: UNLIMITED }, maxHorizonMinutes: 120 };
+      // Seed 7: fourteen other games, as many as the live catalog of 2026-10-30.
+      const result = yield* runSeed(7, { ...unbudgeted, maxShrinks: 30 });
+      assert.strictEqual(result._tag, "Failed");
+      if (result._tag !== "Failed") return;
+      assert.strictEqual(result.capsule.violation.kind, "OverBudget");
+      assert.match(result.capsule.violation.detail, /429/);
+      assert.isUndefined((yield* runTwice(result.capsule.scenario)).violation);
+      // The sweep finds it without being pointed at it.
+      const swept = yield* runSeeds(1, 40, { ...unbudgeted, maxShrinks: 0 });
+      assert.isAtLeast(swept.filter((r) => r._tag === "Failed").length, 1);
+    }),
+  );
+
+  it.effect("the API budget's concurrency alone keeps nothing under Twitch's rate", () =>
+    Effect.gen(function* () {
+      // Gap and window gone, four in flight kept: answers of 100–400 ms let more than five start
+      // in a second.
+      const gql = { ...GQL_LIMITS, gap: 0, window: 1, max: Number.MAX_SAFE_INTEGER };
+      const result = yield* runSeed(7, { limits: { gql }, maxHorizonMinutes: 120, maxShrinks: 0 });
+      assert.strictEqual(result._tag, "Failed");
+      if (result._tag === "Failed") assert.strictEqual(result.capsule.violation.kind, "OverBudget");
+    }),
+  );
+});
+
+describe("planted bugs in what a request budget refused are caught by the sweep", () => {
+  /** The core never sees some refusals: the bug of a `Throttled` handler that ignores them. */
+  const ignoring = (dropped: (command: Command) => boolean): Core => ({
+    nextDeadline,
+    step: (state, event, now) =>
+      step(
+        state,
+        event._tag === "Throttled"
+          ? Event.Throttled({ refusals: event.refusals.filter((r) => !dropped(r.command)) })
+          : event,
+        now,
+      ),
+  });
+  const sweep = (core: Core) => runSeeds(1, 60, { core, maxShrinks: 0 });
+  const caught = (results: ReadonlyArray<SeedResult>, kind: string) =>
+    results.filter((r) => r._tag === "Failed" && r.capsule.violation.kind === kind).length;
+
+  it.effect(
+    "a refused claim dropped, its intent left sent forever",
+    () =>
+      Effect.gen(function* () {
+        const results = yield* sweep(ignoring((c) => c._tag === "Claim"));
+        assert.isAtLeast(caught(results, "ClaimLate"), 3);
+      }),
+    120_000,
+  );
+
+  it.effect(
+    "a refused channel read deferred and never sent again",
+    () =>
+      Effect.gen(function* () {
+        const forgetful: Core = {
+          nextDeadline,
+          step: (state, event, now) => {
+            const result = step(state, event, now);
+            const deadlines = { ...result.state.deadlines, deferred: new Map() };
+            return { ...result, state: { ...result.state, deadlines } };
+          },
+        };
+        const results = yield* sweep(forgetful);
+        assert.isAtLeast(caught(results, "RefusalDropped"), 3);
+      }),
+    120_000,
+  );
+
+  it.effect(
+    "a paced storm of distinct reads",
+    () =>
+      Effect.gen(function* () {
+        // Once the token is valid, sixty current-drop reads at once, each of another channel: no
+        // two the same, so only the total in flight shows it. The budget paces them, so none is
+        // over Twitch's rate either.
+        const storm = plantWith((commands, event) =>
+          event._tag === "TokenValid"
+            ? [
+                ...commands,
+                ...Array.from({ length: 60 }, (_, i) =>
+                  Command.ReadCurrentDrop({ channelId: `storm-${i}` as ChannelId }),
+                ),
+              ]
+            : commands,
+        );
+        const results = yield* runSeeds(1, 10, {
+          core: storm,
+          maxShrinks: 0,
+          maxHorizonMinutes: 60,
+        });
+        assert.isAtLeast(caught(results, "TooManyInFlight"), 8);
+      }),
+    120_000,
   );
 });
 

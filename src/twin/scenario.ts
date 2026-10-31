@@ -44,13 +44,15 @@ const BOUNDS = {
   viewers: [1, 10_000],
   changes: [0, 6],
   atMinute: [0, 1440],
-  faults: [0, 8],
+  faults: [0, 10],
   durationSeconds: [1, 1800],
   windowStart: [0, 600],
   frameGap: [1, 12],
   frameGaps: [1, 16],
   claimedFlagLagSeconds: [0, CLAIMED_FLAG_LAG_MAX / 1000],
   claimedBefore: [0, 3],
+  otherGames: [0, 16],
+  maxWait: [1_000, 15_000],
 } as const;
 
 type Bound = keyof typeof BOUNDS;
@@ -124,6 +126,17 @@ export const Fault = Schema.Union([
     gapMillis: Schema.Int.check(
       Schema.isBetween({ minimum: RECONNECT_GAP.min, maximum: RECONNECT_GAP.max }),
     ),
+  }),
+  /**
+   * Another tool on this IP spent Twitch's GQL rate, and one of the miner's requests was answered
+   * 429: the miner's API budget cools down for `durationSeconds` (at least `GQL_LIMITS.cooldown`)
+   * and refuses every request asked meanwhile, claims included. It begins at the first inventory
+   * answer from `atMinute` on that shows a drop to claim (`startCooldown` in `world.ts`).
+   */
+  Schema.Struct({
+    kind: Schema.Literal("gql-cooldown"),
+    atMinute: int("atMinute"),
+    durationSeconds: int("durationSeconds"),
   }),
   Schema.Struct({
     kind: Schema.Literal("crash"),
@@ -258,6 +271,17 @@ export const Scenario = Schema.Struct({
   campaigns: list(CampaignSpec, "campaigns"),
   channels: list(ChannelSpec, "channels"),
   faults: list(Fault, "faults"),
+  /**
+   * Campaigns of this many more games that no channel streams: a catalog read then starts a
+   * directory read for each game a goal wants. The live catalog of 2026-10-30 started 14 per read
+   * (A0 recording), the games above at most 3. Omitted: none.
+   */
+  otherGames: Schema.optionalKey(int("otherGames")),
+  /**
+   * The API budget's `maxWait` in this world, shorter than the miner's 15 s so that bursts get
+   * refused (`GQL_LIMITS`). Omitted: the miner's.
+   */
+  gqlMaxWait: Schema.optionalKey(int("maxWait")),
 });
 export type Scenario = typeof Scenario.Type;
 
@@ -378,57 +402,65 @@ const goalArbitrary: fc.Arbitrary<GoalSpec> = fc.record({
   order: fc.constantFrom(...ORDERS),
 });
 
-const randomScenario: fc.Arbitrary<Scenario> = fc.record({
-  latencySeed: fc.integer({ min: 0, max: 1_000_000 }),
-  horizonMinutes: intArb("horizonMinutes"),
-  // Measured `INVENTORY_LAG_MINUTES`; 1 for a read inside the minute, 2–3 for a worse Twitch.
-  inventoryLagMinutes: fc.oneof(
-    { weight: 7, arbitrary: fc.constant(INVENTORY_LAG_MINUTES) },
-    { weight: 2, arbitrary: fc.constant(1) },
-    { weight: 1, arbitrary: fc.integer({ min: 2, max: BOUNDS.inventoryLagMinutes[1] }) },
-  ),
-  // Measured at most 300 s (`CLAIMED_FLAG_LAG_MAX`); drawn below the core's 60 s `CLAIM_RECHECK`
-  // until the core waits that long (`sim.test.ts` shows the double claim a longer lag causes).
-  claimedFlagLagSeconds: fc.integer({ min: 0, max: CLAIM_FLAG_LAG_SWEPT }),
-  // Shrinks towards the first gap, 1: a frame every minute.
-  frameGaps: listArb(fc.constantFrom(...FRAME_GAPS), "frameGaps"),
-  claimFrames: fc.integer({ min: 0, max: 9 }).map((n) => n === 9),
-  // Measured: one framed drop per campaign. Drawn as every drop until the core learns a wanted
-  // drop's minutes from the inventory (`sim.test.ts` shows the channel it gives up otherwise).
-  framesAll: fc.constant(FRAMES_ALL_SWEPT),
-  settings: fc.record({ goals: listArb(goalArbitrary, "goals") }),
-  campaigns: listArb(
-    fc.record({
-      game: intArb("game"),
-      startMinute: intArb("drawnStart"),
-      durationMinutes: intArb("durationMinutes"),
-      linked: fc.boolean(),
-      creditsUnlinked: fc.boolean(),
-      allowList: listArb(intArb("index"), "short"),
-      drops: listArb(windowedDropArbitrary, "drops"),
-      // One campaign in four has history, at times all of it: a campaign claimed in full before
-      // the run is in no inventory, only in `gameEventDrops` (Witchspire, run4h).
-      claimedBefore: fc.oneof(
-        { weight: 3, arbitrary: fc.constant(0) },
-        { weight: 1, arbitrary: intArb("claimedBefore") },
-      ),
-    }),
-    "campaigns",
-  ),
-  channels: listArb(
-    fc.record({
-      game: intArb("game"),
-      viewers: intArb("viewers"),
-      dropsEnabled: fc.boolean(),
-      // One channel in five refuses playback, so most worlds have something to watch.
-      refuses: fc.integer({ min: 0, max: 4 }).map((n) => n === 4),
-      liveAtStart: fc.boolean(),
-      changes: listArb(changeArbitrary(intArb("atMinute")), "changes"),
-    }),
-    "channels",
-  ),
-  faults: listArb(faultArbitrary, "faults"),
-});
+const randomScenario: fc.Arbitrary<Scenario> = fc
+  .record({
+    latencySeed: fc.integer({ min: 0, max: 1_000_000 }),
+    horizonMinutes: intArb("horizonMinutes"),
+    // Measured `INVENTORY_LAG_MINUTES`; 1 for a read inside the minute, 2–3 for a worse Twitch.
+    inventoryLagMinutes: fc.oneof(
+      { weight: 7, arbitrary: fc.constant(INVENTORY_LAG_MINUTES) },
+      { weight: 2, arbitrary: fc.constant(1) },
+      { weight: 1, arbitrary: fc.integer({ min: 2, max: BOUNDS.inventoryLagMinutes[1] }) },
+    ),
+    // Measured at most 300 s (`CLAIMED_FLAG_LAG_MAX`); drawn below the core's 60 s `CLAIM_RECHECK`
+    // until the core waits that long (`sim.test.ts` shows the double claim a longer lag causes).
+    claimedFlagLagSeconds: fc.integer({ min: 0, max: CLAIM_FLAG_LAG_SWEPT }),
+    // Shrinks towards the first gap, 1: a frame every minute.
+    frameGaps: listArb(fc.constantFrom(...FRAME_GAPS), "frameGaps"),
+    claimFrames: fc.integer({ min: 0, max: 9 }).map((n) => n === 9),
+    // Measured: one framed drop per campaign. Drawn as every drop until the core learns a wanted
+    // drop's minutes from the inventory (`sim.test.ts` shows the channel it gives up otherwise).
+    framesAll: fc.constant(FRAMES_ALL_SWEPT),
+    settings: fc.record({ goals: listArb(goalArbitrary, "goals") }),
+    campaigns: listArb(
+      fc.record({
+        game: intArb("game"),
+        startMinute: intArb("drawnStart"),
+        durationMinutes: intArb("durationMinutes"),
+        linked: fc.boolean(),
+        creditsUnlinked: fc.boolean(),
+        allowList: listArb(intArb("index"), "short"),
+        drops: listArb(windowedDropArbitrary, "drops"),
+        // One campaign in four has history, at times all of it: a campaign claimed in full before
+        // the run is in no inventory, only in `gameEventDrops` (Witchspire, run4h).
+        claimedBefore: fc.oneof(
+          { weight: 3, arbitrary: fc.constant(0) },
+          { weight: 1, arbitrary: intArb("claimedBefore") },
+        ),
+      }),
+      "campaigns",
+    ),
+    channels: listArb(
+      fc.record({
+        game: intArb("game"),
+        viewers: intArb("viewers"),
+        dropsEnabled: fc.boolean(),
+        // One channel in five refuses playback, so most worlds have something to watch.
+        refuses: fc.integer({ min: 0, max: 4 }).map((n) => n === 4),
+        liveAtStart: fc.boolean(),
+        changes: listArb(changeArbitrary(intArb("atMinute")), "changes"),
+      }),
+      "channels",
+    ),
+    // Two places stay free for the faults `refusalsOf` derives.
+    faults: fc.array(faultArbitrary, { maxLength: BOUNDS.faults[1] - 2 }),
+  })
+  .map((s) => ({
+    ...s,
+    // From the latency seed rather than a draw of its own, so every seed keeps the world it had
+    // before `otherGames` existed, and gains only the other games.
+    otherGames: s.latencySeed % (BOUNDS.otherGames[1] + 1),
+  }));
 
 /**
  * A linked campaign that has started, and a drops-enabled channel streaming its game from the
@@ -577,8 +609,10 @@ const baseScenario = (
   r: typeof rivalArbitrary extends fc.Arbitrary<infer R> ? R : never,
   m: typeof measuredArbitrary extends fc.Arbitrary<infer M> ? M : never,
 ): Scenario => {
+  const refusals = refusalsOf(s.latencySeed, o.drops[0]!.requiredMinutes);
   const { game, startMinute, durationMinutes, drops, viewers, changes } = o;
-  const campaign = { game, startMinute, durationMinutes, linked: true, allowList: [], drops };
+  const allowList = refusals.allowListed ? [0] : [];
+  const campaign = { game, startMinute, durationMinutes, linked: true, allowList, drops };
   const live = (g: number, v: number, c: typeof changes) => ({
     game: g,
     viewers: v,
@@ -659,6 +693,8 @@ const baseScenario = (
         ];
   return {
     ...s,
+    ...(refusals.gqlMaxWait === undefined ? {} : { gqlMaxWait: refusals.gqlMaxWait }),
+    faults: [...s.faults, ...refusals.faults],
     settings: { goals },
     campaigns: [...listed, ...hidden],
     channels: channels.map((channel, i) => ({
@@ -671,6 +707,51 @@ const baseScenario = (
       }),
     })),
   };
+};
+
+/**
+ * Worlds where the request budgets refuse, drawn from the latency seed, as `otherGames` is, so
+ * every seed keeps the world it had and only gains these. Without them no sweep refused a claim
+ * or a channel read (review of A7, P1). Each is independent and holds in half the seeds or so:
+ * - `gqlMaxWait` of 1 or 2 s: a discovery burst of more than a few reads is partly refused;
+ * - a `gql-cooldown` of 3 to 5 minutes from the first inventory answer showing a drop to claim,
+ *   a minute before campaign 0's first drop completes or later: that claim is refused;
+ * - a 429 on the first directory read of the first or second catalog read: the budget cools
+ *   down, and every directory and channel read queued behind it is refused at once;
+ * - campaign 0 allow-listed to channel 0: discovery reads its channels after the directories,
+ *   so the read of the channel that earns is the one refused.
+ */
+const refusalsOf = (
+  latencySeed: number,
+  firstDropMinutes: number,
+): {
+  readonly gqlMaxWait: number | undefined;
+  readonly allowListed: boolean;
+  readonly faults: ReadonlyArray<Fault>;
+} => {
+  const draw = Math.floor(latencySeed / (BOUNDS.otherGames[1] + 1));
+  // Set bits add refusals, so a seed shrunk towards 0 sheds them.
+  const bit = (n: number) => Math.floor(draw / 2 ** n) % 2 === 1;
+  const gqlMaxWait = bit(0) ? (bit(1) ? 1_000 : 2_000) : undefined;
+  const allowListed = bit(5);
+  const faults: Array<Fault> = [];
+  if (bit(2)) {
+    // Armed a minute before the drop completes on a watch begun at once (`startCooldown`).
+    faults.push({
+      kind: "gql-cooldown",
+      atMinute: Math.max(0, firstDropMinutes - 1),
+      durationSeconds: 60 * (3 + (Math.floor(draw / 64) % 3)),
+    });
+  }
+  if (bit(3)) {
+    faults.push({
+      kind: "http-429",
+      operation: "DirectoryPage_Game",
+      atMinute: bit(4) ? 0 : 60,
+      durationSeconds: 30,
+    });
+  }
+  return { gqlMaxWait, allowListed, faults };
 };
 
 /**

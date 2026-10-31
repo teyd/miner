@@ -5,6 +5,7 @@ import type { ChannelId } from "../core/model.ts";
 import media from "./fixtures/media-playlist.json" with { type: "json" };
 import offline from "./fixtures/usher-offline.json" with { type: "json" };
 import token from "./fixtures/playback-token.json" with { type: "json" };
+import { CDN_LIMITS, UNLIMITED, makeBudget } from "./budget.ts";
 import { makeGql } from "./gql.ts";
 import { hlsWatch, TOKEN_MARGIN } from "./hls.ts";
 import { DEFAULT_LIMITS, Journal, seal, type Answer } from "./journal.ts";
@@ -24,10 +25,20 @@ const setup = (script: Partial<Omit<PlaybackScript, "down" | "slow">> = {}) => {
     intent: () => Effect.void,
     frame: () => Effect.void,
   });
-  const gql = makeGql(stub.http, { token: Redacted.make(TOKEN), deviceId: DEVICE }, journal);
-  const method = hlsWatch({ gql, cdn: stub.http, deviceId: DEVICE, journal });
+  const budget = (name: "gql" | "cdn") =>
+    Effect.runSync(makeBudget(name, name === "gql" ? UNLIMITED : CDN_LIMITS));
+  const credentials = { token: Redacted.make(TOKEN), deviceId: DEVICE };
+  const gql = makeGql(stub.http, credentials, journal, budget("gql"));
+  const cdn = budget("cdn");
+  const method = hlsWatch({
+    gql,
+    cdn: stub.http,
+    budget: cdn,
+    deviceId: DEVICE,
+    journal,
+  });
   const count = (step: PlaybackStep) => stub.requests.filter((r) => r.step === step).length;
-  return { ...stub, recorded, method, count };
+  return { ...stub, recorded, method, count, cdn };
 };
 
 const failure = <A, E extends { readonly _tag: string }>(effect: Effect.Effect<A, E>) =>
@@ -213,6 +224,23 @@ describe("hlsWatch", () => {
       yield* TestClock.adjust("10 seconds");
       assert.strictEqual(yield* Fiber.join(first), "WatchFailure:network");
       assert.strictEqual(t.count("usher"), 1);
+    }),
+  );
+
+  it.effect("backs the CDN budget off on a 429, and the next tick sends nothing", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(ISSUED);
+      const t = setup({ segment: 429 });
+      const session = yield* t.method.open(target);
+      assert.strictEqual(yield* failure(session.tick), "WatchFailure:network");
+      const sent = t.requests.length;
+      assert.strictEqual(yield* failure(session.tick), "BudgetExhausted");
+      assert.strictEqual(t.requests.length, sent);
+      yield* TestClock.adjust(CDN_LIMITS.cooldown);
+      t.state.segment = 200;
+      yield* Effect.forkChild(session.tick);
+      yield* TestClock.adjust("1 second");
+      assert.isAbove(t.requests.length, sent);
     }),
   );
 

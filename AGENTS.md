@@ -26,7 +26,7 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   `settings.ts` maps `config.json` to core `Settings` before every step (names and logins become ids as the
   catalog and channels arrive) and lists what `Settings` can't express yet (`unmapped`, logged at start).
   `shadow.ts` is the actuator of `run --shadow`: it records and logs what it would do and sends nothing.
-  `live.ts` wires `miner run`: reads and mutations share one pacer and one recorder, state in `state.json`.
+  `live.ts` wires `miner run`: reads and mutations share one set of request budgets and one recorder, state in `state.json`.
   `status.ts` writes `$DATA_DIR/status.json` (tmp + rename, never fatal) from the run loop: on a change (at most
   every 2 s) and on a 30 s heartbeat, the loop's one wake-up besides the core's deadlines; a clean stop writes
   `stoppedAt`.
@@ -43,7 +43,11 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   commands, and wake the core at `nextDeadline(state)`. `fixtures.ts` builds test data.
 - `src/twitch/`: the one Twitch seam. `Twitch.ts` is the service (validate, catalog, inventory, directory,
   streams, current drop), `wire.ts` decodes answers into core types, `identity.ts` holds every Twitch constant
-  with its source and date, `pace.ts` spaces request starts 300 ms apart (under ~5 GQL/s per IP).
+  with its source and date. `budget.ts` holds the request budgets (critique CF-5), one per class: GQL (starts
+  300 ms apart, at most 4 a second and 4 in flight, under ~5 GQL/s per IP) and CDN (one at a time, ≤ 480 a
+  minute); sockets are bounded by `WATCHLIST_LIMIT` and `PUBSUB_MAX_CONNECTIONS`. A request waits for its turn
+  at most `maxWait`, otherwise fails `BudgetExhausted` unsent, and a 429 cools the class down; the core gets a
+  `Throttled` event and reschedules (a refused claim goes the lost-answer way: inventory decides).
   `journal.ts` is the flight recorder: answers and actuator intents, one gzip member per line, one file per UTC
   day in `$DATA_DIR/recordings/`, bounded by days kept, total bytes, bytes per day and a body cap; a failed
   write is logged, never fatal. An answer's parts (objects and arrays of 256+ JSON chars) are written once per
@@ -67,7 +71,13 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
   measured on the 2026-10-30 recordings (research 04 §2b), which `calibration.test.ts` derives again from the relabelled
   `fixtures/calibration-2026-10-30.json`, and which scenarios draw from; `http.ts` serves the reads
   at wire level under the real `Twitch.layer`; `actuator.ts` the typed mutations; `sim.ts` is the loop (step, persist, check, execute) under `TestClock`; `invariants.ts` checks every
-  step. Each seed runs twice and the trace digests must match. A failure prints a capsule to replay.
+  step. The twin enforces Twitch's per-IP limits (`twin.ts`: 429 above 5 GQL/s, at most 10 sockets) and
+  `OverBudget` fails a run that goes over them or over the miner's own budgets; `otherGames` gives worlds
+  catalogs as large as the live one, so discovery bursts happen. A `gql-cooldown` fault (begun by the
+  first inventory answer that shows a drop to claim) and a short `gqlMaxWait` make the budgets refuse
+  claims and channel reads; `ClaimLate` fails a claimable drop left
+  unclaimed (`claimLiveness`), `RefusalDropped` a refused read never sent again, and `sim` prints how many
+  seeds refused each command. Each seed runs twice and the trace digests must match. A failure prints a capsule to replay.
 - `README.md` is the user's tutorial (token, config, running, logs, what needs a person). Change it
   with any user-visible change. `Dockerfile` and `compose.yaml` build and run the image (node alpine
   plus `dist/bin.mjs`, uid 1000, `/data`); `deploy/miner.service` is the systemd unit. Both stop on

@@ -8,6 +8,7 @@ import type {
   DropId,
   DropInstanceId,
   GameId,
+  Millis,
   Progress,
 } from "./model.ts";
 
@@ -69,9 +70,35 @@ export type Event = Data.TaggedEnum<{
     /** `unknown` means the answer was lost or unclassifiable: the claim may have succeeded. */
     readonly outcome: "claimed" | "already-claimed" | "unknown";
   };
+  /**
+   * Request budgets refused these commands' next requests before sending them (critique 08 CF-5).
+   * Refusals that arrive together are one event (`coalesceThrottled`): a budget in cooldown
+   * refuses a whole discovery burst at one instant, and one step per refusal looked like a core
+   * that can't stop waking (`BusyWake`).
+   */
+  Throttled: { readonly refusals: ReadonlyArray<Refusal> };
 }>;
 
 export const Event = Data.taggedEnum<Event>();
+
+/**
+ * Twitch said 429, or no turn came within the budget's wait. A refused `Claim` was not sent. The
+ * command is due again at `retryAt` at the earliest.
+ */
+export interface Refusal {
+  readonly command: Command;
+  readonly budget: "gql" | "cdn";
+  readonly retryAt: Millis;
+}
+
+/**
+ * Merges a run of consecutive `Throttled` events into one, in order. The runtime and the
+ * simulator call it on the events queued behind a `Throttled` they are about to step.
+ */
+export const coalesceThrottled = (events: ReadonlyArray<Event>): Event =>
+  Event.Throttled({
+    refusals: events.flatMap((e) => (e._tag === "Throttled" ? e.refusals : [])),
+  });
 
 /**
  * What the core asks the runtime to do. The runtime persists the new state (claim intents
@@ -106,3 +133,14 @@ export const readKey = (command: ChannelRead): string =>
   command._tag === "ReadDirectory"
     ? `directory:${command.gameId}`
     : `channels:${command.channelIds.join(",")}`;
+
+/** The read a `readKey` names. Ids hold no commas (Twitch's ids are digits). */
+export const readOfKey = (key: string): ChannelRead => {
+  const at = key.indexOf(":");
+  const rest = key.slice(at + 1);
+  return key.slice(0, at) === "directory"
+    ? Command.ReadDirectory({ gameId: rest as GameId })
+    : Command.ReadChannels({
+        channelIds: (rest === "" ? [] : rest.split(",")) as Array<ChannelId>,
+      });
+};

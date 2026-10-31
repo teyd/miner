@@ -73,6 +73,7 @@ const populated: State = {
     tick: undefined,
     online: new Map([[chid("b"), T0 + 2 * MINUTE]]),
     subscribe: T0 + 10_000,
+    deferred: new Map([["directory:g1", T0 + 30_000]]),
   },
 };
 
@@ -119,16 +120,32 @@ const version2 = (): string => {
     inventoried: ____,
     avoidCampaigns: _____,
     skipCauses: ______,
+    deadlines,
     ...rest
   } = populated;
+  const { deferred: _______, ...older } = deadlines;
   const settings = { badgesAndEmotes: true, excludeChannels: ["x"], games: ["game-1"] };
-  return `{"state":${canonical({ ...rest, watch: watch3(), settings })},"version":2}`;
+  return `{"state":${canonical({ ...rest, watch: watch3(), settings, deadlines: older })},"version":2}`;
 };
 
 /** A state file as version 3 wrote it (the live miner's of 2026-10-30): no received rewards. */
 const version3 = (): string => {
-  const { awarded: _, inventoried: __, avoidCampaigns: ___, skipCauses: ____, ...rest } = populated;
-  return `{"state":${canonical({ ...rest, watch: watch3() })},"version":3}`;
+  const {
+    awarded: _,
+    inventoried: __,
+    avoidCampaigns: ___,
+    skipCauses: ____,
+    deadlines,
+    ...rest
+  } = populated;
+  const { deferred: _____, ...older } = deadlines;
+  return `{"state":${canonical({ ...rest, watch: watch3(), deadlines: older })},"version":3}`;
+};
+
+/** A state file as version 4 wrote it (before request budgets): no `deadlines.deferred`. */
+const version4 = (): string => {
+  const { deferred: _, ...older } = populated.deadlines;
+  return `{"state":${canonical({ ...populated, deadlines: older })},"version":4}`;
 };
 
 describe("decodeState", () => {
@@ -137,16 +154,16 @@ describe("decodeState", () => {
     assert.deepStrictEqual(decoded.progress, populated.progress);
     assert.deepStrictEqual(decoded.claims, populated.claims);
     assert.deepStrictEqual(decoded.catalog, populated.catalog);
-    assert.deepStrictEqual(decoded.deadlines, populated.deadlines);
+    assert.deepStrictEqual(decoded.deadlines, { ...populated.deadlines, deferred: new Map() });
     assert.deepStrictEqual(decoded.watch, { ...watching, wasted: undefined });
     assert.isUndefined(decoded.discovery);
     assert.deepStrictEqual(decoded.settings, { goals: [DEFAULT_GOAL] });
     assert.strictEqual(decoded.awarded.size, 0);
-    // Saved again, it is a version 4 file that reads back the same.
+    // Saved again, it is a version 5 file that reads back the same.
     assert.deepStrictEqual(decodeState(encodeState(decoded)), decoded);
   });
 
-  it("migrates version 3: nothing received or avoided yet, everything else kept", () => {
+  it("migrates version 3: nothing received, avoided or deferred yet, everything else kept", () => {
     const decoded = decodeState(version3());
     const expected: State = {
       ...populated,
@@ -155,28 +172,41 @@ describe("decodeState", () => {
       avoidCampaigns: new Map(),
       skipCauses: new Map(),
       watch: { ...watching, wasted: undefined },
+      deadlines: { ...populated.deadlines, deferred: new Map() },
     };
     assert.deepStrictEqual(decoded, expected);
+    assert.strictEqual(canonical(decoded.claims), canonical(populated.claims));
     assert.deepStrictEqual(decodeState(encodeState(decoded)), decoded);
-    assert.match(encodeState(decoded), /"version":4}$/);
+    assert.match(encodeState(decoded), /"version":5}$/);
+  });
+
+  it("migrates version 4 with nothing deferred, keeping everything else", () => {
+    const decoded = decodeState(version4());
+    const deadlines = { ...populated.deadlines, deferred: new Map() };
+    assert.deepStrictEqual(decoded, { ...populated, deadlines });
+    assert.strictEqual(decoded.deadlines.deferred.size, 0);
+    assert.strictEqual(canonical(decoded.claims), canonical(populated.claims));
+    assert.deepStrictEqual(decodeState(encodeState(decoded)), decoded);
   });
 
   it("reads the unmerged first version 4, which saved skipped campaigns as a set", () => {
-    const { skipCauses: _, ...rest } = populated;
-    const text = `{"state":${canonical({ ...rest, avoidCampaigns: new Set([cid("old")]) })},"version":4}`;
+    const { skipCauses: _, deadlines, ...rest } = populated;
+    const { deferred: __, ...older } = deadlines;
+    const text = `{"state":${canonical({ ...rest, deadlines: older, avoidCampaigns: new Set([cid("old")]) })},"version":4}`;
     const decoded = decodeState(text);
     assert.deepStrictEqual(decoded, {
       ...populated,
       avoidCampaigns: new Map(),
       skipCauses: new Map(),
+      deadlines: { ...populated.deadlines, deferred: new Map() },
     });
   });
 
   it("refuses another version and text that isn't a state", () => {
     const text = encodeState(populated);
-    assert.match(text, /"version":4}$/);
-    assert.throws(() => decodeState(text.replace('"version":4', '"version":1')), /version 1/);
-    assert.throws(() => decodeState(text.replace('"version":4', '"version":5')), /version 5/);
+    assert.match(text, /"version":5}$/);
+    assert.throws(() => decodeState(text.replace('"version":5', '"version":1')), /version 1/);
+    assert.throws(() => decodeState(text.replace('"version":5', '"version":6')), /version 6/);
     assert.throws(() => decodeState(canonical(populated)), /not a saved miner state/);
     assert.throws(() => decodeState("{"));
   });
@@ -186,10 +216,11 @@ describe("decodeState", () => {
     assert.throws(() => decodeState('{"version":3,"state":{}}'), /not a saved miner state/);
     assert.throws(() => decodeState('{"version":3,"state":[]}'), /not a saved miner state/);
     assert.throws(() => decodeState('{"version":4,"state":{}}'), /not a saved miner state/);
+    assert.throws(() => decodeState('{"version":5,"state":{}}'), /not a saved miner state/);
     const saved = JSON.parse(encodeState(populated)) as { state: Record<string, unknown> };
     for (const key of Object.keys(saved.state)) {
       const { [key]: _, ...rest } = saved.state;
-      const text = JSON.stringify({ state: rest, version: 4 });
+      const text = JSON.stringify({ state: rest, version: 5 });
       assert.throws(() => decodeState(text), /not a saved miner state/, key);
     }
     // A claim intent missing its status could be resent: refused, not guessed at.
@@ -197,13 +228,16 @@ describe("decodeState", () => {
     const broken = claims.$map.map(([k, v]): [string, unknown] => [k, { ...v, status: "lost" }]);
     const text = JSON.stringify({
       state: { ...saved.state, claims: { $map: broken } },
-      version: 4,
+      version: 5,
     });
     assert.throws(() => decodeState(text), /`claims`/);
   });
 
-  it("keeps claim intents exactly through the version 2 migration", () => {
-    const decoded = decodeState(version2());
-    assert.strictEqual(canonical(decoded.claims), canonical(populated.claims));
+  it("keeps claim intents exactly through every migration", () => {
+    for (const text of [version2(), version3(), version4()]) {
+      const decoded = decodeState(text);
+      assert.strictEqual(canonical(decoded.claims), canonical(populated.claims));
+      assert.deepStrictEqual(decoded.claims, populated.claims);
+    }
   });
 });

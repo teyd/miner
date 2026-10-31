@@ -120,7 +120,8 @@ export const inventory = (world: World, now: Millis) =>
 
 /** The `DROPS_ENABLED` directory: live, drops-enabled channels streaming the game, most viewers first. */
 export const directory = (world: World, slug: string, limit: number, now: Millis) => {
-  const game = GAMES.find((g) => g.slug === slug);
+  const game =
+    GAMES.find((g) => g.slug === slug) ?? world.campaigns.find((c) => c.game.slug === slug)?.game;
   return Schema.encodeSync(Directory)({
     game:
       game === undefined

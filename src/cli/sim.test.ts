@@ -186,20 +186,24 @@ describe("miner sim", () => {
     ),
   );
 
-  it.effect("gives the same sweep digest for the same seeds, and another for other seeds", () =>
-    Effect.gen(function* () {
-      const digestOf = (seed: number) =>
-        Effect.gen(function* () {
-          yield* simulate({ seed, seeds: 2, trace: Option.none(), json: true });
-          const lines = yield* TestConsole.logLines;
-          return JSON.parse(String(lines.at(-1))).sweepDigest as string;
-        });
-      const a = yield* digestOf(21);
-      const b = yield* digestOf(21);
-      const c = yield* digestOf(22);
-      assert.strictEqual(a, b);
-      assert.notStrictEqual(a, c);
-    }).pipe(Effect.provide([NodeServices.layer, TestConsole.layer])),
+  it.effect(
+    "gives the same sweep digest for the same seeds, and another for other seeds",
+    () =>
+      Effect.gen(function* () {
+        const digestOf = (seed: number) =>
+          Effect.gen(function* () {
+            yield* simulate({ seed, seeds: 2, trace: Option.none(), json: true });
+            const lines = yield* TestConsole.logLines;
+            return JSON.parse(String(lines.at(-1))).sweepDigest as string;
+          });
+        const a = yield* digestOf(21);
+        const b = yield* digestOf(21);
+        const c = yield* digestOf(22);
+        assert.strictEqual(a, b);
+        assert.notStrictEqual(a, c);
+      }).pipe(Effect.provide([NodeServices.layer, TestConsole.layer])),
+    // Three two-seed sweeps, each seed run twice: over 30 s on CI's 4-core runner.
+    120_000,
   );
 });
 

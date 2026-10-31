@@ -55,6 +55,11 @@ export default defineConfig({
     format: ["esm"],
     platform: "node",
     dts: false,
+    // V8 keeps the source of the whole bundle for the process's life, as two bytes a character
+    // once one isn't ASCII (a comment's "—" was enough), and parses it at start: minified ASCII is
+    // 0.8 MB instead of 4.4 (research 03 §2). Names stay, for stack traces.
+    minify: { compress: true, mangle: { keepNames: true }, codegen: { removeWhitespace: true } },
+    outputOptions: { charset: "ascii" },
     clean: true,
     // One self-contained file: research 03 measured 104 MB RSS unbundled vs 66 MB bundled.
     deps: {

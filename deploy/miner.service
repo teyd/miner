@@ -23,7 +23,11 @@ Environment=LOG_FORMAT=pretty
 StateDirectory=miner
 StateDirectoryMode=0750
 WorkingDirectory=/var/lib/miner
-ExecStart=/usr/bin/node /opt/miner/bin.mjs run
+# Only V8's interpreter, its heap sized for memory over speed (as `run` sets itself, here from
+# node's start), and glibc returning the memory V8 parsed the bundle with instead of keeping
+# 11 MB of it: 83 MB RSS instead of 130 (research 03 §2).
+Environment=MALLOC_MMAP_THRESHOLD_=16384
+ExecStart=/usr/bin/node --optimize-for-size --no-opt --no-maglev --no-sparkplug /opt/miner/bin.mjs run
 
 # SIGINT and SIGTERM both stop the miner cleanly, with exit code 130.
 KillSignal=SIGINT

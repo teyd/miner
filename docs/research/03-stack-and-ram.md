@@ -14,6 +14,10 @@ on that date. RAM figures were measured on this machine (Linux 6.8, x64, Node 26
 - **RAM: bundling is the big lever.** Effect + HTTP + pino + `node:sqlite`, idle:
   **104 MB RSS unbundled → 66 MB as a tree-shaken bundle** (heap 19 → 7 MB). Bare Node is 47 MB.
   So the image should ship one bundled file, not `node_modules`.
+- **The running miner: 130 MB RSS → 83 MB** (systemd) or 88 MB (Docker), measured on the twin
+  over TLS (§2c, 2026-10-31). The heap held no leak and little data: V8's compilers, the
+  bundle's source as UTF-16 and glibc keeping parse memory were the difference. A simulated week
+  keeps the heap flat (`miner sim --heap`).
 - **Decided: Effect 4.1.0** (teyd, 2026-10-29). Release post dated 2026-10-20, npm `latest`
   published 2026-10-29. What changed and what it means for us is in §1b. `@effect/sql-drizzle` is
   stale (0.51, v3 era). If we want drizzle, use drizzle's own `drizzle-orm/effect-sqlite-node`.
@@ -102,6 +106,108 @@ simulator's logs replay under `TestClock`), and there's no extra dependency.
   `Logger.batched`), created on the first log line, and a failed write is dropped, never fatal.
   `LOG_FILE=false` turns it off where a log driver already keeps stderr. Effect's own
   `Logger.toFile` doesn't rotate, which is why this is ours. No gzip: 60 MB doesn't need it.
+
+## 2c. The running miner: 130 MB to 83 MB (measured 2026-10-31, roadmap C2)
+
+The 4 h live run of 2026-10-29 (roadmap A0) sat at 126–131 MB RSS, flat, against the ≤ 90 MB
+target above. Flat means no leak: the memory was a baseline, so C2 measured where it goes.
+
+**Method.** The bundle (`dist/bin.mjs`, unmodified) runs `miner run` against the twin served over
+real localhost sockets, HTTPS and WSS with a self-signed certificate, so TLS costs what it costs
+live. Simulated time runs 10× real, in both processes. The twin plays `weekScenario` of
+`src/twin/heap.ts`: watching, a claim every few hours, 80 channels over several PubSub sockets,
+14 directory reads per catalog read. Two preloads route `fetch` and `WebSocket` to the twin and
+sample `process.memoryUsage()` and `/proc/self/smaps_rollup` every 20 s, without forcing a
+collection. The figures are the mean of the last three samples of 5-minute runs (50 simulated
+minutes), two runs each, on Linux 6.8 x64. Runs of the same setup agree within 2 MB. The scripts
+are in [03-rss-harness.md](03-rss-harness.md). The harness reproduces the live figure:
+129.6 MB before any change.
+
+**Where 130 MB went** (glibc, before):
+
+| Part                                                                 | MB  |
+| -------------------------------------------------------------------- | --- |
+| `node` binary pages (code and ICU/OpenSSL tables), file-backed       | 62  |
+| V8 heap (`heapTotal`; 23 used)                                       | 30  |
+| glibc's heap: 11 MB of it is memory V8 parsed the bundle with, freed | 18  |
+| external: the bundle's source, kept as UTF-16                        | 7.6 |
+| thread stacks, V8's own pages and the rest                           | 12  |
+
+A heap snapshot of the running miner (26 MB) has no data structure worth mentioning. The 2.2 MB
+bundle's source is 4.4 MB of it: one `—` in a doc comment made V8 store all of it two bytes a
+character. Bytecode, baseline code and feedback are 9.8 MB. All JavaScript objects, arrays,
+closures and maps (the state, the decoded catalog, fibers, layers, Node's own) are about 5 MB.
+
+The data the miner holds is small even at the live catalog's size. The twin's week has 18
+campaigns; live had 123 (research 02, 2026-10-29), so `subsystems.ts` of the harness measures
+each holder at that size, as retained heap after a forced collection:
+
+| Held by                                                                       | Retained    |
+| ----------------------------------------------------------------------------- | ----------- |
+| `State.catalog`: 123 campaigns as core types (only the fields the core reads) | 0.31 MB     |
+| `run.ts`'s `saved`, the canonical durable state it compares before a save     | 0.12 MB     |
+| the journal's remembered parts, at their cap (16,384 ids of 16 characters)    | 0.99 MB max |
+| 80 PubSub topics, the device id (32 characters)                               | < 0.01 MB   |
+| `status.json`, written each change and every 30 s, not kept                   | 0           |
+
+A catalog read's answers (0.5 MB parsed, 0.34 MB decoded) are garbage once `toCampaign` has
+taken the fields the core uses: `State` never held the wire's catalog. The state is encoded
+only when what a restart keeps changed (`durableChanged` in `src/runtime/run.ts`), not every step. The journal
+remembered 8 parts in the harness's 50 minutes. Nothing here was worth a change; the simulated
+week (below) finds no growth either. Effect's runtime and layers are part of the 5 MB of objects.
+
+**Fixes**, in the order they matter:
+
+1. **V8 flags** (`LEAN_V8_FLAGS` in `src/platform/memory.ts`): `--optimize-for-size --no-opt
+   --no-maglev --no-sparkplug`, only V8's interpreter, and the heap sized for memory over speed.
+   The compilers' code is gone from the heap, and their pages of the `node` binary are never
+   read. `run` sets them itself; the Dockerfile and the systemd unit also give them to `node`,
+   which saves 3 MB more from its start. CPU: 0.55 % of a core instead of 0.43 % on the same
+   run (measured at 10×, 300 s). `--jitless` would save more, but it removes WebAssembly, and
+   `fetch` (undici) parses HTTP with it: the miner then hung without a request or a log line.
+2. **`MALLOC_MMAP_THRESHOLD_=16384`** on glibc (the systemd unit). V8 parses the bundle in 11 MB
+   of 32 kB blocks and frees them, but glibc keeps freed memory below its top. Above the
+   threshold, blocks are `mmap`ped and go back on free. musl (the Alpine image) returns it
+   already. `jemalloc` (`LD_PRELOAD`) was worse.
+3. **A minified ASCII bundle** (`vite.config.ts`): 0.79 MB instead of 2.2 MB, stored one byte
+   a character, and less to parse at start. Names are kept, for stack traces.
+4. **No ICU collation**: `localeCompare` sorted ids in the core and the twin. Its first call loads
+   ICU's collation data (2 MB of the binary's pages), and it orders by the host's locale. Ids
+   and names now sort by code unit (`compareText` in `src/core/plan.ts`).
+
+**Results** (MB RSS, steady, while watching; heap snapshot 26 → 18 MB):
+
+| How it runs                                      | Before | After | Anon | File | Heap used |
+| ------------------------------------------------ | ------ | ----- | ---- | ---- | --------- |
+| systemd unit (glibc, flags and env)              | 130    | 83    | 28   | 55   | 14        |
+| Docker image (Alpine, musl, flags)               | 115    | 88    | 28   | 60   | 14        |
+| plain `node dist/bin.mjs run`, `pnpm dev`, glibc | 130    | 100   | 43   | 57   | 15        |
+| the same with `MALLOC_MMAP_THRESHOLD_=16384`     | 112    | 87    | 29   | 57   | 15        |
+
+Re-measured on dev `3285768` (with config reload and the verify tooling), four runs at once:
+129.6 → 82.7 MB as the unit runs it, 98.1 MB plain, and 110.9 MB for the old bundle with only
+`MALLOC_MMAP_THRESHOLD_` (heap used 22.7 → 13.6 MB).
+
+The file-backed pages are the `node` binary's, shared with any other node process and dropped
+first under memory pressure. They are a third of the binary: little more is left to cut without
+a custom Node build.
+
+**What didn't help:** `--max-semi-space-size=1` (− 1 MB once the rest was in),
+`--v8-pool-size=1`, `MALLOC_ARENA_MAX=2`, `--single-threaded` (+ 20 MB: no concurrent marking,
+the heap grows), `--managed-zone-memory` (most of the env's gain as a flag, but an obscure
+one), and `node:https` with `ws` instead of `fetch` and undici: − 6 MB of binary pages, + 6 MB
+of heap and buffers, and a transport change nobody has run against Twitch.
+
+**The simulated week** (`src/twin/heap.ts`, `miner sim --heap`, `heap.test.ts`): `weekScenario`
+for 10,080 simulated minutes, the miner's own services over the twin's wire, with a PubSub
+`RECONNECT` every day, API errors, lost frames, an edge outage, stalled playlists and a crash on
+day 3; the heap sampled after a forced collection every 6 simulated hours. It credits 7,680
+minutes and claims all 12 drops. On the bundle the heap (twin included) stays at 15.4–16.1 MB
+used (15.0–16.1 MB in a second run, RSS 171–203 MB with the twin's bursts), 0.3–0.4 MB above
+the first day's at the end; under the test runner 37–38 MB used, 0.4 MB of growth
+(`pnpm exec vp test src/twin/heap.test.ts --silent=false` prints the series). The bound is 6 MB
+of growth after the first day (a leak of 1 KB a simulated minute is 9 MB) and 128 MB used; a
+planted leak of 1 KB a request fails it. A week takes 60 s.
 
 ## 3. Persistence: do we need SQL at all?
 

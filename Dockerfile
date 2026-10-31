@@ -27,5 +27,8 @@ VOLUME /data
 # `miner status` reads /data/status.json: 0 healthy or starting, 1 not running or hung (no heartbeat
 # for 90 s), 2 needs login, 3 discovery broken. Any of 1–3 marks the container unhealthy.
 HEALTHCHECK --interval=1m --timeout=10s --start-period=2m CMD ["node", "/app/bin.mjs", "status"]
-ENTRYPOINT ["node", "/app/bin.mjs"]
+# Only V8's interpreter, and its heap sized for memory over speed: `run` sets the same flags
+# itself, and from node's command line they apply from its start (88 MB RSS instead of 115,
+# research 03 §2). They slow `sim` down, which the image rarely runs.
+ENTRYPOINT ["node", "--optimize-for-size", "--no-opt", "--no-maglev", "--no-sparkplug", "/app/bin.mjs"]
 CMD ["run"]

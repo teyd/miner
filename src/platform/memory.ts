@@ -29,3 +29,22 @@ export const sample: Effect.Effect<MemorySample> = Effect.sync(() => {
   const { rss, heapUsed, heapTotal, external } = process.memoryUsage();
   return { rss, heapUsed, heapTotal, external };
 });
+
+/**
+ * V8 flags for a process that idles between small bursts for days (research 03 §2): size over
+ * speed for the heap, and only the interpreter: the compilers' code, and the pages of the `node`
+ * binary they run from, cost 13 MB of RSS for CPU the miner doesn't use. WebAssembly still
+ * compiles, which `fetch` needs (`--jitless` would stop it). V8 reads these when it decides, so
+ * setting them at the start of `run` takes effect from then on; `node` given them on its command
+ * line (the Dockerfile, `deploy/miner.service`) saves 3 MB more, from its start.
+ */
+export const LEAN_V8_FLAGS = [
+  "--optimize-for-size",
+  "--no-opt",
+  "--no-maglev",
+  "--no-sparkplug",
+] as const;
+
+export const leanV8: Effect.Effect<void> = Effect.sync(() => {
+  for (const flag of LEAN_V8_FLAGS) v8.setFlagsFromString(flag);
+});

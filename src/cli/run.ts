@@ -12,6 +12,7 @@ import { unmapped } from "../runtime/settings.ts";
 import { LIVE_STATE, liveLayer } from "../runtime/live.ts";
 import { SHADOW_STATE, shadowLayer } from "../runtime/shadow.ts";
 import { Instance } from "../platform/instance.ts";
+import { leanV8 } from "../platform/memory.ts";
 import { lockDataDir } from "../platform/lock.ts";
 import { Connector } from "../twitch/PubSub.ts";
 import { Credentials } from "../twitch/Twitch.ts";
@@ -37,6 +38,8 @@ export const run = Command.make(
     ),
   },
   Effect.fn(function* ({ shadow }) {
+    // Before the services are built: the run is the miner's one long-lived process.
+    yield* leanV8;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const dir = path.resolve(yield* dataDir);

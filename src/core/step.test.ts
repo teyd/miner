@@ -602,6 +602,22 @@ describe("rewards already received, and credit the plan can't use", () => {
     assert.strictEqual(watchedCampaign(d.state), "o");
   });
 
+  it("doesn't skip again on a stale frame once the campaign has earned again", () => {
+    // Review of A6: one stale frame for the old cause used to cost a fresh hour of a campaign
+    // that had credited seconds before.
+    const d = skippedWitch();
+    const until = d.state.avoidCampaigns.get(witch.id)!;
+    tickAnswered(d, until);
+    assert.strictEqual(watchedCampaign(d.state), "w");
+    // The Logo earns a minute: the skip's cause is gone.
+    const earned = until + MINUTE;
+    d.send(Event.DropProgress({ dropId: did("w-logo"), minutes: 1 }), earned);
+    assert.strictEqual(d.state.skipCauses.has(witch.id), false);
+    // A straggling frame for the Gold Stamp, with the same number, earns nothing and must not skip.
+    d.send(Event.DropProgress({ dropId: did("w-stamp"), minutes: 400 }), earned + MINUTE);
+    assert.strictEqual(d.state.avoidCampaigns.has(witch.id), false);
+  });
+
   it("gives the channel a fresh stall for its next target after a campaign skip", () => {
     const d = watchingWitch();
     const third = campaign("t", { endsAt: T0 + 30 * HOUR });

@@ -111,8 +111,8 @@ export interface Checker {
   readonly fairlyAvoided: ReadonlySet<ChannelId>;
   /** Campaigns the core avoids for a reason the twin agrees with, each until when. */
   readonly fairlyAvoidedCampaigns: ReadonlyMap<CampaignId, Millis>;
-  /** The core's last campaign skip: the watched channel gets a fresh stall for its next target. */
-  readonly campaignSkippedAt: Millis | undefined;
+  /** The core's last campaign skip per channel: that channel gets a fresh stall for its next target. */
+  readonly campaignSkippedAt: ReadonlyMap<ChannelId, Millis>;
   /** The core's last inventory read since a restart. */
   readonly lastInventoryAt: Millis | undefined;
   /** Channels whose last schedule change reached the core as a frame. */
@@ -124,6 +124,8 @@ export interface Checker {
   readonly unknownCreditAt: Millis | undefined;
   /** When each channel last credited a campaign the settings want. */
   readonly lastWantedCredit: ReadonlyMap<ChannelId, Millis>;
+  /** When each channel last credited a minute that earned, for any goal that may watch it. */
+  readonly lastEarnedCredit: ReadonlyMap<ChannelId, Millis>;
   /** When each campaign last had a credit the settings want, on any channel. */
   readonly lastWantedCampaignCredit: ReadonlyMap<CampaignId, Millis>;
   readonly lastObservedAt: Millis;
@@ -161,10 +163,11 @@ export const initialChecker: Checker = {
   restartedAt: undefined,
   fairlyAvoided: new Set(),
   fairlyAvoidedCampaigns: new Map(),
-  campaignSkippedAt: undefined,
+  campaignSkippedAt: new Map(),
   lastInventoryAt: undefined,
   heard: new Set(),
   lastWantedCredit: new Map(),
+  lastEarnedCredit: new Map(),
   lastWantedCampaignCredit: new Map(),
   lastObservedAt: SIM_EPOCH,
   lastSaved: undefined,
@@ -203,6 +206,32 @@ const wantedCredit = (
           (d) => earnedAt(world, d, credit.at) && !looksReceived(world, d, credit.at),
         ),
     )
+  );
+};
+
+/**
+ * A credit that moved minutes forward inside a drop's requirement, in a campaign some goal that may
+ * watch this channel asks for. Weaker than `wantedCredit` by design: it leaves out "looks already
+ * received", where the core's own `awarded` set and the twin can disagree by one inventory read, and
+ * it is only used to restart the unproductive clock (a credit that earns is evidence Twitch credits
+ * the channel, not that the drop is worth keeping).
+ */
+const earnedWantedCredit = (
+  world: World,
+  credit: Credit,
+  avoided: ReadonlyMap<CampaignId, Millis>,
+) => {
+  const campaign = world.campaigns.find((x) => x.id === credit.campaignId);
+  if (campaign === undefined || skippedAt(avoided, credit.at).has(campaign.id)) return false;
+  return campaign.drops.some(
+    (d) =>
+      credit.dropIds.includes(d.id) &&
+      earnedAt(world, d, credit.at) &&
+      world.settings.goals.some(
+        (g) =>
+          !g.excludeChannels.includes(credit.channelId) &&
+          goalDrops(g, campaign, (id) => isClaimedAt(world, id, credit.at)).includes(d),
+      ),
   );
 };
 
@@ -295,7 +324,7 @@ export const checkStep = (
       unknownCreditAt: undefined,
       fairlyAvoided: new Set(),
       fairlyAvoidedCampaigns: new Map(),
-      campaignSkippedAt: undefined,
+      campaignSkippedAt: new Map(),
       lastInventoryAt: undefined,
       heard: new Set(),
       lastWatch: undefined,
@@ -373,6 +402,7 @@ export const checkStep = (
     }
   }
   const lastWantedCredit = new Map(c.lastWantedCredit);
+  const lastEarnedCredit = new Map(c.lastEarnedCredit);
   const lastWantedCampaignCredit = new Map(c.lastWantedCampaignCredit);
   for (const credit of o.activity.credits) {
     if (o.state.catalog?.some((x) => x.id === credit.campaignId) !== true) {
@@ -380,12 +410,15 @@ export const checkStep = (
     }
     if (isRevoked(world, credit.at))
       fail("TwinBroken", `credit on ${credit.channelId} after revoke`);
+    if (earnedWantedCredit(world, credit, c.fairlyAvoidedCampaigns)) {
+      lastEarnedCredit.set(credit.channelId, credit.at);
+    }
     if (wantedCredit(world, credit, c.fairlyAvoidedCampaigns)) {
       lastWantedCredit.set(credit.channelId, credit.at);
       lastWantedCampaignCredit.set(credit.campaignId, credit.at);
     }
   }
-  c = { ...c, lastWantedCredit, lastWantedCampaignCredit };
+  c = { ...c, lastWantedCredit, lastWantedCampaignCredit, lastEarnedCredit };
   const session = world.session;
   if (session !== undefined && session.creditedSeconds * 1000 > o.now - session.openedAt + 1) {
     fail("TwinBroken", `session on ${session.channelId} credited more than its open time`);
@@ -601,7 +634,10 @@ const checkCommands = (
       c = {
         ...c,
         fairlyAvoidedCampaigns: new Map([...c.fairlyAvoidedCampaigns, [id, until]]),
-        campaignSkippedAt: o.now,
+        campaignSkippedAt:
+          channelId === undefined
+            ? c.campaignSkippedAt
+            : new Map([...c.campaignSkippedAt, [channelId, o.now]]),
       };
     } else {
       fail(
@@ -803,7 +839,15 @@ const checkIdle = (
   // (`wire.ts`), so only the stall rule can find out.
   const watching = o.state.watch._tag === "Watching";
   const watchedFor =
-    o.now - Math.max(since, checker.watchSince ?? since, checker.unknownCreditAt ?? since);
+    o.now -
+    Math.max(
+      since,
+      checker.watchSince ?? since,
+      checker.unknownCreditAt ?? since,
+      checker.campaignSkippedAt.get(
+        o.state.watch._tag === "Watching" ? o.state.watch.channelId : ("" as ChannelId),
+      ) ?? -Infinity,
+    );
   const late = watching
     ? watchedFor > STALL_AFTER + 2 * MINUTE
     : o.now - since > CATALOG_INTERVAL + 2 * MINUTE ||
@@ -817,7 +861,9 @@ const checkIdle = (
     );
     return { ...checker, idleSince: undefined, knownSince: undefined };
   }
-  return { ...checker, idleSince: since, knownSince };
+  // While watching, `knownSince` restarts: the chance became known when the watch did, not when
+  // the channel was first seen live hours before.
+  return { ...checker, idleSince: since, knownSince: watching ? undefined : knownSince };
 };
 
 /**
@@ -841,9 +887,10 @@ const checkUnproductive = (
   const since = Math.max(
     c.watchSince,
     c.lastWantedCredit.get(w.channelId) ?? -Infinity,
+    c.lastEarnedCredit.get(w.channelId) ?? -Infinity,
     c.unknownCreditAt ?? -Infinity,
     c.restartedAt ?? -Infinity,
-    c.campaignSkippedAt ?? -Infinity,
+    c.campaignSkippedAt.get(w.channelId) ?? -Infinity,
     ...faults.map((x) => x.to),
   );
   if (o.now - since > STALL_AFTER + 2 * MINUTE) {

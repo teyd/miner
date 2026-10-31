@@ -2,6 +2,7 @@ import {
   MINUTE,
   claimKey,
   type Campaign,
+  type CampaignId,
   type Channel,
   type ChannelId,
   type Drop,
@@ -377,6 +378,11 @@ const ticked = (s: State, channelId: ChannelId, now: Millis): Handled => {
   ];
 };
 
+const clearSkip = (s: State, campaignId: CampaignId): State =>
+  s.skipCauses.has(campaignId)
+    ? { ...s, skipCauses: new Map([...s.skipCauses].filter(([id]) => id !== campaignId)) }
+    : s;
+
 /**
  * Give up the watched campaign until Twitch may have moved off `drop`: its window's end, or
  * `CAMPAIGN_SKIP`. The channel gets a fresh clock for its next target (the stall was the
@@ -385,7 +391,12 @@ const ticked = (s: State, channelId: ChannelId, now: Millis): Handled => {
 const skipCampaign = (s: State, drop: Drop, now: Millis): State => {
   const w = s.watch;
   if (w._tag !== "Watching") return s;
-  const until = Math.max(now + WATCH_INTERVAL, Math.min(drop.endsAt, now + CAMPAIGN_SKIP));
+  // A cause whose window is over will not be credited again: skip the full period, or the 20 s
+  // floor would retry it every 80 s (review of A6). Otherwise retry no sooner than a catalog read.
+  const until =
+    drop.endsAt <= now
+      ? now + CAMPAIGN_SKIP
+      : Math.max(now + CATALOG_RETRY, Math.min(drop.endsAt, now + CAMPAIGN_SKIP));
   return {
     ...s,
     avoidCampaigns: new Map([...s.avoidCampaigns, [w.campaignId, until]]),
@@ -433,11 +444,19 @@ const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Ra
     if (again) return skipCampaign(updated, found.drop, now);
     return { ...updated, watch: { ...w, wasted: dropId } };
   }
+  // The campaign earns again, so a skip it caused is over: a straggling frame for that drop must
+  // not skip it again (review of A6: one stale frame cost a fresh hour).
+  const clears = clearSkip(updated, found.campaign.id);
   if (!usableOn(input, found.campaign, found.drop, w.channelId, rank)) {
-    return { ...updated, watch: { ...w, confirmedAt: now, wasted: undefined } };
+    // A filtered-out drop beside the wanted one in the watched campaign (parallel drops) shows
+    // Twitch is crediting here: confirm, don't adopt. Another campaign's credit is no such sign:
+    // it must count toward giving the channel up, or an unwanted campaign would hold it forever.
+    return found.campaign.id === w.campaignId
+      ? { ...clears, watch: { ...w, confirmedAt: now, wasted: undefined } }
+      : { ...updated, watch: { ...w, wasted: dropId } };
   }
   return {
-    ...updated,
+    ...clears,
     watch: {
       ...w,
       campaignId: found.campaign.id,
@@ -463,7 +482,7 @@ const confirmWatched = (s: State, now: Millis): State => {
   const minutes = Math.min(s.progress.get(w.dropId)?.minutes ?? 0, required);
   if (minutes <= w.confirmedMinutes) return s;
   return {
-    ...s,
+    ...clearSkip(s, w.campaignId),
     watch: {
       ...w,
       confirmedAt: now,

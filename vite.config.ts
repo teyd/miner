@@ -30,6 +30,10 @@ export default defineConfig({
       "effecttsgo/unstable-api-usage": "off",
       "effecttsgo/experimental-api-usage": "off",
     },
+    // Not app code, like scripts/hooks/*.sh: plain Node CLIs that spawn the built miner and read
+    // files. They never run under the simulator, so the determinism rules do not apply to them,
+    // and the override list below stays what AGENTS.md says it is.
+    ignorePatterns: ["scripts/verify/**"],
     overrides: [
       {
         files: ["src/bin.ts", "src/platform/**"],
@@ -42,7 +46,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
     // Simulator-driven tests take seconds here and 2–3× that on CI's 4-core runner (#22, #25).
     testTimeout: 30_000,
   },

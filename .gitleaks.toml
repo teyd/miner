@@ -67,6 +67,13 @@ paths = [
 regexTarget = "line"
 regexes = ['''SECRET''']
 
+# verify-miner's recordings.mjs test plants this fake value in a log and checks it is found but never printed.
+[[allowlists]]
+description = "fake secret in the verify scripts' leak test"
+condition = "AND"
+paths = ['''^scripts/verify/verify\.test\.ts$''']
+regexes = ['''^SECRETabcdef123456$''']
+
 [[allowlists]]
 description = "early leak corpus, removed in history"
 condition = "AND"

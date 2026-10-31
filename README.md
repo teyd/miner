@@ -318,6 +318,7 @@ docker compose start
 | `miner config validate` | Check `config.json` offline. `--json` for scripts and agents.                   |
 | `miner config schema`   | Print the JSON Schema.                                                          |
 | `miner sim`             | Run the miner against a simulated Twitch, wire and all. Talks to no one.        |
+| `miner sim --shadow D`  | A shadow run over the simulated Twitch, its files written to the empty dir `D`. |
 
 Each takes `--help`. In Docker: `docker compose run --rm miner <command>`. `miner status` reads the running
 miner's `status.json` (in Docker: `docker compose exec miner node /app/bin.mjs status`), and its exit code is the
@@ -326,5 +327,6 @@ image's health check: 0 healthy or starting, 1 not running, 2 needs login, 3 dis
 ## Developing
 
 [`AGENTS.md`](AGENTS.md) covers the layout, the commands and the rules (`pnpm check` is the gate).
+`pnpm verify` proves a change without Twitch ([`docs/verification.md`](docs/verification.md)).
 Settled design choices are in [`docs/decisions.md`](docs/decisions.md), and the research behind
 them, with sources, in [`docs/research/`](docs/research/).

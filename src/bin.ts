@@ -39,6 +39,10 @@ miner.pipe(
       Effect.sync(() => {
         process.exitCode = 2;
       }),
+    SimShadowRefused: () =>
+      Effect.sync(() => {
+        process.exitCode = 2;
+      }),
   }),
   Effect.provide(Logging.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   NodeRuntime.runMain,

@@ -460,20 +460,24 @@ describe("planted bugs are caught and shrunk", () => {
     }),
   );
 
-  it.effect("no GQL budget: a large catalog's discovery burst gets 429s", () =>
-    Effect.gen(function* () {
-      const unbudgeted = { limits: { gql: UNLIMITED }, maxHorizonMinutes: 120 };
-      // Seed 7: fourteen other games, as many as the live catalog of 2026-10-30.
-      const result = yield* runSeed(7, { ...unbudgeted, maxShrinks: 30 });
-      assert.strictEqual(result._tag, "Failed");
-      if (result._tag !== "Failed") return;
-      assert.strictEqual(result.capsule.violation.kind, "OverBudget");
-      assert.match(result.capsule.violation.detail, /429/);
-      assert.isUndefined((yield* runTwice(result.capsule.scenario)).violation);
-      // The sweep finds it without being pointed at it.
-      const swept = yield* runSeeds(1, 40, { ...unbudgeted, maxShrinks: 0 });
-      assert.isAtLeast(swept.filter((r) => r._tag === "Failed").length, 1);
-    }),
+  it.effect(
+    "no GQL budget: a large catalog's discovery burst gets 429s",
+    () =>
+      Effect.gen(function* () {
+        const unbudgeted = { limits: { gql: UNLIMITED }, maxHorizonMinutes: 120 };
+        // Seed 7: fourteen other games, as many as the live catalog of 2026-10-30.
+        const result = yield* runSeed(7, { ...unbudgeted, maxShrinks: 30 });
+        assert.strictEqual(result._tag, "Failed");
+        if (result._tag !== "Failed") return;
+        assert.strictEqual(result.capsule.violation.kind, "OverBudget");
+        assert.match(result.capsule.violation.detail, /429/);
+        assert.isUndefined((yield* runTwice(result.capsule.scenario)).violation);
+        // The sweep finds it without being pointed at it.
+        const swept = yield* runSeeds(1, 40, { ...unbudgeted, maxShrinks: 0 });
+        assert.isAtLeast(swept.filter((r) => r._tag === "Failed").length, 1);
+      }),
+    // A shrink plus a 40-seed sweep against an unbudgeted twin: over 30 s on CI.
+    120_000,
   );
 
   it.effect("the API budget's concurrency alone keeps nothing under Twitch's rate", () =>

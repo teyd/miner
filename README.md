@@ -17,8 +17,8 @@ for long yet. Today:
 - **Works:** several drops goals in priority order, for the games you list or for every game
   but those you exclude, per-game reward types, `linkedOnly`, `order: "ending-soonest"` or
   `"least-slack"`, excluded channels, claiming, read-only shadow runs, and a simulator that
-  checks the decision logic against a fake Twitch. A drop that can no longer finish in time
-  never holds up a goal below it that can.
+  runs the miner, its watching and PubSub code included, against a fake Twitch. A drop that
+  can no longer finish in time never holds up a goal below it that can.
 - **Not yet:** channel-points goals and `claimBonus` (accepted in the config, skipped with a
   warning), a second stream, picking up `config.json` edits without a restart, and a published
   image, binary or npm package. You build it from this repository.
@@ -317,7 +317,7 @@ docker compose start
 | `miner config init`     | Write a starter `config.json`. Never overwrites one.                            |
 | `miner config validate` | Check `config.json` offline. `--json` for scripts and agents.                   |
 | `miner config schema`   | Print the JSON Schema.                                                          |
-| `miner sim`             | Run the decision logic against a simulated Twitch. Talks to no one.             |
+| `miner sim`             | Run the miner against a simulated Twitch, wire and all. Talks to no one.        |
 
 Each takes `--help`. In Docker: `docker compose run --rm miner <command>`. `miner status` reads the running
 miner's `status.json` (in Docker: `docker compose exec miner node /app/bin.mjs status`), and its exit code is the

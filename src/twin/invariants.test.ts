@@ -32,6 +32,7 @@ import {
   FLIP_WINDOW,
   IN_FLIGHT_LIMIT,
   MOST_REQUESTS,
+  LISTEN_SETTLE,
   checkStep,
   claimLiveness,
   inFlightCap,
@@ -42,14 +43,7 @@ import {
 } from "./invariants.ts";
 import { DEFAULT_GOAL_SPEC, SIM_EPOCH, type Fault, type Scenario } from "./scenario.ts";
 import { CDN_LIMITS, GQL_LIMITS } from "../twitch/budget.ts";
-import {
-  TICK_REQUESTS,
-  TWITCH_SOCKETS,
-  socketsFor,
-  type Activity,
-  type ActuatorCall,
-  type TwinRequest,
-} from "./twin.ts";
+import { emptyActivity, type Activity, type ActuatorCall, type TwinRequest } from "./twin.ts";
 import { buildWorld, instanceOf, openSession, tick, type World } from "./world.ts";
 
 const scenario = (faults: ReadonlyArray<Fault> = []): Scenario => ({
@@ -108,7 +102,7 @@ const completed = (from: World = world0): World => {
   return world;
 };
 
-const noActivity = (): Activity => ({ requests: [], calls: [], credits: [] });
+const noActivity = (): Activity => emptyActivity();
 
 const record = (
   event: Event,
@@ -126,6 +120,7 @@ const observation = (now: Millis, o: Partial<Observation> = {}): Observation => 
   defects: [],
   inFlight: [],
   restart: undefined,
+  listening: new Set(),
   ...o,
 });
 
@@ -147,7 +142,6 @@ const tickCall = (channelId: ChannelId, endedAt: Millis): ActuatorCall => ({
   endedAt,
   channelId,
   result: "ticked",
-  requests: TICK_REQUESTS,
 });
 
 const claimCall = (
@@ -163,6 +157,7 @@ const claimCall = (
   dropId: d0,
   alreadyApplied,
   applied,
+  answered: applied,
   outcome: applied ? "claimed" : "unavailable",
   limited,
 });
@@ -343,6 +338,75 @@ describe("invariant 4: mutations never retried", () => {
   });
 });
 
+describe("invariant 4b: a claim's result says what Twitch answered (ClaimMisread)", () => {
+  const claimedWorld: World = { ...completed(), claimed: new Map([[d0, at(60)]]) };
+  const result = (outcome: "claimed" | "already-claimed" | "unknown") =>
+    record(Event.ClaimResult({ campaignId: c0, dropId: d0, outcome }), []);
+  const call = (outcome: string, applied: boolean, answered: boolean): ActuatorCall => ({
+    kind: "claim",
+    at: at(60) - 200,
+    endedAt: at(60),
+    instanceId: instanceOf(d0),
+    dropId: d0,
+    alreadyApplied: outcome === "already-claimed",
+    applied,
+    answered,
+    outcome,
+    limited: false,
+  });
+  const claimAndReport = (
+    twin: ActuatorCall,
+    outcome: "claimed" | "already-claimed" | "unknown",
+    world: World,
+  ) =>
+    kinds([
+      observation(at(60), { step: record(Event.Tick(), [claimD0]), activity: calls(twin) }),
+      observation(at(61), { step: result(outcome), world }),
+    ]).filter((k) => k === "ClaimMisread");
+
+  it("accepts what the twin answered", () => {
+    assert.deepStrictEqual(
+      claimAndReport(call("claimed", true, true), "claimed", claimedWorld),
+      [],
+    );
+    // Twitch answers a claim of a claimed instance with the same grant.
+    assert.deepStrictEqual(
+      claimAndReport(call("already-claimed", false, true), "claimed", claimedWorld),
+      [],
+    );
+    assert.deepStrictEqual(claimAndReport(call("http-5xx", false, false), "unknown", world0), []);
+    // Applied, and the answer lost: only inventory can tell.
+    assert.deepStrictEqual(
+      claimAndReport(call("claimed", true, false), "unknown", claimedWorld),
+      [],
+    );
+    assert.deepStrictEqual(claimAndReport(call("rejected", false, true), "unknown", world0), []);
+  });
+
+  it("flags claimed on an answer that granted nothing, and unknown on a grant", () => {
+    // The planted bug: a lost or faulted answer reported as claimed.
+    assert.deepStrictEqual(claimAndReport(call("http-5xx", false, false), "claimed", world0), [
+      "ClaimMisread",
+    ]);
+    assert.deepStrictEqual(claimAndReport(call("claimed", true, false), "claimed", claimedWorld), [
+      "ClaimMisread",
+    ]);
+    assert.deepStrictEqual(claimAndReport(call("claimed", true, true), "unknown", claimedWorld), [
+      "ClaimMisread",
+    ]);
+    assert.deepStrictEqual(
+      claimAndReport(call("rejected", false, true), "already-claimed", world0),
+      ["ClaimMisread"],
+    );
+    // No claim reached the twin (its fiber died first): claimed is a misread, unknown is right.
+    const none = (outcome: "claimed" | "unknown") =>
+      kinds([observation(at(61), { step: result(outcome), world: world0 })]).filter(
+        (k) => k === "ClaimMisread",
+      );
+    assert.deepStrictEqual([none("claimed"), none("unknown")], [["ClaimMisread"], []]);
+  });
+});
+
 describe("invariant 3: no idle time while an eligible live channel exists", () => {
   it("counts as opportunities only what some goal wants, on a channel that goal may watch", () => {
     const withGoals = (goals: Scenario["settings"]["goals"]) =>
@@ -445,21 +509,30 @@ describe("invariant 3: no idle time while an eligible live channel exists", () =
 
   it("counts a channel as heard only when its change sends a frame", () => {
     const knowsCatalog: State = { ...idle, catalog: [world0.campaigns[0]!] };
-    const subscribed = (changes: Scenario["channels"][number]["changes"]): World => {
+    const changing = (changes: Scenario["channels"][number]["changes"]): World => {
       const [first, ...rest] = scenario().channels;
-      const world = buildWorld({ ...scenario(), channels: [{ ...first!, changes }, ...rest] });
-      return { ...world, subscriptions: new Set([ch0]) };
+      return buildWorld({ ...scenario(), channels: [{ ...first!, changes }, ...rest] });
     };
-    const o = (world: World, minutes: number) =>
-      observation(at(minutes * 60), { state: knowsCatalog, world });
+    const o = (world: World, minutes: number, delivered = false) =>
+      observation(at(minutes * 60), {
+        state: knowsCatalog,
+        world,
+        activity: {
+          ...noActivity(),
+          delivered: delivered ? [{ at: at(minutes * 60), channelId: ch0 }] : [],
+        },
+      });
     // `up` while live sends no `stream-up`, so the core can't know before its catalog read.
-    const noOp = subscribed([{ atMinute: 5, to: "up" }]);
+    const noOp = changing([{ atMinute: 5, to: "up" }]);
     assert.deepStrictEqual(kinds([o(noOp, 0), o(noOp, 6), o(noOp, 10)]), []);
-    const bounced = subscribed([
+    const bounced = changing([
       { atMinute: 4, to: "down" },
       { atMinute: 5, to: "up" },
     ]);
-    assert.include(kinds([o(bounced, 3), o(bounced, 6), o(bounced, 10)]), "Idle");
+    // Heard: the core knows the channel is live again and has ONLINE_DELAY + 1 min to watch.
+    assert.include(kinds([o(bounced, 3), o(bounced, 6, true), o(bounced, 10)]), "Idle");
+    // Not delivered (nobody listened, or frames were down): only the discovery bound holds.
+    assert.deepStrictEqual(kinds([o(bounced, 3), o(bounced, 6), o(bounced, 10)]), []);
   });
 
   it("pauses the idle clock during a fault window", () => {
@@ -476,9 +549,30 @@ describe("invariant 3: no idle time while an eligible live channel exists", () =
     assert.include(kinds([o(0), o(20), o(40), o(105)]), "Idle");
   });
 
-  it("flags a session the twin keeps while the core is idle", () => {
-    const o = observation(at(60), { state: idle, world: openSession(world0, ch0, SIM_EPOCH) });
-    assert.include(kinds([o]), "IdleButWatching");
+  it("flags a credit for a tick asked for after the core stopped watching, or by no tick", () => {
+    const stop = observation(at(30), {
+      step: record(Event.Tick(), [Command.StopWatching()], watching, idle),
+    });
+    const credit = (sentAt: Millis | undefined) =>
+      observation(at(60), {
+        state: idle,
+        activity: {
+          ...noActivity(),
+          credits: [
+            {
+              at: at(60),
+              channelId: ch0,
+              campaignId: c0,
+              dropIds: [d0],
+              ...(sentAt === undefined ? {} : { sentAt }),
+            },
+          ],
+        },
+      });
+    // A tick sent before the stop may still land.
+    assert.notInclude(kinds([stop, credit(at(20))]), "IdleButWatching");
+    assert.include(kinds([stop, credit(at(40))]), "IdleButWatching");
+    assert.include(kinds([stop, credit(undefined)]), "IdleButWatching");
   });
 
   it("flags avoiding a channel that credited minutes ago", () => {
@@ -660,6 +754,7 @@ describe("the unplaced-credit slack (review of A6)", () => {
     observation(at(0)),
     observation(creditsAt, {
       activity: {
+        ...noActivity(),
         requests: [],
         calls: [],
         credits: [{ at: creditsAt, campaignId: c0, channelId: ch0, dropIds: [d0] }],
@@ -900,10 +995,15 @@ describe("the supporting checks", () => {
 });
 
 describe("invariant 8: within Twitch's limits and the request budgets", () => {
-  const request = (start: Millis, end: Millis, limited = false): TwinRequest => ({
+  const request = (
+    start: Millis,
+    end: Millis,
+    limited = false,
+    operation: TwinRequest["operation"] = "Inventory",
+  ): TwinRequest => ({
     at: start,
     endedAt: end,
-    operation: "Inventory",
+    operation,
     status: limited ? 429 : 200,
     limited,
   });
@@ -917,8 +1017,11 @@ describe("invariant 8: within Twitch's limits and the request budgets", () => {
       kinds([observation(at(60), { activity: requests(request(at(59), at(60), true)) })]),
       ["OverBudget"],
     );
-    const limitedClaim = claimCall(at(60), false, false, true);
-    assert.include(kinds([observation(at(60), { activity: calls(limitedClaim) })]), "OverBudget");
+    const limitedClaim = request(at(59), at(60), true, "ClaimDrop");
+    assert.include(
+      kinds([observation(at(60), { activity: requests(limitedClaim) })]),
+      "OverBudget",
+    );
     const fault: TwinRequest = { ...request(at(59), at(60)), status: 429 };
     assert.deepStrictEqual(kinds([observation(at(60), { activity: requests(fault) })]), []);
   });
@@ -941,56 +1044,47 @@ describe("invariant 8: within Twitch's limits and the request budgets", () => {
     assert.deepStrictEqual(kinds([observation(at(140), { activity: requests(...serial) })]), []);
   });
 
-  it("flags two watch ticks at once: CDN requests go one at a time", () => {
-    const a = tickCall(ch0, at(60));
-    const overlapping: ActuatorCall = { ...tickCall(ch0, at(61)), at: at(59) };
-    assert.include(kinds([observation(at(61), { activity: calls(a, overlapping) })]), "OverBudget");
-    const next = tickCall(ch0, at(80));
-    assert.deepStrictEqual(kinds([observation(at(80), { activity: calls(a, next) })]), []);
-  });
-
-  it("flags more CDN requests in a window than the CDN budget allows", () => {
-    const ticks = Math.ceil(CDN_LIMITS.max / TICK_REQUESTS) + 1;
-    const burst = Array.from({ length: ticks }, (_, i) => tickCall(ch0, at(1 + i)));
+  it("flags two CDN requests at once: the CDN budget sends one at a time", () => {
+    const segment = (start: Millis, end: Millis) => request(start, end, false, "segment");
+    const a = segment(at(60), at(60) + 50);
+    const overlapping = request(at(60) + 20, at(60) + 80, false, "playlist");
     assert.include(
-      kinds([observation(at(ticks + 1), { activity: calls(...burst) })]),
+      kinds([observation(at(61), { activity: requests(a, overlapping) })]),
       "OverBudget",
     );
-    const paced = Array.from({ length: ticks }, (_, i) => tickCall(ch0, at(20 * (i + 1))));
-    assert.deepStrictEqual(kinds([observation(at(20 * ticks), { activity: calls(...paced) })]), []);
+    const next = segment(at(60) + 50, at(60) + 90);
+    assert.deepStrictEqual(kinds([observation(at(61), { activity: requests(a, next) })]), []);
+    // An API request beside them is another budget's.
+    const token = request(at(60) + 10, at(60) + 200, false, "PlaybackAccessToken");
+    assert.deepStrictEqual(kinds([observation(at(61), { activity: requests(a, token) })]), []);
   });
 
-  it("charges a tick what it cost: a tick that resolves the stream sends more", () => {
-    // Ticks of 54 requests, as the largest seen live: nine in a minute pass the CDN budget,
-    // where nine of the usual 17 would not.
-    const ticks = (requests: number) =>
-      Array.from({ length: 9 }, (_, i): ActuatorCall => ({
-        kind: "tick",
-        at: at(1 + 6 * i) - 200,
-        endedAt: at(1 + 6 * i),
-        channelId: ch0,
-        result: "ticked",
-        requests,
-      }));
-    assert.isAbove(9 * 54, CDN_LIMITS.max);
-    assert.include(kinds([observation(at(60), { activity: calls(...ticks(54)) })]), "OverBudget");
+  it("flags more CDN requests in a window than the CDN budget allows, each counted once", () => {
+    const burst = (n: number, spacing: Millis) =>
+      Array.from({ length: n }, (_, i) =>
+        request(at(1) + i * spacing, at(1) + i * spacing + 1, false, "segment"),
+      );
+    assert.include(
+      kinds([observation(at(61), { activity: requests(...burst(CDN_LIMITS.max + 1, 10)) })]),
+      "OverBudget",
+    );
     assert.deepStrictEqual(
-      kinds([observation(at(60), { activity: calls(...ticks(TICK_REQUESTS)) })]),
+      kinds([observation(at(61), { activity: requests(...burst(CDN_LIMITS.max, 10)) })]),
       [],
     );
-  });
-
-  it("flags a subscription needing more sockets than Twitch allows per IP", () => {
-    const channels = (n: number) => Array.from({ length: n }, (_, i) => `x${i}` as ChannelId);
-    const subscribe = (n: number): ActuatorCall => ({
-      kind: "subscribe",
-      at: at(60),
-      channelIds: channels(n),
-      sockets: socketsFor(n),
-    });
-    assert.strictEqual(socketsFor(249), TWITCH_SOCKETS);
-    assert.deepStrictEqual(kinds([observation(at(60), { activity: calls(subscribe(249)) })]), []);
-    assert.include(kinds([observation(at(60), { activity: calls(subscribe(250)) })]), "OverBudget");
+    // A window's worth, then another a window later: within the budget.
+    const later = burst(CDN_LIMITS.max, 10).map((r) => ({
+      ...r,
+      at: r.at + CDN_LIMITS.window,
+      endedAt: r.endedAt + CDN_LIMITS.window,
+    }));
+    assert.deepStrictEqual(
+      kinds([
+        observation(at(61), { activity: requests(...burst(CDN_LIMITS.max, 10)) }),
+        observation(at(121), { activity: requests(...later) }),
+      ]),
+      [],
+    );
   });
 });
 
@@ -1094,5 +1188,137 @@ describe("invariant 10: what a budget refused is sent again", () => {
       kinds([tokenless, observation(at(600), { state: idle, world: world0 })]),
       [],
     );
+  });
+});
+
+describe("invariant 11: the wire", () => {
+  const with_ = (activity: Partial<Activity>, o: Partial<Observation> = {}) =>
+    observation(at(60), { activity: { ...noActivity(), ...activity }, ...o });
+
+  it("flags a request no command sent, the token sent to the CDN, and a socket budget breach", () => {
+    assert.deepStrictEqual(
+      kinds([with_({ orphans: ["segment sent for WatchTick after it finished"] })]),
+      ["Orphan"],
+    );
+    assert.deepStrictEqual(kinds([with_({ leaks: ["segment carried the OAuth token"] })]), [
+      "TokenLeak",
+    ]);
+    assert.deepStrictEqual(kinds([with_({ budget: ["socket 0 asked for 51 topics"] })]), [
+      "SocketBudget",
+    ]);
+    assert.deepStrictEqual(kinds([with_({ misreads: ["offline, reported network"] })]), [
+      "WatchMisread",
+    ]);
+    assert.deepStrictEqual(kinds([with_({ wrongTokens: ["validate sent no token"] })]), [
+      "WrongToken",
+    ]);
+    assert.deepStrictEqual(kinds([with_({ identity: ["segment without the player's origin"] })]), [
+      "CdnIdentity",
+    ]);
+  });
+
+  it("flags a RECONNECT not obeyed, unless a Subscribe emptied that socket's slot", () => {
+    const ignored = (closed: boolean, remaining = 0) =>
+      observation(at(210), {
+        activity: {
+          ...noActivity(),
+          reconnects: [
+            { socket: 2, at: at(200), checkedAt: at(210), closed, reconnected: false, remaining },
+          ],
+        },
+      });
+    assert.deepStrictEqual(kinds([ignored(false)]), ["ReconnectIgnored"]);
+    assert.deepStrictEqual(kinds([ignored(true)]), ["ReconnectIgnored"]);
+    const subscribe = (ids: ReadonlyArray<ChannelId>, seconds = 205) =>
+      observation(at(seconds), {
+        step: record(Event.Tick(), [Command.Subscribe({ channelIds: ids })]),
+      });
+    const none = subscribe([]);
+    assert.deepStrictEqual(kinds([none, ignored(true)]), []);
+    assert.deepStrictEqual(kinds([none, ignored(false)]), ["ReconnectIgnored"]);
+    // 20 channels fit one connection: the RECONNECT's socket, closed for good, held the rest.
+    const twenty = Array.from({ length: 20 }, (_, i) => `ch${i}` as ChannelId);
+    assert.deepStrictEqual(kinds([subscribe(twenty), ignored(true, 1)]), []);
+    assert.deepStrictEqual(kinds([subscribe(twenty), ignored(true, 0)]), ["ReconnectIgnored"]);
+    // 30 need two: the one left can't hold them.
+    const thirty = Array.from({ length: 30 }, (_, i) => `ch${i}` as ChannelId);
+    assert.deepStrictEqual(kinds([subscribe(thirty), ignored(true, 1)]), ["ReconnectIgnored"]);
+    // A Subscribe long before the RECONNECT emptied nothing it asked about.
+    assert.deepStrictEqual(kinds([subscribe(twenty, 100), ignored(true, 1)]), ["ReconnectIgnored"]);
+  });
+
+  it("flags a socket the client closed with no cause from the edge or a Subscribe", () => {
+    const close = (excused: boolean, now = at(600), remaining = 0) =>
+      with_({ closes: [{ at: now, socket: 3, excused, remaining }] }, { now });
+    assert.deepStrictEqual(kinds([close(true)]), []);
+    assert.deepStrictEqual(kinds([close(false)]), ["SocketChurn"]);
+    // A Subscribe that empties a connection closes it at once: 30 channels need 2 sockets.
+    const channels = Array.from({ length: 30 }, (_, i) => `ch${i}` as ChannelId);
+    const subscribe = (ids: ReadonlyArray<ChannelId>) =>
+      observation(at(590), {
+        step: record(Event.Tick(), [Command.Subscribe({ channelIds: ids })]),
+      });
+    assert.deepStrictEqual(kinds([subscribe(channels), close(false, at(600), 2)]), []);
+    assert.deepStrictEqual(kinds([subscribe([]), close(false, at(600), 0)]), []);
+    assert.deepStrictEqual(kinds([subscribe(channels), close(false, at(590) + 31_000, 2)]), [
+      "SocketChurn",
+    ]);
+    // Within the window, but the close left fewer sockets than the channels need: no shrink
+    // emptied it (B1 review: any close within 30 s of a Subscribe passed).
+    assert.deepStrictEqual(kinds([subscribe(channels), close(false, at(600), 1)]), ["SocketChurn"]);
+    assert.deepStrictEqual(kinds([subscribe([ch0]), close(false, at(600), 0)]), ["SocketChurn"]);
+  });
+
+  it("flags a settled Subscribe whose topics the edge doesn't listen to, once", () => {
+    const subscribe = observation(at(600), {
+      step: record(Event.Tick(), [Command.Subscribe({ channelIds: [ch0] })]),
+    });
+    const all = new Set([
+      "video-playback-by-id.ch0",
+      "broadcast-settings-update.ch0",
+      "user-drop-events.1",
+    ]);
+    const look = (seconds: number, listening: ReadonlySet<string>, world = world0) =>
+      observation(at(600 + seconds), { listening, world });
+    assert.deepStrictEqual(kinds([subscribe, look(LISTEN_SETTLE / 1000, all)]), []);
+    const partial = new Set([...all].slice(1));
+    // Not yet settled, then settled and wrong, then checked already.
+    assert.deepStrictEqual(
+      kinds([
+        subscribe,
+        look(LISTEN_SETTLE / 1000 - 1, partial),
+        look(LISTEN_SETTLE / 1000, partial),
+        look(LISTEN_SETTLE / 1000 + 60, partial),
+      ]),
+      ["NotListening"],
+    );
+    // A fault near it excuses it: the account id may be unknown, a socket may be reconnecting.
+    const faulted = buildWorld(scenario([{ kind: "pubsub-reconnect", atMinute: 9 }]));
+    assert.deepStrictEqual(kinds([subscribe, look(LISTEN_SETTLE / 1000, partial, faulted)]), []);
+    const window = (operation: "validate" | "Inventory") =>
+      buildWorld(scenario([{ kind: "http-5xx", operation, atMinute: 9, durationSeconds: 60 }]));
+    assert.deepStrictEqual(
+      kinds([subscribe, look(LISTEN_SETTLE / 1000, partial, window("validate"))]),
+      [],
+    );
+    // A fault that touches no socket and no account id excuses nothing (B1 review P2 (e)).
+    assert.deepStrictEqual(
+      kinds([subscribe, look(LISTEN_SETTLE / 1000, partial, window("Inventory"))]),
+      ["NotListening"],
+    );
+    // PubSub said it went without the account id: the drops topic is excused, nothing else.
+    const noDrops = new Set([...all].filter((t) => !t.startsWith("user-drop-events")));
+    const unknown = (listening: ReadonlySet<string>) =>
+      observation(at(600) + LISTEN_SETTLE, { listening, accountUnknown: true, world: world0 });
+    assert.deepStrictEqual(kinds([subscribe, unknown(noDrops)]), []);
+    assert.deepStrictEqual(kinds([subscribe, unknown(new Set(["video-playback-by-id.ch0"]))]), [
+      "NotListening",
+    ]);
+    const framesDown = buildWorld(
+      scenario([{ kind: "frames-down", atMinute: 9, durationSeconds: 60 }]),
+    );
+    assert.deepStrictEqual(kinds([subscribe, look(LISTEN_SETTLE / 1000, partial, framesDown)]), [
+      "NotListening",
+    ]);
   });
 });

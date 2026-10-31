@@ -1,5 +1,5 @@
 {
-  "source": "Live frames from wss://pubsub-edge.twitch.tv/v1, recorded 2026-10-30 (miner probe, Android token, 12 channels, 8 minutes), channel ids replaced. stream-up, stream-down and broadcast_settings_update were seen live in a 10-minute shadow run the same day (13 title-only settings updates, 4 category changes) and match these shapes field for field. Frames under `shapes` were not seen live: drop-progress is a real payload from just-mining's log of 2026-10-29 (user id replaced), the others follow TDM twitch.py (2026-10-28).",
+  "source": "Live frames from wss://pubsub-edge.twitch.tv/v1, recorded 2026-10-30 (miner probe, Android token, 12 channels, 8 minutes), channel ids replaced. stream-up, stream-down and broadcast_settings_update were seen live in a 10-minute shadow run the same day (13 title-only settings updates, 4 category changes) and match these shapes field for field. Frames under `shapes` were not seen live: drop-progress is a real payload from just-mining's log of 2026-10-29 (user id replaced), the others follow TDM twitch.py (2026-10-28). drop-progress-live and RECONNECT are from the 4-hour miner run of 2026-10-30 (user and channel ids replaced).",
   "live": [
     {
       "name": "PONG",
@@ -31,6 +31,16 @@
       "name": "broadcast_settings_update",
       "source": "live, miner run --shadow 2026-10-30, channel ids, login and titles replaced",
       "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"broadcast-settings-update.100000001\",\"message\":\"{\\\"channel_id\\\":\\\"100000001\\\",\\\"type\\\":\\\"broadcast_settings_update\\\",\\\"channel\\\":\\\"chan1\\\",\\\"old_status\\\":\\\"Old title\\\",\\\"status\\\":\\\"New title\\\",\\\"old_game\\\":\\\"Just Chatting\\\",\\\"game\\\":\\\"Fortnite\\\",\\\"old_game_id\\\":509658,\\\"game_id\\\":33214}\"}}"
+    },
+    {
+      "name": "drop-progress-live",
+      "source": "live, miner run 2026-10-30 (4 h, 40 of them while watching), user and channel ids replaced",
+      "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"user-drop-events.900000001\",\"message\":\"{\\\"type\\\":\\\"drop-progress\\\",\\\"data\\\":{\\\"drop_id\\\":\\\"4f779b08-d315-11f1-9084-0a58a9feac02\\\",\\\"channel_id\\\":\\\"100000007\\\",\\\"current_progress_min\\\":6,\\\"required_progress_min\\\":900,\\\"current_progress\\\":6,\\\"required_progress\\\":900,\\\"progress_type\\\":\\\"minutes_watched\\\",\\\"is_sitewide\\\":false}}\"}}"
+    },
+    {
+      "name": "RECONNECT",
+      "source": "live, miner run 2026-10-30: five, one per connection, within four minutes",
+      "text": "{ \"type\": \"RECONNECT\" }\r\n"
     }
   ],
   "shapes": [
@@ -43,11 +53,6 @@
       "name": "drop-claim",
       "source": "TDM twitch.py:1239-1260",
       "text": "{\"type\":\"MESSAGE\",\"data\":{\"topic\":\"user-drop-events.900000001\",\"message\":\"{\\\"type\\\":\\\"drop-claim\\\",\\\"data\\\":{\\\"drop_instance_id\\\":\\\"900000001#67c68932-c292-11f1-b553-0a58a9feac02#c0ffee\\\",\\\"drop_id\\\":\\\"67c68932-c292-11f1-b553-0a58a9feac02\\\",\\\"channel_id\\\":\\\"144618155\\\"}}\"}}"
-    },
-    {
-      "name": "RECONNECT",
-      "source": "Twitch's former PubSub docs; TDM websocket.py",
-      "text": "{\"type\":\"RECONNECT\"}"
     },
     {
       "name": "ERR_BADAUTH",

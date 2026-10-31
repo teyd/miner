@@ -68,7 +68,7 @@ const config = Schema.decodeSync(Config)({
 });
 
 const makeWorld = (): Twin => {
-  const twin = makeTwin(buildWorld(scenario));
+  const twin = makeTwin(buildWorld(scenario), { token: TOKEN, direct: true });
   const done = "c0-d0" as DropId;
   twin.world = {
     ...twin.world,
@@ -79,9 +79,9 @@ const makeWorld = (): Twin => {
 
 /**
  * Runs the shadow runtime over the twin for `hours` of virtual time, then stops it. Time moves in
- * `stepMs` steps: the twin's answers resolve through a web `Response` outside the Effect
- * scheduler, so one long `adjust` would pass reads still in flight (the simulator polls for the
- * same reason).
+ * `stepMs` steps. The twin answers within the virtual instant it is asked (`TwinResponse` in
+ * `src/twin/response.ts`, no web `Response`), so a step's size changes no answer, only how often
+ * the loop below looks.
  */
 const shadowRun = (
   twin: Twin,

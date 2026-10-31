@@ -101,3 +101,29 @@ Favourites and a second stream wait for experiments E2/E3 of research 05 (decisi
   fixes on A6's branch (`769394d`) plus an open seed: **150534** (`Unproductive`, core confirms on a
   credit the twin's oracle does not count; one-read disagreement, capsule saved), to be settled by A6's
   delegate together with the B1/B2 fix rounds after the 05:10 model reset.
+- 2026-10-31 — B1 (`twin-wire-hls-pubsub`): the twin serves usher, playlists, segment `HEAD`s and PubSub
+  frames at wire level under the real `hlsWatch`, `PubSub` and `liveServices`. Review fixes: the twin now
+  checks the token on every API request and LISTEN (`WrongToken`); a claim answered with a service error
+  is not applied, and every `ClaimResult` must match what the twin answered (`ClaimMisread`); a revoked
+  token answers 401 before a 5xx; a `RECONNECT` must be obeyed (`ReconnectIgnored`); a request no command
+  sent is an `Orphan`; only a whole credited beat counts as one; NotListening is excused only by PubSub,
+  auth and restart faults; a client close needs a shrink that left enough sockets (`SocketChurn`); usher's
+  `token` and a segment's `dna` are checked; the token in a CDN query or cookie is a `TokenLeak`; CDN
+  requests need the player's identity headers (`CdnIdentity`); `drop-claim` frames are opt-in
+  (`claimFrames`), as live sent none. The simulator yields 8 scheduler turns before moving virtual time,
+  so a PubSub answer still between fibers isn't overtaken by a 10 s timeout (seed 6), and `TestClock`
+  waits up to a minute, not 1 s of real time, for the fibers a sleep woke: under CPU load the default
+  tripped and seeds 140001–141000 summed to other results.
+- 2026-10-31 — B1 rebased on A6, B3 and B2 (`a069e76`). The miner's own code charges every request to
+  its budgets over the wire (`gql.ts` for GQL and `PlaybackAccessToken`, `hls.ts` for usher, playlists
+  and segments; one set per run, kept across crashes); the twin charges nothing, and `OverBudget` counts
+  each request once as the twin served it (API and CDN concurrency, the CDN window, 429s for the rate).
+  Sockets are the edge's to count (`SocketBudget`). B3's `reconnect` is a wire `RECONNECT`; its gap is
+  the client's own. `ReconnectIgnored` now excuses a socket a `Subscribe` emptied, as `SocketChurn` does.
+  A `TestClock` that runs out of patience fails the seed as a defect. Found by the merge: a budget can
+  refuse the validation PubSub needs for the account id, and the drops topic then waits for the next
+  change of channels (`PubSub.ts`); `NotListening` excuses that topic when PubSub says so. Sweeps:
+  1–300 and 140001–141000 pass; 270001–271000 fail 270187 (`AvoidedUnfairly`, fails on `dev` too) and,
+  new, 270057 (`Idle`: an idle core doesn't wake when a known drop's own window opens, `startsAt` is no
+  deadline, so it waits for the next 5-minute tick past the 3.4-minute bound). Still open: 80578,
+  and 161/160174 with `framesAll` off; 240609 passes.

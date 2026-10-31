@@ -116,9 +116,12 @@ export interface ChannelModel {
   readonly phases: ReadonlyArray<Phase>;
 }
 
+/** Twitch's view of the account watching one channel: what its player asked for, and when. */
 export interface Session {
   readonly channelId: ChannelId;
   readonly openedAt: Millis;
+  /** The last beat: a media playlist and a `HEAD` of each of its segments. */
+  readonly lastBeatAt: Millis;
   readonly lastCreditAt: Millis;
   readonly carrySeconds: number;
   readonly creditedSeconds: number;
@@ -167,17 +170,22 @@ export interface World {
   /** The `gql-cooldown` windows begun so far (`startCooldown`). */
   readonly cooldowns: ReadonlyArray<{ readonly from: Millis; readonly to: Millis }>;
   readonly session: Session | undefined;
-  readonly subscriptions: ReadonlySet<ChannelId>;
 }
 
-/** A frame the twin's PubSub would send, as the core event it becomes. */
+/**
+ * A frame the twin's PubSub edge sends, as the core event it stands for; the edge writes it in
+ * Twitch's wire shape (`edge.ts`). A drop frame names the channel that credited it.
+ */
 export interface Frame {
   readonly at: Millis;
   readonly event: Event;
+  readonly channelId?: ChannelId;
 }
 
 export interface Credit {
   readonly at: Millis;
+  /** When the core asked for the tick whose beat credited. */
+  readonly sentAt?: Millis;
   readonly channelId: ChannelId;
   readonly campaignId: CampaignId;
   readonly dropIds: ReadonlyArray<DropId>;
@@ -197,6 +205,27 @@ const windowOf = (
   if (window === undefined) return { startsAt, endsAt };
   const from = Math.min(startsAt + window.startMinute * MINUTE, endsAt - MINUTE);
   return { startsAt: from, endsAt: Math.min(endsAt, from + window.durationMinutes * MINUTE) };
+};
+
+/**
+ * Crowd channel `k` at index `index`: on game 0 or 1 by turns, with few viewers, live from the
+ * start and offline for 45 minutes once a day at a time of its own.
+ */
+const crowdChannel = (index: number, k: number): ChannelModel => {
+  const game = GAMES[k % 2]!.id;
+  const down = (17 + 53 * k) % 1440;
+  return {
+    id: channelIdOf(index),
+    login: `chan${index}`,
+    viewers: 1 + ((k * 7) % 40),
+    dropsEnabled: true,
+    refuses: false,
+    phases: [
+      { at: SIM_EPOCH, live: true, gameId: game },
+      { at: at(down), live: false, gameId: game },
+      { at: at(down + 45), live: true, gameId: game },
+    ],
+  };
 };
 
 export const buildWorld = (scenario: Scenario): World => {
@@ -225,6 +254,7 @@ export const buildWorld = (scenario: Scenario): World => {
       phases,
     };
   });
+  for (let k = 0; k < (scenario.crowd?.count ?? 0); k++) channels.push(crowdChannel(n + k, k));
   const campaigns = scenario.campaigns.map((spec, i): Campaign => {
     const id = `c${i}` as CampaignId;
     const startsAt = at(spec.startMinute);
@@ -325,7 +355,6 @@ export const buildWorld = (scenario: Scenario): World => {
     revokedAt: revokes.length === 0 ? undefined : Math.min(...revokes),
     cooldowns: [],
     session: undefined,
-    subscriptions: new Set(),
   };
 };
 
@@ -351,8 +380,17 @@ const goalOf = (spec: GoalSpec, channels: number): DropsGoal => {
   };
 };
 
-export const channelOf = (world: World, id: ChannelId): ChannelModel | undefined =>
-  world.channels.find((ch) => ch.id === id);
+/** Channels by id, per channel list: the checker looks channels up on every observation. */
+const byId = new WeakMap<ReadonlyArray<ChannelModel>, ReadonlyMap<ChannelId, ChannelModel>>();
+
+export const channelOf = (world: World, id: ChannelId): ChannelModel | undefined => {
+  let index = byId.get(world.channels);
+  if (index === undefined) {
+    index = new Map(world.channels.map((ch) => [ch.id, ch]));
+    byId.set(world.channels, index);
+  }
+  return index.get(id);
+};
 
 const phaseAt = (channel: ChannelModel, now: Millis): Phase =>
   channel.phases.findLast((p) => p.at <= now) ?? channel.phases[0]!;
@@ -378,13 +416,13 @@ export const edges = (world: World): ReadonlyArray<Millis> =>
   ]).toSorted((a, b) => a - b);
 
 /**
- * `stream-up`, `stream-down` and `broadcast-settings-update` frames for subscribed channels whose
- * schedule changed in `(from, to]`, arriving 1 s later (TDM `twitch.py:1129-1180`).
+ * `stream-up`, `stream-down` and `broadcast-settings-update` frames for channels whose schedule
+ * changed in `(from, to]`, sent 1 s later (TDM `twitch.py:1129-1180`). The edge delivers each only
+ * to a connection listening to its topic.
  */
 export const channelFrames = (world: World, from: Millis, to: Millis): ReadonlyArray<Frame> => {
   const frames: Array<Frame> = [];
   for (const channel of world.channels) {
-    if (!world.subscriptions.has(channel.id)) continue;
     for (const [i, phase] of channel.phases.entries()) {
       if (i === 0 || phase.at <= from || phase.at > to) continue;
       const before = channel.phases[i - 1]!;
@@ -543,7 +581,7 @@ const spentCampaign = (world: World, id: ChannelId, now: Millis): Campaign | und
 
 export const instanceOf = (dropId: DropId) => `${dropId}#i` as DropInstanceId;
 
-const findDrop = (world: World, dropId: DropId) => {
+export const findDrop = (world: World, dropId: DropId) => {
   for (const campaign of world.campaigns) {
     const drop = campaign.drops.find((d) => d.id === dropId);
     if (drop !== undefined) return { campaign, drop };
@@ -551,15 +589,32 @@ const findDrop = (world: World, dropId: DropId) => {
   return undefined;
 };
 
+/**
+ * A view ends when the player stops asking for this long. Twitch doesn't say; the miner beats every
+ * 20 s, so a minute is three missed beats (inference).
+ */
+export const SESSION_GAP: Millis = 60_000;
+
 /** Source: help.twitch.tv "How Drops Work" (research 02 §3): one channel credits at a time. */
 export const openSession = (world: World, channelId: ChannelId, now: Millis): World => ({
   ...world,
-  session: { channelId, openedAt: now, lastCreditAt: now, carrySeconds: 0, creditedSeconds: 0 },
+  session: {
+    channelId,
+    openedAt: now,
+    lastBeatAt: now,
+    lastCreditAt: now,
+    carrySeconds: 0,
+    creditedSeconds: 0,
+  },
 });
 
-export const closeSession = (world: World): World => ({ ...world, session: undefined });
+/** The account is watching, as Twitch sees it: a beat came within `SESSION_GAP`. */
+export const sessionAt = (world: World, now: Millis): Session | undefined =>
+  world.session !== undefined && now - world.session.lastBeatAt <= SESSION_GAP
+    ? world.session
+    : undefined;
 
-export type TickResult = "ticked" | "offline" | "refused" | "network" | "auth";
+export type TickResult = "ticked" | "offline" | "refused" | "auth";
 
 export interface Ticked {
   readonly world: World;
@@ -569,24 +624,35 @@ export interface Ticked {
 }
 
 /**
- * One watch tick. It credits the time since the last credit, at most one interval, so ticks that
- * bunch up after a delay earn no more than the wall time they cover (TDM `channel.py:432-487`;
- * exact accounting is lane-D E1, inference). Every `CREDIT_SECONDS` of credit is one minute for
- * every earnable drop of the credited campaign (measured, `calibration.ts`).
+ * One beat: the CDN served a media playlist and a `HEAD` of every segment it listed, the request
+ * pattern Twitch credited live (research 02 §4, 2026-10-30: one per 20 s, about a minute per
+ * minute). A beat on another channel, or after a gap of `SESSION_GAP`, opens a new view that
+ * credits from then on. Within a view a beat credits the time since the last credit, at most one
+ * interval, so beats that bunch up after a delay earn no more than the wall time they cover (TDM
+ * `channel.py:432-487`; exact accounting is lane-D E1, inference). Every `CREDIT_SECONDS` of credit is
+ * one minute for every earnable drop of the credited campaign (measured, `calibration.ts`). A
+ * revoked token credits nothing.
  */
 export const tick = (world: World, channelId: ChannelId, now: Millis): Ticked => {
   const fail = (result: TickResult): Ticked => ({ world, result, frames: [], credits: [] });
   if (isRevoked(world, now)) return fail("auth");
-  const session = world.session;
-  if (session === undefined || session.channelId !== channelId) return fail("network");
   if (!liveAt(world, channelId, now)) return fail("offline");
   if (channelOf(world, channelId)?.refuses === true) return fail("refused");
+  const session = world.session;
+  if (
+    session === undefined ||
+    session.channelId !== channelId ||
+    now - session.lastBeatAt > SESSION_GAP
+  ) {
+    return { ...fail("ticked"), world: openSession(world, channelId, now) };
+  }
   const seconds = Math.max(0, Math.min(WATCH_INTERVAL, now - session.lastCreditAt)) / 1000;
   let carry = session.carrySeconds + seconds;
   let next: World = {
     ...world,
     session: {
       ...session,
+      lastBeatAt: now,
       lastCreditAt: now,
       carrySeconds: 0,
       creditedSeconds: session.creditedSeconds + seconds,
@@ -665,11 +731,13 @@ const creditMinute = (world: World, channelId: ChannelId, now: Millis) => {
       frames.push({
         at: now + 1_000,
         event: Event.DropProgress({ dropId: drop.id, minutes: minutesAt(next, drop.id, now) }),
+        channelId,
       });
       if (complete(drop) && next.claimFrames && !next.claimed.has(drop.id)) {
         frames.push({
           at: now + 1_000,
           event: Event.DropClaimable({ dropId: drop.id, instanceId: instanceOf(drop.id) }),
+          channelId,
         });
       }
     }
@@ -848,7 +916,7 @@ export const currentDropView = (
   channelId: ChannelId,
   now: Millis,
 ): { readonly dropId: DropId; readonly minutes: number } | undefined => {
-  if (world.session?.channelId !== channelId) return undefined;
+  if (sessionAt(world, now)?.channelId !== channelId) return undefined;
   const campaign = creditedCampaign(world, channelId, now);
   if (campaign !== undefined) {
     const drop = sessionDrop(world, campaign, now);
@@ -883,16 +951,13 @@ export const windowFaultAt = (world: World, operation: Operation, now: Millis) =
       now < windowEnd(f),
   );
 
-/** A `timeout` window on `any` operation: the network itself hangs, CDN requests included. */
-export const networkDownAt = (world: World, now: Millis): boolean =>
-  world.faults.some(
-    (f) =>
-      f.kind === "timeout" && f.operation === "any" && at(f.atMinute) <= now && now < windowEnd(f),
-  );
-
-/** PubSub drops frames: an outage, or a `RECONNECT` until the new connection listens. */
+/**
+ * PubSub drops frames for a `frames-down` window. A `RECONNECT` (`reconnect`, `pubsub-reconnect`)
+ * loses frames on the wire instead: the edge sends it, and frames reach no socket until the
+ * client listens again on a new one, after its own gap (`RECONNECT_GAP` is what live clients took).
+ */
 export const framesDownAt = (world: World, now: Millis): boolean =>
-  faultWindows(world, ["frames-down", "reconnect"]).some((w) => w.from <= now && now < w.to);
+  faultWindows(world, ["frames-down"]).some((w) => w.from <= now && now < w.to);
 
 /**
  * Start and end of every fault window (of these kinds), for wake-ups and the idle clock. A GQL

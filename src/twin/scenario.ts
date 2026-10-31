@@ -44,7 +44,9 @@ const BOUNDS = {
   viewers: [1, 10_000],
   changes: [0, 6],
   atMinute: [0, 1440],
-  faults: [0, 10],
+  /** Up to 8 drawn with the world, 2 derived (`refusalsOf`), and 4 of the wire (`wireArbitrary`). */
+  faults: [0, 14],
+  apiFaults: [0, 8],
   durationSeconds: [1, 1800],
   windowStart: [0, 600],
   frameGap: [1, 12],
@@ -53,6 +55,7 @@ const BOUNDS = {
   claimedBefore: [0, 3],
   otherGames: [0, 16],
   maxWait: [1_000, 15_000],
+  crowd: [0, 80],
 } as const;
 
 type Bound = keyof typeof BOUNDS;
@@ -80,6 +83,7 @@ export const CLAIM_FLAG_LAG_SWEPT = 59;
 /** The sweep frames every credited drop (`framesAll`, see `randomScenario`). */
 export const FRAMES_ALL_SWEPT = true;
 
+/** What window faults hit. The first eight are the API's, as the generator drew them before B1. */
 export const OPERATIONS = [
   "validate",
   "ViewerDropsDashboard",
@@ -88,10 +92,18 @@ export const OPERATIONS = [
   "DirectoryPage_Game",
   "VideoPlayerStreamInfoOverlayChannel",
   "DropCurrentSessionContext",
-  /** The claim mutation (TDM `DropsPage_ClaimDropRewards`), served by the twin's actuator. */
+  /** The claim mutation (TDM `DropsPage_ClaimDropRewards`). */
   "ClaimDrop",
+  /** Watching (research 02 §4): the token over GQL, then usher, playlists and segments. */
+  "PlaybackAccessToken",
+  "usher",
+  "playlist",
+  "segment",
 ] as const;
 export type Operation = (typeof OPERATIONS)[number];
+
+const API_OPERATIONS = OPERATIONS.slice(0, 8);
+const WATCH_OPERATIONS = OPERATIONS.slice(8);
 
 const WINDOW_FAULTS = ["http-5xx", "http-429", "timeout", "service-error", "null-catalog"] as const;
 const CRASH_POINTS = ["before-persist", "after-persist", "in-claim"] as const;
@@ -135,6 +147,17 @@ export const Fault = Schema.Union([
    */
   Schema.Struct({
     kind: Schema.Literal("gql-cooldown"),
+    atMinute: int("atMinute"),
+    durationSeconds: int("durationSeconds"),
+  }),
+  /**
+   * The edge asks every connection to reconnect, a few seconds apart (seen live 2026-10-30: five
+   * `RECONNECT`s, one per connection, within four minutes). A `reconnect` is the same on the wire.
+   */
+  Schema.Struct({ kind: Schema.Literal("pubsub-reconnect"), atMinute: int("atMinute") }),
+  /** The edge drops every socket and refuses new ones for the window. */
+  Schema.Struct({
+    kind: Schema.Literal("pubsub-outage"),
     atMinute: int("atMinute"),
     durationSeconds: int("durationSeconds"),
   }),
@@ -247,6 +270,13 @@ export const DEFAULT_GOAL_SPEC: GoalSpec = {
   order: "ending-soonest",
 };
 
+/**
+ * Background channels: live and drops-enabled on games 0 and 1 by turns, a few viewers each, one
+ * going offline for a while now and then. The directory lists them, so the core follows dozens of
+ * channels over several PubSub connections, as live (100 channels on 5 sockets, 2026-10-30).
+ */
+const Crowd = Schema.Struct({ count: int("crowd") });
+
 export const Scenario = Schema.Struct({
   /** Seeds `Random`, which draws request latencies. */
   latencySeed: Schema.Int,
@@ -259,7 +289,10 @@ export const Scenario = Schema.Struct({
    * `FRAME_GAPS`). Omitted: a frame every minute.
    */
   frameGaps: Schema.optionalKey(list(int("frameGap"), "frameGaps")),
-  /** Twitch sends `drop-claim` frames, which none of 6 live claims had. Omitted: false. */
+  /**
+   * Twitch sends `drop-claim` frames, which none of 6 live claims had (and none came in 4.6 h of
+   * mining, 2026-10-30): the miner must find claimable drops in inventory. Omitted: false.
+   */
   claimFrames: Schema.optionalKey(Schema.Boolean),
   /**
    * Every credited drop frames, not only the one closest to done, as the twin did before the
@@ -270,6 +303,8 @@ export const Scenario = Schema.Struct({
   settings: Schema.Struct({ goals: list(GoalSpec, "goals") }),
   campaigns: list(CampaignSpec, "campaigns"),
   channels: list(ChannelSpec, "channels"),
+  /** Omitted: none. */
+  crowd: Schema.optionalKey(Crowd),
   faults: list(Fault, "faults"),
   /**
    * Campaigns of this many more games that no channel streams: a catalog read then starts a
@@ -306,7 +341,7 @@ export type Capsule = typeof Capsule.Type;
 
 const windowFault: fc.Arbitrary<Fault> = fc.record({
   kind: fc.constantFrom(...WINDOW_FAULTS),
-  operation: fc.constantFrom(...OPERATIONS, "any" as const),
+  operation: fc.constantFrom(...API_OPERATIONS, "any" as const),
   atMinute: intArb("atMinute"),
   durationSeconds: intArb("durationSeconds"),
 });
@@ -341,6 +376,46 @@ const faultArbitrary: fc.Arbitrary<Fault> = fc.oneof(
     point: fc.constantFrom(...CRASH_POINTS),
   }),
 );
+
+/** Faults of the wire: the watch path's requests, and the PubSub edge. */
+const wireFaultArbitrary: fc.Arbitrary<Fault> = fc.oneof(
+  fc.record({
+    kind: fc.constantFrom("http-5xx", "http-429", "timeout"),
+    operation: fc.constantFrom(...WATCH_OPERATIONS),
+    atMinute: intArb("atMinute"),
+    durationSeconds: intArb("durationSeconds"),
+  }),
+  fc.record({ kind: fc.constant("pubsub-reconnect" as const), atMinute: intArb("atMinute") }),
+  fc.record({
+    kind: fc.constant("pubsub-outage" as const),
+    atMinute: intArb("atMinute"),
+    durationSeconds: intArb("durationSeconds"),
+  }),
+);
+
+/**
+ * What the wire-level twin added (B1): a crowd one time in three, big enough that the
+ * directory's 30 channels of one game and the scenario's own need two PubSub connections, and
+ * up to four wire faults. Drawn after the rest, so a seed's world is the one it generated before,
+ * plus these.
+ */
+const wireArbitrary = fc.record({
+  crowd: fc.oneof(
+    { arbitrary: fc.constant(undefined), weight: 2 },
+    { arbitrary: fc.record({ count: fc.integer({ min: 50, max: BOUNDS.crowd[1] }) }), weight: 1 },
+  ),
+  faults: fc.array(wireFaultArbitrary, { maxLength: 4 }),
+});
+
+/** Adds the wire's draws to a world. */
+const withWire = (
+  scenario: Scenario,
+  { crowd, faults }: typeof wireArbitrary extends fc.Arbitrary<infer W> ? W : never,
+): Scenario => ({
+  ...scenario,
+  ...(crowd === undefined ? {} : { crowd }),
+  faults: [...scenario.faults, ...faults],
+});
 
 const dropArbitrary = (requiredMinutes: fc.Arbitrary<number>) =>
   fc.record({
@@ -453,7 +528,8 @@ const randomScenario: fc.Arbitrary<Scenario> = fc
       "channels",
     ),
     // Two places stay free for the faults `refusalsOf` derives.
-    faults: fc.array(faultArbitrary, { maxLength: BOUNDS.faults[1] - 2 }),
+    // Two places stay free for the faults `refusalsOf` derives, four for the wire's.
+    faults: fc.array(faultArbitrary, { maxLength: BOUNDS.apiFaults[1] }),
   })
   .map((s) => ({
     ...s,
@@ -580,7 +656,8 @@ const measuredArbitrary = fc.record({
  * campaign 1 on channel 1 is a rival (`rivalArbitrary`). The rest is random,
  * so faults, newer campaigns, other goals and schedule changes may still stand in its way. Half
  * the seeds add a quirk the live run found (`quirkArbitrary`); half of those crediting one drop
- * move on once it completes (`creditsMoveOn`), drawn last so earlier seeds keep their worlds.
+ * move on once it completes (`creditsMoveOn`). The wire's crowd and faults (`wireArbitrary`) are
+ * drawn last, so earlier seeds keep their worlds.
  */
 export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
   .tuple(
@@ -590,8 +667,11 @@ export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
     measuredArbitrary,
     quirkArbitrary,
     fc.boolean(),
+    wireArbitrary,
   )
-  .map(([s, o, r, m, q, moveOn]): Scenario => withQuirk(baseScenario(s, o, r, m), q, moveOn));
+  .map(([s, o, r, m, q, moveOn, w]): Scenario =>
+    withWire(withQuirk(baseScenario(s, o, r, m), q, moveOn), w),
+  );
 
 /**
  * The worlds of `scenarioArbitrary` without the quirks of the live run (`quirkArbitrary`). The

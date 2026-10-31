@@ -69,9 +69,16 @@ flight recorder, the runtime (`miner run`, and read-only `miner run --shadow`), 
 - `src/twin/`: the simulator (plan `docs/history/09-plan-twin.md`). A `Scenario` (`scenario.ts`) is plain data that
   fast-check generates and shrinks; `world.ts` is the twin's Twitch rules with sources; `calibration.ts` the timings
   measured on the 2026-10-30 recordings (research 04 §2b), which `calibration.test.ts` derives again from the relabelled
-  `fixtures/calibration-2026-10-30.json`, and which scenarios draw from; `http.ts` serves the reads
-  at wire level under the real `Twitch.layer`; `actuator.ts` the typed mutations; `sim.ts` is the loop (step, persist, check, execute) under `TestClock`; `invariants.ts` checks every
-  step. The twin enforces Twitch's per-IP limits (`twin.ts`: 429 above 5 GQL/s, at most 10 sockets) and
+  `fixtures/calibration-2026-10-30.json`, and which scenarios draw from. The twin is Twitch's wire:
+  `http.ts` serves GQL (reads, `PlaybackAccessToken`, the claim), and `cdn.ts` usher, playlists and segment
+  `HEAD`s, crediting a watch only on a whole beat (a playlist and a `HEAD` of each of its segments); `edge.ts` is
+  the PubSub edge behind a `WebSocketConstructor` (LISTEN/UNLISTEN, PING/PONG, RECONNECT, frames, 50 topics a
+  socket, 10 sockets). `process.ts` runs the miner's own `liveServices` (`hlsWatch`, `ClaimDrop`, `PubSub` over
+  `Connector.webSocket`) on it, one process per crash, within the run's request budgets (`budget.ts`), which
+  the miner's own code charges; a `Plant` swaps a piece to prove the twin catches a bug.
+  `sim.ts` is the loop (step, persist, check, execute) under `TestClock`; `invariants.ts` checks every
+  step, the wire included (`Orphan`, `TokenLeak`, `SocketBudget`, `SocketChurn`, `NotListening`, `WatchMisread`).
+  The twin enforces Twitch's per-IP limits (`twin.ts`: 429 above 5 GQL/s, at most 10 sockets) and
   `OverBudget` fails a run that goes over them or over the miner's own budgets; `otherGames` gives worlds
   catalogs as large as the live one, so discovery bursts happen. A `gql-cooldown` fault (begun by the
   first inventory answer that shows a drop to claim) and a short `gqlMaxWait` make the budgets refuse

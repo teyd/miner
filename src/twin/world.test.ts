@@ -19,6 +19,8 @@ import {
   openSession,
   sessionDrop,
   startCooldown,
+  SESSION_GAP,
+  sessionAt,
   tick,
   type World,
 } from "./world.ts";
@@ -44,6 +46,20 @@ const channelSpec = (overrides: Partial<ChannelSpec> = {}): ChannelSpec => ({
   liveAtStart: true,
   changes: [],
   ...overrides,
+});
+
+const scenarioOf = (
+  campaigns: ReadonlyArray<CampaignSpec>,
+  channels: ReadonlyArray<ChannelSpec> = [channelSpec()],
+  lag = 0,
+): Scenario => ({
+  latencySeed: 1,
+  horizonMinutes: 600,
+  inventoryLagMinutes: lag,
+  settings: { goals: [DEFAULT_GOAL_SPEC] },
+  campaigns,
+  channels,
+  faults: [],
 });
 
 const world = (
@@ -120,12 +136,22 @@ describe("goals", () => {
 });
 
 describe("world", () => {
-  it("credits only the session's channel, and a new session closes the old one", () => {
+  it("credits one channel at a time: a beat elsewhere, or after a gap, opens a new view", () => {
     const w = world([campaignSpec()], [channelSpec(), channelSpec()]);
     const a = openSession(w, ch(0), T);
-    assert.strictEqual(tick(a, ch(1), T + WATCH_INTERVAL).result, "network");
-    const b = openSession(a, ch(1), T + 1_000);
-    assert.strictEqual(tick(b, ch(0), T + WATCH_INTERVAL).result, "network");
+    const moved = tick(a, ch(1), T + WATCH_INTERVAL);
+    assert.deepStrictEqual(
+      [moved.result, moved.credits.length, moved.world.session?.channelId],
+      ["ticked", 0, ch(1)],
+    );
+    assert.strictEqual(moved.world.session?.openedAt, T + WATCH_INTERVAL);
+    const late = tick(a, ch(0), T + SESSION_GAP + 1);
+    assert.deepStrictEqual(
+      [late.world.session?.openedAt, late.world.session?.creditedSeconds],
+      [T + SESSION_GAP + 1, 0],
+    );
+    assert.strictEqual(sessionAt(late.world, T + 2 * SESSION_GAP + 1)?.channelId, ch(0));
+    assert.isUndefined(sessionAt(late.world, T + 2 * SESSION_GAP + 2));
     assert.strictEqual(minutesAt(watchFor(w, ch(1), 1).world, drop("c0-d0"), T + HOUR), 1);
   });
 
@@ -212,11 +238,13 @@ describe("world", () => {
       ch(0),
       3,
     ).world;
-    assert.deepStrictEqual(currentDropView(midway, ch(0), T + HOUR), {
+    assert.deepStrictEqual(currentDropView(midway, ch(0), T + 3 * MINUTE), {
       dropId: drop("c0-d0"),
       minutes: 3,
     });
-    assert.isUndefined(currentDropView(watched, ch(1), T + HOUR));
+    assert.isUndefined(currentDropView(watched, ch(1), T + 2 * MINUTE));
+    // Twitch names no current drop once the beats stopped.
+    assert.isUndefined(currentDropView(midway, ch(0), T + HOUR));
   });
 
   it("claims once within 24 h of the campaign's end; a second claim is already-claimed", () => {
@@ -259,14 +287,39 @@ describe("world", () => {
     }
   });
 
-  it("sends stream frames only for subscribed channels, a second after the change", () => {
+  it("sends stream frames for every channel that changed, a second after the change", () => {
     const spec = channelSpec({ liveAtStart: false, changes: [{ atMinute: 5, to: "up" }] });
-    const w = world([campaignSpec()], [spec, spec]);
-    const subscribed = { ...w, subscriptions: new Set([ch(1)]) };
-    const frames = channelFrames(subscribed, T, T + 10 * MINUTE);
+    const w = world([campaignSpec()], [spec, channelSpec()]);
+    const frames = channelFrames(w, T, T + 10 * MINUTE);
     assert.deepStrictEqual(
-      frames.map((f) => [f.at - T, f.event._tag]),
-      [[5 * MINUTE + 1_000, "StreamUp"]],
+      frames.map((f) => [f.at - T, f.event._tag, "channelId" in f.event ? f.event.channelId : ""]),
+      [[5 * MINUTE + 1_000, "StreamUp", ch(0)]],
+    );
+    assert.lengthOf(channelFrames(w, T + 5 * MINUTE, T + 10 * MINUTE), 0);
+  });
+
+  it("adds crowd channels after the scenario's, live on games 0 and 1 by turns", () => {
+    const w = buildWorld({
+      ...scenarioOf([campaignSpec()], [channelSpec()]),
+      crowd: { count: 3 },
+    });
+    assert.deepStrictEqual(
+      w.channels.map((c) => [c.id, c.phases[0]?.gameId, c.phases[0]?.live]),
+      [
+        [ch(0), GAMES[0]!.id, true],
+        [ch(1), GAMES[0]!.id, true],
+        [ch(2), GAMES[1]!.id, true],
+        [ch(3), GAMES[0]!.id, true],
+      ],
+    );
+    // Each goes offline for 45 minutes once.
+    assert.deepStrictEqual(
+      w.channels[1]!.phases.map((p) => [(p.at - T) / MINUTE, p.live]),
+      [
+        [0, true],
+        [17, false],
+        [62, true],
+      ],
     );
   });
 });

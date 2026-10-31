@@ -1,8 +1,11 @@
 import { Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { Command, Flag } from "effect/cli";
 import { load } from "../config/load.ts";
+import { compareText } from "../core/plan.ts";
+import * as Memory from "../platform/memory.ts";
 import { sha256 } from "../platform/Sha256.ts";
 import { STATUS_FILE } from "../runtime/status.ts";
+import { HEAP_LIMITS, overLimits, runHeapWeek } from "../twin/heap.ts";
 import { Capsule, type Violation } from "../twin/scenario.ts";
 import { scenarioOfSeed, shadowOverTwin } from "../twin/shadow.ts";
 import { runSeeds, runTwice, type SeedOptions, type SeedResult } from "../twin/sim.ts";
@@ -36,6 +39,8 @@ export interface SimInput {
   readonly shadow?: Option.Option<string>;
   /** Virtual minutes of the shadow run. */
   readonly minutes?: number;
+  /** Run the simulated week of `heap.ts` instead, sampling memory. */
+  readonly heap?: boolean;
 }
 
 /** The default length of a shadow run over the twin, in virtual minutes. */
@@ -112,7 +117,7 @@ const sweep = (first: number, count: number, json: boolean, options: SeedOptions
     );
     const combined = sweepDigest(results);
     const refusedLine = Object.entries(refused)
-      .toSorted(([a], [b]) => a.localeCompare(b))
+      .toSorted(([a], [b]) => compareText(a, b))
       .map(([tag, n]) => `${tag} ${n}`)
       .join(", ");
     if (json) {
@@ -200,7 +205,7 @@ const shadowRun = (dir: string, input: SimInput, minutes: number) =>
     });
     const result = yield* shadowOverTwin(scenario, loaded.config, minutes);
     const written: Array<string> = [];
-    for (const [name, bytes] of [...result.files].toSorted(([a], [b]) => a.localeCompare(b))) {
+    for (const [name, bytes] of [...result.files].toSorted(([a], [b]) => compareText(a, b))) {
       const file = path.join(root, name);
       yield* fs.makeDirectory(path.dirname(file), { recursive: true }).pipe(Effect.orDie);
       yield* fs.writeFile(file, bytes).pipe(Effect.orDie);
@@ -239,16 +244,69 @@ const shadowRun = (dir: string, input: SimInput, minutes: number) =>
     if (!ok) return yield* new SimFailed({ failures: 1 });
   });
 
+const MB = 1_000_000;
+const mb = (bytes: number) => Math.round(bytes / (MB / 10)) / 10;
+
+/** `--heap`: a simulated week, memory after a forced collection every 6 simulated hours. */
+const heapWeek = (json: boolean) =>
+  Effect.gen(function* () {
+    const run = yield* runHeapWeek(Memory.sample);
+    const over = overLimits(run);
+    const ok = run.result.violation === undefined && over === undefined;
+    const samples = run.samples.map((s) => ({
+      minute: s.minute,
+      heapUsedMB: mb(s.memory.heapUsed),
+      heapTotalMB: mb(s.memory.heapTotal),
+      rssMB: mb(s.memory.rss),
+    }));
+    const { claimsApplied, creditedMinutes, restarts } = run.result;
+    if (json) {
+      yield* Console.log(
+        JSON.stringify(
+          {
+            ok,
+            growthMB: mb(run.growthBytes),
+            limitMB: mb(HEAP_LIMITS.growthBytes),
+            over: over ?? null,
+            claimsApplied,
+            creditedMinutes,
+            restarts,
+            violation: run.result.violation ?? null,
+            samples,
+          },
+          null,
+          2,
+        ),
+      );
+    } else {
+      for (const s of samples) {
+        yield* Console.log(
+          `+${s.minute}m heap ${s.heapUsedMB}/${s.heapTotalMB} MB, rss ${s.rssMB} MB`,
+        );
+      }
+      yield* Console.log(
+        `a week: ${creditedMinutes} minutes credited, ${claimsApplied} claims, ${restarts} ` +
+          `restart(s); heap grew ${mb(run.growthBytes)} MB after the first day ` +
+          `(limit ${mb(HEAP_LIMITS.growthBytes)} MB)`,
+      );
+      if (over !== undefined) yield* Console.log(over);
+      if (run.result.violation !== undefined) yield* Console.log(describe(run.result.violation));
+    }
+    if (!ok) return yield* new SimFailed({ failures: 1 });
+  });
+
 /** `miner sim`, with the core under test injectable so tests can plant a bug. */
 export const simulate = (input: SimInput, options?: SeedOptions) =>
-  Option.match(input.shadow ?? Option.none(), {
-    onSome: (dir) => shadowRun(dir, input, input.minutes ?? SHADOW_MINUTES),
-    onNone: () =>
-      Option.match(input.trace, {
-        onNone: () => sweep(input.seed, input.seeds, input.json, options),
-        onSome: (path) => replay(path, input.json, options),
-      }),
-  });
+  input.heap === true
+    ? heapWeek(input.json)
+    : Option.match(input.shadow ?? Option.none(), {
+        onSome: (dir) => shadowRun(dir, input, input.minutes ?? SHADOW_MINUTES),
+        onNone: () =>
+          Option.match(input.trace, {
+            onNone: () => sweep(input.seed, input.seeds, input.json, options),
+            onSome: (path) => replay(path, input.json, options),
+          }),
+      });
 
 export const sim = Command.make(
   "sim",
@@ -284,6 +342,13 @@ export const sim = Command.make(
       Flag.withDescription("Virtual minutes of the --shadow run"),
       Flag.withDefault(SHADOW_MINUTES),
     ),
+    heap: Flag.Boolean("heap").pipe(
+      Flag.withDescription(
+        "Instead of seeds, mine a simulated week and sample the heap every 6 simulated hours " +
+          "after a forced collection; exit 1 if it grows",
+      ),
+      Flag.withDefault(false),
+    ),
   },
   (input) => simulate(input),
 ).pipe(
@@ -299,5 +364,6 @@ export const sim = Command.make(
       command: "miner sim --seed 3 --shadow /tmp/miner-shadow",
       description: "A shadow run over seed 3's twin, its files in /tmp/miner-shadow",
     },
+    { command: "miner sim --heap", description: "A simulated week with a heap bound" },
   ]),
 );

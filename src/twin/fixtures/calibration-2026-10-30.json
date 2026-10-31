@@ -1,0 +1,791 @@
+{
+  "about": "Derived from two live recordings of 2026-10-30 (research 04 \u00a72b): run37min 15:19-15:56 UTC, run4h 17:42-21:43 UTC. Times are ms since the recording's first entry. Drops, campaigns, channels and logins are relabelled; the account appears nowhere. calibration.test.ts derives every value of calibration.ts from this file.",
+  "recordings": [
+    { "id": "2026-10-30/run37min", "durationMs": 2212052 },
+    { "id": "2026-10-30/run4h", "durationMs": 14399098 }
+  ],
+  "campaigns": [
+    {
+      "id": "c1",
+      "linked": true,
+      "drops": [
+        {
+          "id": "d1",
+          "requiredMinutes": 15,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        },
+        { "id": "d2", "requiredMinutes": 30, "requiredSubs": 0, "benefits": ["DIRECT_ENTITLEMENT"] }
+      ]
+    },
+    {
+      "id": "c2",
+      "linked": true,
+      "drops": [
+        {
+          "id": "d3",
+          "requiredMinutes": 15,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        },
+        {
+          "id": "d4",
+          "requiredMinutes": 30,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        },
+        {
+          "id": "d5",
+          "requiredMinutes": 60,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        },
+        {
+          "id": "d6",
+          "requiredMinutes": 120,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        },
+        {
+          "id": "d7",
+          "requiredMinutes": 180,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        },
+        {
+          "id": "d8",
+          "requiredMinutes": 240,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        }
+      ]
+    },
+    {
+      "id": "c3",
+      "linked": false,
+      "drops": [
+        {
+          "id": "d9",
+          "requiredMinutes": 240,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        },
+        {
+          "id": "d10",
+          "requiredMinutes": 30,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        },
+        {
+          "id": "d11",
+          "requiredMinutes": 60,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        },
+        {
+          "id": "d12",
+          "requiredMinutes": 120,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        }
+      ]
+    },
+    {
+      "id": "c4",
+      "linked": true,
+      "drops": [
+        {
+          "id": "d13",
+          "requiredMinutes": 15,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        },
+        {
+          "id": "d14",
+          "requiredMinutes": 60,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        }
+      ]
+    },
+    {
+      "id": "c5",
+      "linked": false,
+      "drops": [
+        { "id": "d15", "requiredMinutes": 60, "requiredSubs": 0, "benefits": ["BADGE"] },
+        { "id": "d16", "requiredMinutes": 0, "requiredSubs": 1, "benefits": ["BADGE"] },
+        { "id": "d17", "requiredMinutes": 240, "requiredSubs": 0, "benefits": ["BADGE"] }
+      ]
+    },
+    {
+      "id": "c6",
+      "linked": true,
+      "drops": [
+        {
+          "id": "d18",
+          "requiredMinutes": 60,
+          "requiredSubs": 0,
+          "benefits": ["DIRECT_ENTITLEMENT"]
+        }
+      ]
+    },
+    {
+      "id": "c7",
+      "linked": null,
+      "hidden": true,
+      "drops": [{ "id": "d19", "requiredMinutes": 900 }]
+    }
+  ],
+  "watches": [
+    {
+      "run": "2026-10-30/run37min",
+      "channel": "w1",
+      "firstTick": 29273,
+      "lastTick": 1808875,
+      "ticks": 90,
+      "tickGapMedianMs": 20002,
+      "tokens": [28093, 1168127],
+      "segments": { "3": 1, "12": 1, "15": 33, "16": 54, "22": 1 }
+    },
+    {
+      "run": "2026-10-30/run37min",
+      "channel": "w2",
+      "firstTick": 1832861,
+      "lastTick": 2212052,
+      "ticks": 20,
+      "tickGapMedianMs": 19996,
+      "tokens": [1831334],
+      "segments": { "15": 20 }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "channel": "w3",
+      "firstTick": 29859,
+      "lastTick": 3388836,
+      "ticks": 169,
+      "tickGapMedianMs": 19995,
+      "tokens": [28164, 1168201, 2308218],
+      "segments": { "15": 3, "16": 164, "17": 1, "21": 1 }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "channel": "w4",
+      "firstTick": 3423014,
+      "lastTick": 3921910,
+      "ticks": 26,
+      "tickGapMedianMs": 19997,
+      "tokens": [3421048],
+      "segments": { "15": 26 }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "channel": "w5",
+      "firstTick": 3963144,
+      "lastTick": 7621748,
+      "ticks": 184,
+      "tickGapMedianMs": 19997,
+      "tokens": [3960697, 5101115, 6260725, 7400751],
+      "segments": { "3": 1, "12": 1, "29": 1, "30": 126, "31": 55 }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "channel": "w4",
+      "firstTick": 7659464,
+      "lastTick": 14399098,
+      "ticks": 338,
+      "tickGapMedianMs": 19992,
+      "tokens": [7657499, 8797537, 9937554, 11077644, 12217590, 13357655],
+      "segments": {
+        "3": 1,
+        "12": 1,
+        "15": 271,
+        "16": 60,
+        "17": 1,
+        "22": 1,
+        "33": 1,
+        "43": 1,
+        "53": 1
+      }
+    }
+  ],
+  "frames": [
+    { "run": "2026-10-30/run37min", "at": 213421, "drop": "d1", "minutes": 3, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 268283, "drop": "d1", "minutes": 4, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 388754, "drop": "d1", "minutes": 6, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 631338, "drop": "d1", "minutes": 10, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 693687, "drop": "d1", "minutes": 11, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 811844, "drop": "d1", "minutes": 13, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 932135, "drop": "d1", "minutes": 15, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 1455451, "drop": "d2", "minutes": 24, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 1569221, "drop": "d2", "minutes": 26, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 1689723, "drop": "d2", "minutes": 28, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 1811098, "drop": "d2", "minutes": 30, "channel": "ch18" },
+    { "run": "2026-10-30/run37min", "at": 1933214, "drop": "d3", "minutes": 1, "channel": "ch19" },
+    { "run": "2026-10-30/run37min", "at": 1988729, "drop": "d3", "minutes": 2, "channel": "ch19" },
+    { "run": "2026-10-30/run4h", "at": 111879, "drop": "d19", "minutes": 6, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 111880, "drop": "d13", "minutes": 6, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 173500, "drop": "d19", "minutes": 7, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 234096, "drop": "d13", "minutes": 8, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 355940, "drop": "d19", "minutes": 10, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 416495, "drop": "d13", "minutes": 11, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 535664, "drop": "d13", "minutes": 13, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 711507, "drop": "d19", "minutes": 15, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 711508, "drop": "d13", "minutes": 15, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 836848, "drop": "d14", "minutes": 17, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 954206, "drop": "d19", "minutes": 19, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 1074649, "drop": "d14", "minutes": 21, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 1376600, "drop": "d14", "minutes": 26, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 1676350, "drop": "d19", "minutes": 31, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 1736559, "drop": "d19", "minutes": 32, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 1798876, "drop": "d14", "minutes": 33, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 1857937, "drop": "d14", "minutes": 34, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 1919155, "drop": "d19", "minutes": 35, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 2039287, "drop": "d14", "minutes": 37, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 2155835, "drop": "d19", "minutes": 39, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 2275907, "drop": "d19", "minutes": 41, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 2440379, "drop": "d14", "minutes": 44, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 2559145, "drop": "d14", "minutes": 46, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 2739295, "drop": "d14", "minutes": 49, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 2739301, "drop": "d19", "minutes": 49, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 3101122, "drop": "d14", "minutes": 55, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 3160634, "drop": "d19", "minutes": 56, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 3400807, "drop": "d14", "minutes": 60, "channel": "ch77" },
+    { "run": "2026-10-30/run4h", "at": 4270798, "drop": "d18", "minutes": 5, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 4989011, "drop": "d18", "minutes": 17, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 5320029, "drop": "d18", "minutes": 22, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 5620596, "drop": "d18", "minutes": 27, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 5734464, "drop": "d18", "minutes": 29, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 6280373, "drop": "d18", "minutes": 38, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 6475970, "drop": "d18", "minutes": 41, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 6715424, "drop": "d18", "minutes": 45, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 6836225, "drop": "d18", "minutes": 47, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 7012296, "drop": "d18", "minutes": 50, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 7576221, "drop": "d18", "minutes": 59, "channel": "ch34" },
+    { "run": "2026-10-30/run4h", "at": 7637248, "drop": "d18", "minutes": 60, "channel": "ch34" }
+  ],
+  "inventory": [
+    {
+      "run": "2026-10-30/run37min",
+      "at": 690,
+      "drops": {
+        "d9": [31, false, false],
+        "d10": [30, false, true],
+        "d11": [31, false, false],
+        "d12": [31, false, false]
+      }
+    },
+    {
+      "run": "2026-10-30/run37min",
+      "at": 301103,
+      "drops": {
+        "d1": [4, false, false],
+        "d2": [4, false, false],
+        "d9": [31, false, false],
+        "d10": [30, false, true],
+        "d11": [31, false, false],
+        "d12": [31, false, false]
+      }
+    },
+    {
+      "run": "2026-10-30/run37min",
+      "at": 601521,
+      "drops": {
+        "d9": [31, false, false],
+        "d10": [30, false, true],
+        "d11": [31, false, false],
+        "d12": [31, false, false],
+        "d1": [9, false, false],
+        "d2": [9, false, false]
+      }
+    },
+    {
+      "run": "2026-10-30/run37min",
+      "at": 901993,
+      "drops": {
+        "d9": [31, false, false],
+        "d10": [30, false, true],
+        "d11": [31, false, false],
+        "d12": [31, false, false],
+        "d1": [14, false, false],
+        "d2": [14, false, false]
+      }
+    },
+    {
+      "run": "2026-10-30/run37min",
+      "at": 932562,
+      "drops": {
+        "d9": [31, false, false],
+        "d10": [30, false, true],
+        "d11": [31, false, false],
+        "d12": [31, false, false],
+        "d1": [15, false, true],
+        "d2": [15, false, false]
+      }
+    },
+    {
+      "run": "2026-10-30/run37min",
+      "at": 1232979,
+      "drops": {
+        "d9": [31, false, false],
+        "d10": [30, false, true],
+        "d11": [31, false, false],
+        "d12": [31, false, false],
+        "d1": [15, true, true],
+        "d2": [20, false, false]
+      }
+    },
+    {
+      "run": "2026-10-30/run37min",
+      "at": 1533546,
+      "drops": {
+        "d1": [15, true, true],
+        "d2": [25, false, false],
+        "d9": [31, false, false],
+        "d10": [30, false, true],
+        "d11": [31, false, false],
+        "d12": [31, false, false]
+      }
+    },
+    {
+      "run": "2026-10-30/run37min",
+      "at": 1811508,
+      "drops": {
+        "d9": [31, false, false],
+        "d10": [30, false, true],
+        "d11": [31, false, false],
+        "d12": [31, false, false],
+        "d1": [15, true, true],
+        "d2": [30, false, true]
+      }
+    },
+    {
+      "run": "2026-10-30/run37min",
+      "at": 2111933,
+      "drops": {
+        "d3": [4, false, false],
+        "d4": [4, false, false],
+        "d5": [4, false, false],
+        "d6": [4, false, false],
+        "d7": [4, false, false],
+        "d8": [4, false, false],
+        "d9": [31, false, false],
+        "d10": [30, false, true],
+        "d11": [31, false, false],
+        "d12": [31, false, false]
+      }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 746,
+      "drops": { "d13": [4, false, false], "d14": [4, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 301229,
+      "drops": { "d13": [9, false, false], "d14": [9, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 601856,
+      "drops": { "d13": [13, false, false], "d14": [13, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 711945,
+      "drops": { "d13": [15, false, true], "d14": [15, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 1012781,
+      "drops": { "d13": [15, true, true], "d14": [20, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 1313202,
+      "drops": { "d13": [15, true, true], "d14": [24, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 1613812,
+      "drops": { "d13": [15, true, true], "d14": [29, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 1914241,
+      "drops": { "d13": [15, true, true], "d14": [34, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 2214870,
+      "drops": { "d13": [15, true, true], "d14": [39, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 2515557,
+      "drops": { "d13": [15, true, true], "d14": [45, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 2816169,
+      "drops": { "d13": [15, true, true], "d14": [50, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 3116837,
+      "drops": { "d13": [15, true, true], "d14": [55, false, false] }
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 3401490,
+      "drops": { "d13": [15, true, true], "d14": [60, false, true] }
+    },
+    { "run": "2026-10-30/run4h", "at": 3702329, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 4002749, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 4303422, "drops": { "d18": [5, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 4603856, "drops": { "d18": [10, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 4904480, "drops": { "d18": [15, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 5205048, "drops": { "d18": [20, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 5505717, "drops": { "d18": [25, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 5806147, "drops": { "d18": [30, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 6106608, "drops": { "d18": [35, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 6407243, "drops": { "d18": [39, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 6707812, "drops": { "d18": [44, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 7008484, "drops": { "d18": [49, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 7309076, "drops": { "d18": [54, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 7609740, "drops": { "d18": [59, false, false] } },
+    { "run": "2026-10-30/run4h", "at": 7637870, "drops": { "d18": [60, false, true] } },
+    { "run": "2026-10-30/run4h", "at": 7938471, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 8239115, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 8539672, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 8840239, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 9140836, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 9441382, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 9741972, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 10042557, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 10343114, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 10643716, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 10944322, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 11245009, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 11545477, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 11846085, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 12146526, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 12447084, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 12747719, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 13048265, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 13348715, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 13649314, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 13949924, "drops": {} },
+    { "run": "2026-10-30/run4h", "at": 14250522, "drops": {} }
+  ],
+  "claims": [
+    { "run": "2026-10-30/run37min", "at": 1117, "drop": "d10", "status": "ELIGIBLE_FOR_ALL" },
+    { "run": "2026-10-30/run37min", "at": 932762, "drop": "d1", "status": "ELIGIBLE_FOR_ALL" },
+    { "run": "2026-10-30/run37min", "at": 1811702, "drop": "d2", "status": "ELIGIBLE_FOR_ALL" },
+    { "run": "2026-10-30/run4h", "at": 712133, "drop": "d13", "status": "ELIGIBLE_FOR_ALL" },
+    { "run": "2026-10-30/run4h", "at": 3401691, "drop": "d14", "status": "ELIGIBLE_FOR_ALL" },
+    { "run": "2026-10-30/run4h", "at": 7638099, "drop": "d18", "status": "ELIGIBLE_FOR_ALL" }
+  ],
+  "currentDrop": [
+    {
+      "run": "2026-10-30/run4h",
+      "at": 8538635,
+      "channel": "ch78",
+      "drop": "d17",
+      "minutes": 263,
+      "required": 240
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 9438752,
+      "channel": "ch78",
+      "drop": "d17",
+      "minutes": 278,
+      "required": 240
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 10338836,
+      "channel": "ch78",
+      "drop": "d17",
+      "minutes": 292,
+      "required": 240
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 11239065,
+      "channel": "ch78",
+      "drop": "d17",
+      "minutes": 307,
+      "required": 240
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 12139225,
+      "channel": "ch78",
+      "drop": "d17",
+      "minutes": 322,
+      "required": 240
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 13038645,
+      "channel": "ch78",
+      "drop": "d17",
+      "minutes": 337,
+      "required": 240
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "at": 13939094,
+      "channel": "ch78",
+      "drop": "d17",
+      "minutes": 352,
+      "required": 240
+    }
+  ],
+  "awarded": [
+    { "run": "2026-10-30/run37min", "drop": "d1", "awardedAt": 931260, "firstSeenAt": 1232979 },
+    { "run": "2026-10-30/run37min", "drop": "d2", "awardedAt": 1810585, "firstSeenAt": 2111933 },
+    { "run": "2026-10-30/run4h", "drop": "d17", "awardedAt": -92193760, "firstSeenAt": 746 },
+    { "run": "2026-10-30/run4h", "drop": "d15", "awardedAt": -106169115, "firstSeenAt": 746 },
+    { "run": "2026-10-30/run4h", "drop": "d13", "awardedAt": 711494, "firstSeenAt": 1012781 },
+    { "run": "2026-10-30/run4h", "drop": "d14", "awardedAt": 3400199, "firstSeenAt": 3702329 },
+    { "run": "2026-10-30/run4h", "drop": "d18", "awardedAt": 7636880, "firstSeenAt": 7938471 }
+  ],
+  "pubsub": [
+    {
+      "run": "2026-10-30/run37min",
+      "streamUp": [[82677, "ch2"]],
+      "streamDown": [
+        [432986, "ch4"],
+        [735940, "ch7"],
+        [1020836, "ch9"],
+        [1045626, "ch10"],
+        [1058666, "ch11"],
+        [1078194, "ch12"],
+        [1882988, "ch15"],
+        [2076618, "ch16"],
+        [2121232, "ch17"]
+      ],
+      "settings": [
+        [37183, "ch1", true],
+        [87479, "ch2", true],
+        [216096, "ch3", true],
+        [437702, "ch4", true],
+        [502243, "ch4", false],
+        [515467, "ch3", true],
+        [648206, "ch1", true],
+        [663236, "ch5", false],
+        [692567, "ch6", true],
+        [740589, "ch7", true],
+        [1009520, "ch8", false],
+        [1025443, "ch9", true],
+        [1051111, "ch10", true],
+        [1065064, "ch11", true],
+        [1083339, "ch12", true],
+        [1135820, "ch13", false],
+        [1136061, "ch13", true],
+        [1228999, "ch14", false],
+        [1276686, "ch1", true],
+        [1350831, "ch6", true],
+        [1887972, "ch15", true],
+        [1907138, "ch1", true],
+        [1992537, "ch3", true],
+        [2083520, "ch16", true],
+        [2094589, "ch3", true],
+        [2126646, "ch17", true]
+      ],
+      "gameChanges": [],
+      "reconnects": [],
+      "userDropEvents": { "drop-progress": 13 },
+      "channelsListened": 106
+    },
+    {
+      "run": "2026-10-30/run4h",
+      "streamUp": [
+        [1812017, "ch24"],
+        [1960165, "ch25"],
+        [2541578, "ch23"],
+        [2857025, "ch27"],
+        [3820189, "ch34"],
+        [4238802, "ch37"],
+        [4575989, "ch45"],
+        [4730815, "ch48"],
+        [5437433, "ch55"],
+        [9363763, "ch64"],
+        [10539005, "ch69"],
+        [11045005, "ch32"],
+        [12968377, "ch60"],
+        [13260358, "ch42"]
+      ],
+      "streamDown": [
+        [1920075, "ch25"],
+        [1995580, "ch26"],
+        [3572089, "ch30"],
+        [3674124, "ch31"],
+        [3678006, "ch32"],
+        [3686973, "ch33"],
+        [3854429, "ch35"],
+        [3969792, "ch37"],
+        [4092632, "ch38"],
+        [4215021, "ch39"],
+        [4323469, "ch40"],
+        [4362893, "ch41"],
+        [4371759, "ch42"],
+        [4489415, "ch43"],
+        [4564572, "ch45"],
+        [4600854, "ch46"],
+        [4718299, "ch47"],
+        [4797293, "ch49"],
+        [4821449, "ch50"],
+        [4936557, "ch51"],
+        [5161733, "ch52"],
+        [5240682, "ch53"],
+        [5240756, "ch54"],
+        [5438637, "ch55"],
+        [5545301, "ch56"],
+        [5933009, "ch58"],
+        [6757432, "ch59"],
+        [7003265, "ch60"],
+        [7527981, "ch48"],
+        [8204922, "ch62"],
+        [8351886, "ch19"],
+        [9353764, "ch64"],
+        [10212789, "ch65"],
+        [10265328, "ch66"],
+        [10431956, "ch68"],
+        [10461780, "ch64"],
+        [10535425, "ch69"],
+        [11204296, "ch70"],
+        [11685646, "ch71"],
+        [11814099, "ch72"],
+        [11853817, "ch73"],
+        [12995587, "ch75"],
+        [13421820, "ch76"],
+        [13994974, "ch37"]
+      ],
+      "settings": [
+        [509754, "ch20", true],
+        [902963, "ch21", true],
+        [1012354, "ch22", true],
+        [1109268, "ch23", true],
+        [1716903, "ch24", true],
+        [1817638, "ch24", true],
+        [1826676, "ch22", true],
+        [1925179, "ch25", true],
+        [1965590, "ch25", true],
+        [2000783, "ch26", true],
+        [2077668, "ch24", true],
+        [2547601, "ch23", true],
+        [2862281, "ch27", true],
+        [3152604, "ch28", false],
+        [3518025, "ch29", false],
+        [3577005, "ch30", true],
+        [3679789, "ch31", true],
+        [3683312, "ch32", true],
+        [3691943, "ch33", true],
+        [3825014, "ch34", true],
+        [3860336, "ch35", true],
+        [3921272, "ch1", true],
+        [3960854, "ch36", true],
+        [3974928, "ch37", true],
+        [4098200, "ch38", true],
+        [4220383, "ch39", true],
+        [4238602, "ch37", true],
+        [4242428, "ch37", true],
+        [4243694, "ch37", true],
+        [4328767, "ch40", true],
+        [4368172, "ch41", true],
+        [4376430, "ch42", true],
+        [4494846, "ch43", true],
+        [4520063, "ch44", true],
+        [4549042, "ch1", true],
+        [4569780, "ch45", true],
+        [4576133, "ch45", true],
+        [4579884, "ch45", true],
+        [4581361, "ch45", true],
+        [4605903, "ch46", true],
+        [4724044, "ch47", true],
+        [4730736, "ch48", true],
+        [4734300, "ch48", true],
+        [4735757, "ch48", true],
+        [4803398, "ch49", true],
+        [4827149, "ch50", true],
+        [4942267, "ch51", true],
+        [5148399, "ch44", true],
+        [5168215, "ch52", true],
+        [5178997, "ch1", true],
+        [5245260, "ch53", true],
+        [5245886, "ch54", true],
+        [5443453, "ch55", true],
+        [5444217, "ch55", true],
+        [5550221, "ch56", true],
+        [5592919, "ch57", false],
+        [5671836, "ch44", true],
+        [5811122, "ch1", true],
+        [5938859, "ch58", true],
+        [6441006, "ch1", true],
+        [6763606, "ch59", true],
+        [7009064, "ch60", true],
+        [7069709, "ch1", true],
+        [7376148, "ch61", false],
+        [7533468, "ch48", true],
+        [7583110, "ch44", true],
+        [7699643, "ch1", true],
+        [8210062, "ch62", true],
+        [8330150, "ch1", true],
+        [8357748, "ch19", true],
+        [8599707, "ch63", false],
+        [8809757, "ch44", true],
+        [8959862, "ch1", true],
+        [9044351, "ch44", true],
+        [9359473, "ch64", true],
+        [9369271, "ch64", true],
+        [9589959, "ch1", true],
+        [10218284, "ch65", true],
+        [10218881, "ch1", true],
+        [10270124, "ch66", true],
+        [10285298, "ch67", false],
+        [10437647, "ch68", true],
+        [10467362, "ch64", true],
+        [10540842, "ch69", true],
+        [10544842, "ch69", true],
+        [10724882, "ch36", false],
+        [10851550, "ch1", true],
+        [11045037, "ch32", true],
+        [11050068, "ch32", true],
+        [11105706, "ch32", true],
+        [11209745, "ch70", true],
+        [11479566, "ch1", true],
+        [11691699, "ch71", true],
+        [11819890, "ch72", true],
+        [11859192, "ch73", true],
+        [11907985, "ch44", true],
+        [11950827, "ch44", true],
+        [12014295, "ch74", false],
+        [12110384, "ch1", true],
+        [12740165, "ch1", true],
+        [12870121, "ch44", true],
+        [12959845, "ch60", false],
+        [13001878, "ch75", true],
+        [13250132, "ch42", true],
+        [13253819, "ch42", true],
+        [13265857, "ch42", true],
+        [13368329, "ch1", true],
+        [13426499, "ch76", true],
+        [13998364, "ch1", true],
+        [14000854, "ch37", true]
+      ],
+      "gameChanges": [],
+      "reconnects": [
+        { "at": 3773032, "connection": 2, "listenAfterMs": 1745 },
+        { "at": 3885627, "connection": 3, "listenAfterMs": 1670 },
+        { "at": 3890919, "connection": 1, "listenAfterMs": 2201 },
+        { "at": 3896024, "connection": 4, "listenAfterMs": 2335 },
+        { "at": 4008085, "connection": 0, "listenAfterMs": 2198 }
+      ],
+      "userDropEvents": { "drop-progress": 40 },
+      "channelsListened": 215
+    }
+  ]
+}

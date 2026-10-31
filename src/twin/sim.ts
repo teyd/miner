@@ -20,7 +20,14 @@ import {
   type Violation,
 } from "./scenario.ts";
 import { drainActivity, drainFrames, emit, makeTwin, takeDue } from "./twin.ts";
-import { buildWorld, channelFrames, closeSession, edges, faultWindows } from "./world.ts";
+import {
+  buildWorld,
+  channelFrames,
+  closeSession,
+  edges,
+  faultWindows,
+  type World,
+} from "./world.ts";
 
 /** The decision functions under test. Injectable, so tests can plant bugs and watch them caught. */
 export interface Core {
@@ -46,6 +53,8 @@ export interface RunResult {
   readonly violation: Violation | undefined;
   /** The last trace lines. */
   readonly tail: ReadonlyArray<string>;
+  /** The twin's world at the end. */
+  readonly world: World;
 }
 
 const TAIL = 200;
@@ -273,6 +282,7 @@ export const runScenario = (scenario: Scenario, options?: RunOptions): Effect.Ef
       claimsApplied,
       violation: found,
       tail: [...digest.tail],
+      world: twin.world,
     };
   }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Random.withSeed(capped.latencySeed));
 };

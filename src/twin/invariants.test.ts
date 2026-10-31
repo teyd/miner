@@ -196,6 +196,78 @@ describe("invariant 2: never claim twice, early or late", () => {
   });
 });
 
+describe("invariant 2, blind: an item the inventory never shows claimed", () => {
+  // An unlinked campaign's item: Twitch applies the claim and lists the drop unclaimed after.
+  const unlinked = buildWorld({
+    ...scenario(),
+    campaigns: scenario().campaigns.map((c) => ({ ...c, linked: false, creditsUnlinked: true })),
+  });
+  const claimedWorld: World = { ...completed(unlinked), claimed: new Map([[d0, at(60)]]) };
+  const lost: State = {
+    ...watching,
+    claims: new Map([
+      [key, { campaignId: c0, dropId: d0, status: "unknown", recheckAt: at(60) + CLAIM_RECHECK }],
+    ]),
+  };
+  const o = (seconds: number, step: StepRecord, world: World = claimedWorld) =>
+    observation(at(seconds), { step, world });
+  const first = o(60, record(Event.Tick(), [claimD0]), completed(unlinked));
+  const settle = o(
+    130,
+    record(
+      Event.InventoryRead({
+        progress: [
+          {
+            dropId: d0,
+            campaignId: c0,
+            campaignEndsAt: at(36_000),
+            minutes: 1,
+            instanceId: instanceOf(d0),
+            claimed: false,
+          },
+        ],
+        awarded: [],
+      }),
+      [],
+      lost,
+      lost,
+    ),
+  );
+  const again = (seconds: number, claim: Command = claimD0) =>
+    o(seconds, record(Event.Tick(), [claim]));
+
+  it("excuses one re-claim after a lost answer settled by a read, and no second", () => {
+    assert.deepStrictEqual(kinds([first, settle, again(140)]), []);
+    assert.include(kinds([first, settle, again(140), again(400)]), "ClaimedTwice");
+    // Even after another settled read.
+    assert.include(kinds([first, settle, again(140), settle, again(400)]), "ClaimedTwice");
+  });
+
+  it("flags a re-claim nothing settled", () => {
+    assert.include(kinds([first, again(140)]), "MutationRetried");
+  });
+
+  it("excuses the first claim of a drop claimed before the run, once", () => {
+    const before: World = { ...claimedWorld, claimed: new Map([[d0, SIM_EPOCH - MINUTE]]) };
+    assert.deepStrictEqual(kinds([o(60, record(Event.Tick(), [claimD0]), before)]), []);
+    const twice = [
+      o(60, record(Event.Tick(), [claimD0]), before),
+      o(400, record(Event.Tick(), [claimD0]), before),
+    ];
+    assert.include(kinds(twice), "ClaimedTwice");
+  });
+
+  it("still checks the instance and the window", () => {
+    const wrong = Command.Claim({
+      campaignId: c0,
+      dropId: d0,
+      instanceId: instanceOf("x" as DropId),
+    });
+    assert.include(kinds([first, settle, again(140, wrong)]), "ClaimedEarly");
+    assert.include(kinds([first, settle, again(36_000 + 25 * 3600, claimD0)]), "ClaimedEarly");
+  });
+});
+
 describe("invariant 4: mutations never retried", () => {
   const unknownIntent: ClaimIntent = {
     campaignId: c0,
@@ -360,15 +432,62 @@ describe("invariant 3: no idle time while an eligible live channel exists", () =
   });
 
   it("flags avoiding a channel that credited minutes ago", () => {
-    const credited = observation(at(60), {
+    // A drop of 5 minutes, 1 credited: the channel still has something wanted to earn.
+    const earning = completed(
+      buildWorld({
+        ...scenario(),
+        campaigns: scenario().campaigns.map((c) => ({
+          ...c,
+          drops: [{ requiredMinutes: 5, after: null, benefit: "DIRECT_ENTITLEMENT" as const }],
+        })),
+      }),
+    );
+    const look = (now: Millis, o: Partial<Observation> = {}) =>
+      observation(now, { world: earning, ...o });
+    const credited = look(at(60), {
       activity: {
         ...noActivity(),
         credits: [{ at: at(60), channelId: ch0, campaignId: c0, dropIds: [d0] }],
       },
     });
     const avoided: State = { ...watching, avoid: new Set([ch0]) };
-    const avoid = observation(at(120), { step: record(Event.Tick(), [], watching, avoided) });
-    assert.include(kinds([credited, avoid]), "AvoidedUnfairly");
+    const avoid = look(at(120), { step: record(Event.Tick(), [], watching, avoided) });
+    // The frame of that minute reached the core: avoiding a minute later is unfair.
+    const frame = look(at(61), {
+      step: record(Event.DropProgress({ dropId: d0, minutes: 1 }), []),
+    });
+    assert.include(kinds([credited, frame, avoid]), "AvoidedUnfairly");
+    // So is an inventory read that showed it.
+    const shown = look(at(90), {
+      step: record(
+        Event.InventoryRead({
+          progress: [
+            {
+              dropId: d0,
+              campaignId: c0,
+              campaignEndsAt: at(36_000),
+              minutes: 1,
+              instanceId: instanceOf(d0),
+              claimed: false,
+            },
+          ],
+          awarded: [],
+        }),
+        [],
+      ),
+    });
+    assert.include(kinds([credited, shown, avoid]), "AvoidedUnfairly");
+    // A read that predates the credit tells the core nothing: within the time the news may
+    // take (a frame a minute here), the credit is excused, never after.
+    const stale = look(at(90), {
+      step: record(Event.DropProgress({ dropId: d0, minutes: 0 }), []),
+    });
+    assert.notInclude(kinds([credited, stale, avoid]), "AvoidedUnfairly");
+    const late = look(at(240), { step: record(Event.Tick(), [], watching, avoided) });
+    assert.include(kinds([credited, stale, late]), "AvoidedUnfairly");
+    // A channel with nothing wanted left to earn costs nothing to avoid (seed 22).
+    const spent = [credited, frame, avoid].map((x) => ({ ...x, world: completed() }));
+    assert.deepStrictEqual(kinds(spent), []);
     // A channel that refuses playback may be avoided at once.
     const refusing = buildWorld({
       ...scenario(),
@@ -449,7 +568,9 @@ describe("invariants 8 and 9: no watch for a received drop, none that earns noth
         world: session,
         step: record(Event.WatchTicked({ channelId: ch0 }), [], knowing, given),
       });
-    assert.include(kinds([watch(session), look(session, 5, d0), giveUp(6)]), "AvoidedUnfairly");
+    // Three minutes on: past `newsDelay`, when the core may not have heard the credit yet.
+    assert.include(kinds([watch(session), look(session, 5, d0), giveUp(8)]), "AvoidedUnfairly");
+    assert.notInclude(kinds([watch(session), look(session, 5, d0), giveUp(6)]), "AvoidedUnfairly");
     assert.deepStrictEqual(kinds([watch(session), giveUp(STALL_AFTER / MINUTE)]), []);
     // A skip longer than `CAMPAIGN_SKIP` could outlive its cause: Twitch may move on.
     const forever: State = { ...given, avoidCampaigns: new Map([[c0, at(24 * 3600)]]) };

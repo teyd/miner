@@ -1,0 +1,178 @@
+{
+  "latencySeed": 0,
+  "horizonMinutes": 213,
+  "inventoryLagMinutes": 1,
+  "claimedFlagLagSeconds": 0,
+  "frameGaps": [3],
+  "claimFrames": false,
+  "settings": {
+    "goals": [
+      {
+        "games": null,
+        "rewards": ["emote", "item", "badge"],
+        "excludeGames": [],
+        "exclude": [],
+        "linkedOnly": true,
+        "order": "ending-soonest"
+      }
+    ]
+  },
+  "campaigns": [
+    {
+      "game": 2,
+      "startMinute": -113,
+      "durationMinutes": 2522,
+      "linked": true,
+      "allowList": [],
+      "drops": [
+        {
+          "requiredMinutes": 45,
+          "after": 0,
+          "benefit": "BADGE"
+        },
+        {
+          "requiredMinutes": 5,
+          "after": 0,
+          "benefit": "EMOTE"
+        }
+      ]
+    },
+    {
+      "game": 1,
+      "startMinute": -88,
+      "durationMinutes": 2504,
+      "linked": false,
+      "allowList": [],
+      "drops": [
+        {
+          "requiredMinutes": 92,
+          "after": 1,
+          "benefit": "DIRECT_ENTITLEMENT"
+        }
+      ]
+    },
+    {
+      "game": 1,
+      "startMinute": 0,
+      "durationMinutes": 222,
+      "linked": false,
+      "creditsUnlinked": false,
+      "allowList": [1, 7, 2],
+      "drops": [
+        {
+          "requiredMinutes": 173,
+          "after": null,
+          "benefit": "EMOTE"
+        },
+        {
+          "requiredMinutes": 12,
+          "after": 1,
+          "benefit": "DIRECT_ENTITLEMENT",
+          "window": {
+            "startMinute": 446,
+            "durationMinutes": 2036
+          }
+        },
+        {
+          "requiredMinutes": 38,
+          "after": 2,
+          "benefit": "DIRECT_ENTITLEMENT"
+        }
+      ],
+      "claimedBefore": 0
+    }
+  ],
+  "channels": [
+    {
+      "game": 2,
+      "viewers": 5486,
+      "dropsEnabled": true,
+      "refuses": false,
+      "liveAtStart": true,
+      "changes": [
+        {
+          "atMinute": 545,
+          "to": "up"
+        },
+        {
+          "atMinute": 660,
+          "to": "down"
+        },
+        {
+          "atMinute": 370,
+          "to": "up"
+        }
+      ]
+    },
+    {
+      "game": 1,
+      "viewers": 7,
+      "dropsEnabled": true,
+      "refuses": false,
+      "liveAtStart": true,
+      "changes": [
+        {
+          "atMinute": 403,
+          "to": "up"
+        },
+        {
+          "atMinute": 660,
+          "to": "game-1"
+        }
+      ]
+    },
+    {
+      "game": 1,
+      "viewers": 9996,
+      "dropsEnabled": true,
+      "refuses": false,
+      "liveAtStart": true,
+      "changes": [
+        {
+          "atMinute": 324,
+          "to": "down"
+        }
+      ]
+    },
+    {
+      "game": 2,
+      "viewers": 1,
+      "dropsEnabled": true,
+      "refuses": false,
+      "liveAtStart": false,
+      "changes": [
+        {
+          "atMinute": 1311,
+          "to": "down"
+        },
+        {
+          "atMinute": 931,
+          "to": "up"
+        },
+        {
+          "atMinute": 0,
+          "to": "up"
+        },
+        {
+          "atMinute": 324,
+          "to": "down"
+        },
+        {
+          "atMinute": 324,
+          "to": "up"
+        },
+        {
+          "atMinute": 3,
+          "to": "up"
+        }
+      ]
+    }
+  ],
+  "faults": [
+    {
+      "kind": "frames-down",
+      "atMinute": 287,
+      "durationSeconds": 2
+    }
+  ]
+}

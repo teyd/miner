@@ -1,6 +1,15 @@
 import fc from "fast-check";
 import { Schema } from "effect";
 import type { Millis } from "../core/model.ts";
+import {
+  CHANNEL_FRAMES_PER_HOUR,
+  CLAIMED_FLAG_LAG_MAX,
+  DOWN_BURST_SHARE,
+  FRAME_GAPS,
+  HIDDEN_DROP_MINUTES,
+  INVENTORY_LAG_MINUTES,
+  RECONNECT_GAP,
+} from "./calibration.ts";
 
 /**
  * A simulated world as plain data: campaigns, channels with live schedules, settings and a fault
@@ -21,10 +30,16 @@ const BOUNDS = {
   campaigns: [1, 4],
   goals: [1, 3],
   rewards: [1, 3],
-  startMinute: [-120, 600],
+  /** A campaign with drops claimed before the run may have started days before it. */
+  startMinute: [-2880, 600],
+  /** What the generator draws. */
+  drawnStart: [-120, 600],
   durationMinutes: [30, 2880],
   drops: [1, 3],
-  requiredMinutes: [1, 240],
+  /** Up to a hidden campaign's drop (`HIDDEN_DROP_MINUTES`). */
+  requiredMinutes: [1, HIDDEN_DROP_MINUTES],
+  /** What the generator draws for a listed drop. */
+  listedMinutes: [1, 240],
   channels: [1, 8],
   viewers: [1, 10_000],
   changes: [0, 6],
@@ -32,6 +47,10 @@ const BOUNDS = {
   faults: [0, 8],
   durationSeconds: [1, 1800],
   windowStart: [0, 600],
+  frameGap: [1, 12],
+  frameGaps: [1, 16],
+  claimedFlagLagSeconds: [0, CLAIMED_FLAG_LAG_MAX / 1000],
+  claimedBefore: [0, 3],
 } as const;
 
 type Bound = keyof typeof BOUNDS;
@@ -52,6 +71,12 @@ const listArb = <A>(item: fc.Arbitrary<A>, bound: Bound) => {
   const [minLength, maxLength] = BOUNDS[bound];
   return fc.array(item, { minLength, maxLength });
 };
+
+/** The longest claimed-flag lag the sweep draws, in seconds (see `randomScenario`). */
+export const CLAIM_FLAG_LAG_SWEPT = 59;
+
+/** The sweep frames every credited drop (`framesAll`, see `randomScenario`). */
+export const FRAMES_ALL_SWEPT = true;
 
 export const OPERATIONS = [
   "validate",
@@ -91,6 +116,14 @@ export const Fault = Schema.Union([
     kind: Schema.Literal("frames-down"),
     atMinute: int("atMinute"),
     durationSeconds: int("durationSeconds"),
+  }),
+  /** A PubSub `RECONNECT`: frames are dropped until the new connection listens (`RECONNECT_GAP`). */
+  Schema.Struct({
+    kind: Schema.Literal("reconnect"),
+    atMinute: int("atMinute"),
+    gapMillis: Schema.Int.check(
+      Schema.isBetween({ minimum: RECONNECT_GAP.min, maximum: RECONNECT_GAP.max }),
+    ),
   }),
   Schema.Struct({
     kind: Schema.Literal("crash"),
@@ -149,6 +182,16 @@ const CampaignSpec = Schema.Struct({
    * trying again. Omitted: false, the drop is credited whatever its state.
    */
   creditsMoveOn: Schema.optionalKey(Schema.Boolean),
+  /**
+   * The first this many drops were claimed before the run, those that could have been earned by
+   * then (`claimedBeforeRun` in `world.ts`). Omitted: none.
+   */
+  claimedBefore: Schema.optionalKey(int("claimedBefore")),
+  /**
+   * Twitch credits it alongside the campaign it lists for the channel, and lists it in no answer
+   * (a 900-minute drop beside Apex, run4h 2026-10-30). Omitted: false.
+   */
+  hidden: Schema.optionalKey(Schema.Boolean),
 });
 
 const ChannelSpec = Schema.Struct({
@@ -196,6 +239,21 @@ export const Scenario = Schema.Struct({
   latencySeed: Schema.Int,
   horizonMinutes: int("horizonMinutes"),
   inventoryLagMinutes: int("inventoryLagMinutes"),
+  /** Inventory shows a claim this late. Omitted: `CLAIMED_FLAG_LAG` (world.ts). */
+  claimedFlagLagSeconds: Schema.optionalKey(int("claimedFlagLagSeconds")),
+  /**
+   * Credited minutes between progress frames, each campaign taking the next in turn (measured,
+   * `FRAME_GAPS`). Omitted: a frame every minute.
+   */
+  frameGaps: Schema.optionalKey(list(int("frameGap"), "frameGaps")),
+  /** Twitch sends `drop-claim` frames, which none of 6 live claims had. Omitted: false. */
+  claimFrames: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Every credited drop frames, not only the one closest to done, as the twin did before the
+   * calibration. The sweep draws true until the core learns a drop's minutes from the inventory
+   * (`FRAMES_ALL_SWEPT`). Omitted: false, one drop per campaign, as measured.
+   */
+  framesAll: Schema.optionalKey(Schema.Boolean),
   settings: Schema.Struct({ goals: list(GoalSpec, "goals") }),
   campaigns: list(CampaignSpec, "campaigns"),
   channels: list(ChannelSpec, "channels"),
@@ -233,11 +291,26 @@ const faultArbitrary: fc.Arbitrary<Fault> = fc.oneof(
   windowFault,
   fc.record({ kind: fc.constant("revoke-token" as const), atMinute: intArb("atMinute") }),
   fc.record({ kind: fc.constant("lose-claim-answer" as const), atMinute: intArb("atMinute") }),
-  fc.record({
-    kind: fc.constant("frames-down" as const),
-    atMinute: intArb("atMinute"),
-    durationSeconds: intArb("durationSeconds"),
-  }),
+  fc.oneof(
+    // A `RECONNECT`: the connection listens again 1.67–2.335 s later (run4h, `RECONNECT_GAP`).
+    {
+      weight: 4,
+      arbitrary: fc.record({
+        kind: fc.constant("reconnect" as const),
+        atMinute: intArb("atMinute"),
+        gapMillis: fc.integer({ min: RECONNECT_GAP.min, max: RECONNECT_GAP.max }),
+      }),
+    },
+    // An outage, never seen live: kept so a long silence stays covered.
+    {
+      weight: 1,
+      arbitrary: fc.record({
+        kind: fc.constant("frames-down" as const),
+        atMinute: intArb("atMinute"),
+        durationSeconds: intArb("durationSeconds"),
+      }),
+    },
+  ),
   fc.record({
     kind: fc.constant("crash" as const),
     atMinute: intArb("atMinute"),
@@ -255,7 +328,7 @@ const dropArbitrary = (requiredMinutes: fc.Arbitrary<number>) =>
 /** A random drop, one in three with a window of its own. */
 const windowedDropArbitrary = fc
   .tuple(
-    dropArbitrary(intArb("requiredMinutes")),
+    dropArbitrary(intArb("listedMinutes")),
     fc.option(
       fc.record({ startMinute: intArb("windowStart"), durationMinutes: intArb("durationMinutes") }),
       { nil: null, freq: 2 },
@@ -263,8 +336,27 @@ const windowedDropArbitrary = fc
   )
   .map(([drop, window]) => (window === null ? drop : { ...drop, window }));
 
+/**
+ * A schedule change, up or down against a game change as `CHANNEL_FRAMES_PER_HOUR` measured them
+ * (run4h, 4 hours: 58 `stream-up` and `stream-down` frames to 9 game changes). Ups and downs are
+ * evened out: the miner follows channels it found live, so it hears mostly downs.
+ */
+export const UP_OR_DOWN_WEIGHT = Math.round(
+  (CHANNEL_FRAMES_PER_HOUR.streamUp + CHANNEL_FRAMES_PER_HOUR.streamDown) * 4,
+);
+export const GAME_CHANGE_WEIGHT = Math.round(CHANNEL_FRAMES_PER_HOUR.gameChange * 4);
+
 const changeArbitrary = (atMinute: fc.Arbitrary<number>) =>
-  fc.record({ atMinute, to: fc.constantFrom(...CHANGES) });
+  fc.record({
+    atMinute,
+    to: fc.oneof(
+      { weight: UP_OR_DOWN_WEIGHT, arbitrary: fc.constantFrom("up" as const, "down" as const) },
+      {
+        weight: GAME_CHANGE_WEIGHT,
+        arbitrary: fc.constantFrom("game-0" as const, "game-1" as const, "game-2" as const),
+      },
+    ),
+  });
 
 const rewardsArb = fc.uniqueArray(fc.constantFrom(...REWARDS), {
   minLength: BOUNDS.rewards[0],
@@ -289,17 +381,37 @@ const goalArbitrary: fc.Arbitrary<GoalSpec> = fc.record({
 const randomScenario: fc.Arbitrary<Scenario> = fc.record({
   latencySeed: fc.integer({ min: 0, max: 1_000_000 }),
   horizonMinutes: intArb("horizonMinutes"),
-  inventoryLagMinutes: intArb("inventoryLagMinutes"),
+  // Measured `INVENTORY_LAG_MINUTES`; 1 for a read inside the minute, 2–3 for a worse Twitch.
+  inventoryLagMinutes: fc.oneof(
+    { weight: 7, arbitrary: fc.constant(INVENTORY_LAG_MINUTES) },
+    { weight: 2, arbitrary: fc.constant(1) },
+    { weight: 1, arbitrary: fc.integer({ min: 2, max: BOUNDS.inventoryLagMinutes[1] }) },
+  ),
+  // Measured at most 300 s (`CLAIMED_FLAG_LAG_MAX`); drawn below the core's 60 s `CLAIM_RECHECK`
+  // until the core waits that long (`sim.test.ts` shows the double claim a longer lag causes).
+  claimedFlagLagSeconds: fc.integer({ min: 0, max: CLAIM_FLAG_LAG_SWEPT }),
+  // Shrinks towards the first gap, 1: a frame every minute.
+  frameGaps: listArb(fc.constantFrom(...FRAME_GAPS), "frameGaps"),
+  claimFrames: fc.integer({ min: 0, max: 9 }).map((n) => n === 9),
+  // Measured: one framed drop per campaign. Drawn as every drop until the core learns a wanted
+  // drop's minutes from the inventory (`sim.test.ts` shows the channel it gives up otherwise).
+  framesAll: fc.constant(FRAMES_ALL_SWEPT),
   settings: fc.record({ goals: listArb(goalArbitrary, "goals") }),
   campaigns: listArb(
     fc.record({
       game: intArb("game"),
-      startMinute: intArb("startMinute"),
+      startMinute: intArb("drawnStart"),
       durationMinutes: intArb("durationMinutes"),
       linked: fc.boolean(),
       creditsUnlinked: fc.boolean(),
       allowList: listArb(intArb("index"), "short"),
       drops: listArb(windowedDropArbitrary, "drops"),
+      // One campaign in four has history, at times all of it: a campaign claimed in full before
+      // the run is in no inventory, only in `gameEventDrops` (Witchspire, run4h).
+      claimedBefore: fc.oneof(
+        { weight: 3, arbitrary: fc.constant(0) },
+        { weight: 1, arbitrary: intArb("claimedBefore") },
+      ),
     }),
     "campaigns",
   ),
@@ -326,7 +438,7 @@ const randomScenario: fc.Arbitrary<Scenario> = fc.record({
  */
 const opportunityArbitrary = fc.record({
   game: intArb("game"),
-  startMinute: fc.integer({ min: BOUNDS.startMinute[0], max: 0 }),
+  startMinute: fc.integer({ min: BOUNDS.drawnStart[0], max: 0 }),
   durationMinutes: fc.integer({ min: 240, max: BOUNDS.durationMinutes[1] }),
   drops: listArb(dropArbitrary(fc.integer({ min: 1, max: 45 })), "drops"),
   viewers: intArb("viewers"),
@@ -348,14 +460,14 @@ const opportunityArbitrary = fc.record({
 const rivalArbitrary = fc.option(
   fc.record({
     game: fc.integer({ min: 0, max: 1 }),
-    startMinute: fc.integer({ min: BOUNDS.startMinute[0], max: 0 }),
+    startMinute: fc.integer({ min: BOUNDS.drawnStart[0], max: 0 }),
     durationMinutes: fc.integer({ min: 180, max: BOUNDS.durationMinutes[1] }),
     /** Minutes between its end and campaign 0's, or `null` for its own duration. */
     endsNear: fc.option(fc.integer({ min: -240, max: 240 }), { nil: null }),
     // The first drop earns from the start; later ones may open later.
     drops: fc
       .tuple(
-        dropArbitrary(intArb("requiredMinutes")),
+        dropArbitrary(intArb("listedMinutes")),
         fc.array(windowedDropArbitrary, { maxLength: BOUNDS.drops[1] - 1 }),
       )
       .map(([first, rest]) => [first, ...rest]),
@@ -391,8 +503,10 @@ type Quirk = NonNullable<typeof quirkArbitrary extends fc.Arbitrary<infer Q> ? Q
 
 const withQuirk = (scenario: Scenario, quirk: Quirk | null, moveOn: boolean): Scenario => {
   if (quirk === null) return scenario;
+  // Hidden campaigns come last; a quirk goes to a listed one.
+  const listed = scenario.campaigns.filter((c) => c.hidden !== true).length;
   const campaigns = scenario.campaigns.map((c, i) => {
-    if (i !== quirk.campaign % scenario.campaigns.length) return c;
+    if (i !== quirk.campaign % listed) return c;
     const target = quirk.drop % c.drops.length;
     const drops = c.drops.map((d, j) =>
       j === target && quirk.received !== null ? { ...d, received: quirk.received } : d,
@@ -407,6 +521,28 @@ const withQuirk = (scenario: Scenario, quirk: Quirk | null, moveOn: boolean): Sc
 const REWARD_OF = { BADGE: "badge", EMOTE: "emote", DIRECT_ENTITLEMENT: "item" } as const;
 
 /**
+ * What the recordings showed beyond the random world: a hidden campaign beside campaign 0 (1 of 6
+ * watched campaigns had one, run4h: a 900-minute drop, drawn half the time), and `stream-down`
+ * changes that land in the same minute as a `stream-down` on the channel before
+ * (`DOWN_BURST_SHARE` of `stream-down` frames came within 60 s of the previous one).
+ */
+const measuredArbitrary = fc.record({
+  hidden: fc.oneof(
+    { weight: 10, arbitrary: fc.constant(null) },
+    { weight: 1, arbitrary: fc.constant(HIDDEN_DROP_MINUTES) },
+    { weight: 1, arbitrary: intArb("requiredMinutes") },
+  ),
+  bursts: fc.array(
+    // Unbiased: fast-check favours small integers, which drew bursts 28 % of the time.
+    fc.noBias(fc.integer({ min: 0, max: 999 })).map((n) => n < DOWN_BURST_SHARE * 1000),
+    {
+      minLength: BOUNDS.channels[1] * BOUNDS.changes[1],
+      maxLength: BOUNDS.channels[1] * BOUNDS.changes[1],
+    },
+  ),
+});
+
+/**
  * Generates scenarios within the Schema's bounds; fast-check shrinks them towards fewer things.
  * Campaign 0 on channel 0 is always an opportunity one of the goals wants; three times in four
  * campaign 1 on channel 1 is a rival (`rivalArbitrary`). The rest is random,
@@ -415,21 +551,31 @@ const REWARD_OF = { BADGE: "badge", EMOTE: "emote", DIRECT_ENTITLEMENT: "item" }
  * move on once it completes (`creditsMoveOn`), drawn last so earlier seeds keep their worlds.
  */
 export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
-  .tuple(randomScenario, opportunityArbitrary, rivalArbitrary, quirkArbitrary, fc.boolean())
-  .map(([s, o, r, q, moveOn]): Scenario => withQuirk(baseScenario(s, o, r), q, moveOn));
+  .tuple(
+    randomScenario,
+    opportunityArbitrary,
+    rivalArbitrary,
+    measuredArbitrary,
+    quirkArbitrary,
+    fc.boolean(),
+  )
+  .map(([s, o, r, m, q, moveOn]): Scenario => withQuirk(baseScenario(s, o, r, m), q, moveOn));
 
 /**
- * The worlds of `scenarioArbitrary` before quirks existed: a seed's world as it was then. The
- * regression seeds found by earlier sweeps replay on it, so they keep testing what they found.
+ * The worlds of `scenarioArbitrary` without the quirks of the live run (`quirkArbitrary`). The
+ * regression seeds found by earlier sweeps replay on it. The calibration (`measuredArbitrary`,
+ * the measured timings in `randomScenario`) redrew every seed's world, so these seeds no longer
+ * draw the world they were found in; they stay as worlds of the same family.
  */
 export const plainScenarioArbitrary: fc.Arbitrary<Scenario> = fc
-  .tuple(randomScenario, opportunityArbitrary, rivalArbitrary)
-  .map(([s, o, r]): Scenario => baseScenario(s, o, r));
+  .tuple(randomScenario, opportunityArbitrary, rivalArbitrary, measuredArbitrary)
+  .map(([s, o, r, m]): Scenario => baseScenario(s, o, r, m));
 
 const baseScenario = (
   s: Scenario,
   o: typeof opportunityArbitrary extends fc.Arbitrary<infer O> ? O : never,
   r: typeof rivalArbitrary extends fc.Arbitrary<infer R> ? R : never,
+  m: typeof measuredArbitrary extends fc.Arbitrary<infer M> ? M : never,
 ): Scenario => {
   const { game, startMinute, durationMinutes, drops, viewers, changes } = o;
   const campaign = { game, startMinute, durationMinutes, linked: true, allowList: [], drops };
@@ -490,15 +636,40 @@ const baseScenario = (
   const goals = s.settings.goals
     .map((g, i) => (r !== null && i === (r.goal ?? o.goal) % n ? forRival(g) : g))
     .map((g, i) => (i === o.goal % n ? wanting(g, game, drops, channels.length, 0) : g));
+  const listed = [
+    campaign,
+    ...rivals.map((x) => x.campaign),
+    ...s.campaigns.slice(0, BOUNDS.campaigns[1] - fixed - (m.hidden === null ? 0 : 1)),
+  ];
+  const hidden =
+    m.hidden === null
+      ? []
+      : [
+          {
+            game,
+            startMinute,
+            durationMinutes,
+            linked: true,
+            allowList: [],
+            drops: [
+              { requiredMinutes: m.hidden, after: null, benefit: "DIRECT_ENTITLEMENT" as const },
+            ],
+            hidden: true,
+          },
+        ];
   return {
     ...s,
     settings: { goals },
-    campaigns: [
-      campaign,
-      ...rivals.map((x) => x.campaign),
-      ...s.campaigns.slice(0, BOUNDS.campaigns[1] - fixed),
-    ],
-    channels,
+    campaigns: [...listed, ...hidden],
+    channels: channels.map((channel, i) => ({
+      ...channel,
+      changes: channel.changes.map((change, j) => {
+        const downs = (channels[i - 1]?.changes ?? []).filter((x) => x.to === "down");
+        const burst =
+          change.to === "down" && m.bursts[i * BOUNDS.changes[1] + j] === true && downs.length;
+        return burst ? { ...change, atMinute: downs[j % downs.length]!.atMinute } : change;
+      }),
+    })),
   };
 };
 

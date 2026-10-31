@@ -79,6 +79,77 @@ is real, so _measure_ it instead of avoiding the twin:
 3. The twin catches what fixtures can't: _sequences_ and _time_. A fixture is one response, and
    bugs live between responses.
 
+### 2b. The twin's timings, measured (2026-10-31)
+
+Step B3. Inputs: two live recordings of teyd's account, read-only copies, never committed:
+`2026-10-30/run37min` (`miner run`, 15:19–15:56 UTC, 2 channels, 3 claims) and
+`2026-10-30/run4h` (`miner run` under systemd, 17:42–21:43 UTC, 4 watches, 3 claims, ~100
+channels followed). Throwaway scripts read them; what each value is measured from is committed,
+relabelled, as `src/twin/fixtures/calibration-2026-10-30.json`, and `src/twin/calibration.test.ts`
+derives every value of `src/twin/calibration.ts` from it again. `scenario.ts` draws from these.
+
+| Rule                      | Measured                                                                                                                                                                                                                                                                        | Twin                                                                                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Credit rate               | 1 credited minute per minute watched within 2 %: 60 in 61.2 wall minutes (run4h, first tick to the completing frame), 15 in 15.05 (run37min)                                                                                                                                    | 60 s of ticks per minute, as before                                                                                                                                                                                                                   |
+| Progress frames           | 46 gaps between frames of one drop, in credited minutes: 1×7, 2×13, 3×7, 4×5, 5×5, 6, 7×3, 8, 9×2, 12×2 (mean 3.8). The completing minute framed 5 of 5                                                                                                                         | each campaign frames on a countdown drawn from these gaps, and always at completion                                                                                                                                                                   |
+| Concurrent drops          | APEX Pack (15) and Holospray (60) both moved 4 → 9 → 13 (inventory); CFB 15 and 30 alike (run37min). Frames named one drop per campaign: the closest to done, then the next                                                                                                     | every earnable drop of the credited campaign gains the minute; one is framed (`sessionDrop`), all of them in the sweep until finding 5 is fixed (`framesAll`)                                                                                         |
+| Hidden campaigns          | A 900-minute drop in no dashboard and no inventory moved in step with Apex on its channel (12 frames, run4h)                                                                                                                                                                    | `hidden` campaigns, 1 scenario in 6, half of them 900 minutes; credited whether or not the listed campaign has anything left                                                                                                                          |
+| Inventory lag             | 0: no read showed less than the frame before it (26 reads), and some showed exactly as much                                                                                                                                                                                     | lag drawn 0 (70 %), 1 (20 %), 2–3 (10 %, a worse Twitch)                                                                                                                                                                                              |
+| Claimed flag              | the next read, 5 minutes after the claim, showed it (2 of 2): the lag is at most 300 s; no read fell earlier, so how much less is unmeasured                                                                                                                                    | the Schema allows 0–300 s, for the flag and `gameEventDrops` alike; the sweep draws 0–59 s until finding 3 is fixed                                                                                                                                   |
+| Campaign leaves inventory | at the first read after its last drop shows claimed (Apex, Destiny, CFB); Witchspire, claimed the day before, was in no read of run4h                                                                                                                                           | `inventoryView` drops it; a drop received before the run (`claimedBefore`, A6's `received`) lists no campaign until it earns again, and shows in `gameEventDrops` only                                                                                |
+| Unlinked item claim       | Marvel Rivals Spray answered `ELIGIBLE_FOR_ALL`, then stayed unclaimed with its instance id for 2.5 hours (both recordings)                                                                                                                                                     | the flag never shows, nor `gameEventDrops` (the Spray is in no `awarded` entry); one more claim, after a lost answer a read settled or for a drop claimed before the run, is `already-claimed`, not a violation (`blind`); a second is `ClaimedTwice` |
+| Claim timing              | 0.604–0.884 s after the completing frame (5 of 5), an Inventory read with the instance id in between; no `drop-claim` frame in 4.6 h                                                                                                                                            | no `drop-claim` frame unless `claimFrames` (1 scenario in 10, to keep the core's path)                                                                                                                                                                |
+| Current drop              | 7 reads on the Witchspire channel all named Golden Stamp, claimed the day before, at 263 → 352 of 240 minutes, one per minute watched; the miner wanted Witchspire Logo                                                                                                         | names the session drop; on a spent campaign its longest drop, counting past the requirement                                                                                                                                                           |
+| Playback                  | a new token every 19.0 minutes (10 of 11; one 19.3), its 20-minute life less `TOKEN_MARGIN`; 15/16 segments a tick on 5 channels, 30/31 on one (97 %+)                                                                                                                          | constants for wire-level HLS (B1)                                                                                                                                                                                                                     |
+| PubSub                    | per hour, 100 channels followed: 3.5 `stream-up`, 11 `stream-down` (23 % of them within 60 s of the previous `stream-down`, on another channel), 27.5 settings updates, 2.25 of them game changes; 5 `RECONNECT` in 4 minutes, once in 4 h, listening again 1.670–2.335 s later | changes: up or down 58 times to 9 game changes; 23 % of downs land in the minute of a down on another channel; a `reconnect` fault of 1,670–2,335 ms four times in five, a longer `frames-down` outage the fifth                                      |
+
+The ups and downs are evened out in the twin: the miner follows channels it found live, so it
+hears mostly downs. Settings updates that keep the game never reach the core (`frames.ts`); their
+rate matters only to wire-level PubSub (B1).
+
+**What the calibrated twin finds in the core.** The first three were live on 2026-10-30. Those
+still open have a test in `src/twin/sim.test.ts` ("core gaps") that pins the failure, and the sweep
+keeps them out of its scenarios until the core is fixed. Once a fix lands its test fails, and the
+bound goes.
+
+1. Fixed by A6 (#28). A campaign claimed in full is in no inventory, so the core read it as never
+   watched. It watched Witchspire for 2 hours (19:50–21:43) for Witchspire Logo, claimed the day
+   before. The rewards are in `Inventory.gameEventDrops` (ids are benefit ids, with
+   `lastAwardedAt`); TDM counts a drop without a `self` edge as claimed when all its benefits were
+   awarded inside the drop's window (`twitch.py:1499-1502`, `inventory.py:74-89`), and so does
+   the core now. The sweep draws campaigns claimed in full again (`claimedBefore`).
+2. Fixed by A6 (#28). It never stalled there, because `DropCurrentSessionContext` reported Golden
+   Stamp at 263 of 240 and climbing, and the core took any rise as credit. Minutes past a drop's
+   requirement are no progress now.
+3. Open, pinned. The core rechecks a claim with a lost answer after 1 minute (`CLAIM_RECHECK`);
+   the flag can lag up to 5, and `gameEventDrops` lags with it (the four linked claims first
+   showed there at the next read, 300 s on). With a lag over a minute the core sends the claim
+   again. Waiting past `CLAIMED_FLAG_LAG_MAX` closes it. The sweep draws a lag under 60 s
+   (`CLAIM_FLAG_LAG_SWEPT`).
+4. Not a violation, a cost: each frame of the hidden campaign made the core reread the catalog
+   within 5 minutes (`credit` in `step.ts`): 6 catalog reads during the 57-minute Apex watch
+   instead of 1.
+5. Open, pinned (found by the sweep on A6's core, seeds 161 and 160174). Twitch frames one drop per
+   campaign, the closest to done. When a newer campaign on the watched channel credits a drop a
+   goal wants beside one closer to done that no goal wants, only the inventory shows the wanted
+   one move, and the core adopts or confirms a drop only from frames and the session read. It
+   stalls on its own target and gives up a channel that earns. The sweep frames every credited
+   drop (`framesAll`, `FRAMES_ALL_SWEPT`) until the core learns a drop's minutes from the
+   inventory.
+
+**What the calibration changed in the invariants.** A frame no longer names every credited minute,
+so a credit can reach the core only at the next inventory read (`INVENTORY_INTERVAL` and the lag):
+a channel's frame countdown stops when it moves its credit to another campaign, and the minutes
+since the last frame are never framed (seed 90052). The watching `Idle` and the `Unproductive`
+bounds allow for that (`newsDelay`), and `AvoidedUnfairly`, for channels and campaigns alike,
+excuses a credit only while the core demonstrably hasn't heard it (no read or frame showed it yet).
+`WatchedClaimed` waits for the scenario's claimed-flag lag, and never fires for an unlinked item,
+which neither the flag nor `gameEventDrops` ever shows. A credit to a drop no goal wants counts as
+wanted (Twitch moving on to a wanted one) only if it completes within a stall (seed 131).
+
+Open for lane D: what Twitch answers to a second claim of an unlinked item, and how late the
+claimed flag really is (an Inventory read 10, 30 and 60 s after a claim answers it).
+
 ## 3. Lane B — flight recorder and replay
 
 An always-on miner is the best source of real sequences. **Today none runs** (`docker ps` on

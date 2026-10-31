@@ -127,3 +127,13 @@ Favourites and a second stream wait for experiments E2/E3 of research 05 (decisi
   new, 270057 (`Idle`: an idle core doesn't wake when a known drop's own window opens, `startsAt` is no
   deadline, so it waits for the next 5-minute tick past the 3.4-minute bound). Still open: 80578,
   and 161/160174 with `framesAll` off; 240609 passes.
+- 2026-10-31 — Core fixes for what the calibrated, wire-level twin pinned (research 04, findings
+  5–7). An inventory rise is a credit like a frame's (`creditShown`), so the sweep frames one drop
+  per campaign, as measured (`FRAMES_ALL_SWEPT` false): 161 and 160174 pass. A credit to a drop the
+  goal filters out confirms the watch only within a stall of completing it, in any wanted campaign
+  (the twin's `wantedCredit` rule): 80578, 280710 (`Unproductive`) and 270187 (`AvoidedUnfairly`, a
+  core bug, the twin was right) pass. An idle core wakes when a known wanted drop opens
+  (`deadlines.tick` while idle) and reads the channels of what opened if none it knows can credit
+  it: 270057, 280721 and 280753 (`Idle`) pass. No state field added, `STATE_VERSION` stays 5. Each
+  seed is a stored regression (`sim.test.ts`). Sweeps: 1–300, 140001–141000, 280001–281000 and
+  290001–291000 pass.

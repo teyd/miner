@@ -92,7 +92,7 @@ derives every value of `src/twin/calibration.ts` from it again. `scenario.ts` dr
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Credit rate               | 1 credited minute per minute watched within 2 %: 60 in 61.2 wall minutes (run4h, first tick to the completing frame), 15 in 15.05 (run37min)                                                                                                                                    | 60 s of ticks per minute, as before                                                                                                                                                                                                                   |
 | Progress frames           | 46 gaps between frames of one drop, in credited minutes: 1×7, 2×13, 3×7, 4×5, 5×5, 6, 7×3, 8, 9×2, 12×2 (mean 3.8). The completing minute framed 5 of 5                                                                                                                         | each campaign frames on a countdown drawn from these gaps, and always at completion                                                                                                                                                                   |
-| Concurrent drops          | APEX Pack (15) and Holospray (60) both moved 4 → 9 → 13 (inventory); CFB 15 and 30 alike (run37min). Frames named one drop per campaign: the closest to done, then the next                                                                                                     | every earnable drop of the credited campaign gains the minute; one is framed (`sessionDrop`), all of them in the sweep until finding 5 is fixed (`framesAll`)                                                                                         |
+| Concurrent drops          | APEX Pack (15) and Holospray (60) both moved 4 → 9 → 13 (inventory); CFB 15 and 30 alike (run37min). Frames named one drop per campaign: the closest to done, then the next                                                                                                     | every earnable drop of the credited campaign gains the minute; one is framed (`sessionDrop`); `framesAll` frames all of them, off in the sweep since finding 5                                                                                        |
 | Hidden campaigns          | A 900-minute drop in no dashboard and no inventory moved in step with Apex on its channel (12 frames, run4h)                                                                                                                                                                    | `hidden` campaigns, 1 scenario in 6, half of them 900 minutes; credited whether or not the listed campaign has anything left                                                                                                                          |
 | Inventory lag             | 0: no read showed less than the frame before it (26 reads), and some showed exactly as much                                                                                                                                                                                     | lag drawn 0 (70 %), 1 (20 %), 2–3 (10 %, a worse Twitch)                                                                                                                                                                                              |
 | Claimed flag              | the next read, 5 minutes after the claim, showed it (2 of 2): the lag is at most 300 s; no read fell earlier, so how much less is unmeasured                                                                                                                                    | the Schema allows 0–300 s, for the flag and `gameEventDrops` alike; the sweep draws 0–59 s until finding 3 is fixed                                                                                                                                   |
@@ -129,13 +129,26 @@ bound goes.
 4. Not a violation, a cost: each frame of the hidden campaign made the core reread the catalog
    within 5 minutes (`credit` in `step.ts`): 6 catalog reads during the 57-minute Apex watch
    instead of 1.
-5. Open, pinned (found by the sweep on A6's core, seeds 161 and 160174). Twitch frames one drop per
+5. Fixed (found by the sweep on A6's core, seeds 161 and 160174). Twitch frames one drop per
    campaign, the closest to done. When a newer campaign on the watched channel credits a drop a
    goal wants beside one closer to done that no goal wants, only the inventory shows the wanted
-   one move, and the core adopts or confirms a drop only from frames and the session read. It
-   stalls on its own target and gives up a channel that earns. The sweep frames every credited
-   drop (`framesAll`, `FRAMES_ALL_SWEPT`) until the core learns a drop's minutes from the
-   inventory.
+   one move, and the core adopted or confirmed a drop only from frames and the session read. It
+   stalled on its own target and gave up a channel that earned. Now every rise an inventory read
+   shows, for a campaign the watched channel can earn, is a credit like a frame's
+   (`creditShown` in `step.ts`), and the sweep frames one drop per campaign, as measured
+   (`FRAMES_ALL_SWEPT` is false).
+6. Fixed (seeds 80578, 280710, 270187). A credit to a drop of a wanted campaign that the goal
+   filters out confirmed the watch without a bound: Twitch crediting only a 148-minute item while
+   the goal wanted the badge held the channel forever (`Unproductive`), and the same credit from
+   a campaign other than the watched one counted toward giving the channel up, 5 minutes before
+   Twitch moved on to the emote a goal wanted (`AvoidedUnfairly`). Such a credit now confirms the
+   watch only within a stall of completing the drop, in any wanted campaign, the twin's
+   `wantedCredit` rule; further off it is wasted, and a stall gives up the campaign.
+7. Fixed (seeds 270057, 280721, 280753). A known drop's opening only brought the catalog read
+   forward, to 15 minutes after the last, so an idle core started up to 5 minutes late (the next
+   inventory read), or 15 when the channels were on an allow-list it had never read. The opening
+   is now an idle core's wake-up (`deadlines.tick`), and the channels of what opened are read then
+   if no known channel can credit it.
 
 **What the calibration changed in the invariants.** A frame no longer names every credited minute,
 so a credit can reach the core only at the next inventory read (`INVENTORY_INTERVAL` and the lag):

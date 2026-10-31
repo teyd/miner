@@ -145,6 +145,10 @@ export interface Deadlines {
   readonly validate: Millis;
   readonly catalog: Millis;
   readonly inventory: Millis;
+  /**
+   * Watching: the next watch tick. Idle: when the next wanted drop opens its window, so the plan
+   * looks again then (`replan`); a step past it while idle sets the one after.
+   */
   readonly tick: Millis | undefined;
   /** Channels that sent `stream-up`, re-read once their stream data exists. */
   readonly online: ReadonlyMap<ChannelId, Millis>;

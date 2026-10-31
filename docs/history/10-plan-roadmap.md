@@ -28,33 +28,33 @@ Each wave starts when what it builds on is merged. Inside a wave the steps run i
 
 ### Wave A — make it operable (merged #19–#25)
 
-| Step | What                                                                                                            | Done when                                                                |
-| ---- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| A0   | 4 h live run (systemd `miner-live`, 18:42–22:42 CET), memory sampled per minute                                 | analysed: 3 claims, 1 credit/min, RSS flat 126–131 MB, 8.1 MiB/day recorded |
-| A1   | Recordings store a repeated answer once; decide gzip with numbers; a reader that expands them                   | #19                                                                      |
-| A2   | `miner status [--json]`: health, watch with names, "discovery broken" apart from "nothing to mine", exit codes | #21                                                                      |
-| A3   | Core: no plan flip at startup; every drops-goal option of decision 28                                           | #25                                                                      |
-| A4   | README tutorial, Dockerfile, compose, systemd unit                                                              | #23                                                                      |
-| A5   | Secret guard: gitleaks (pinned), lefthook pre-commit, token check, CI step                                      | #20                                                                      |
-| A6   | Skip rewards already received (`gameEventDrops`); stop on credit the plan can't use (the 2 h Witchspire waste)   | branch `fix/already-received-rewards`, open: seed 150534                 |
+| Step | What                                                                                                           | Done when                                                                   |
+| ---- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| A0   | 4 h live run (systemd `miner-live`, 18:42–22:42 CET), memory sampled per minute                                | analysed: 3 claims, 1 credit/min, RSS flat 126–131 MB, 8.1 MiB/day recorded |
+| A1   | Recordings store a repeated answer once; decide gzip with numbers; a reader that expands them                  | #19                                                                         |
+| A2   | `miner status [--json]`: health, watch with names, "discovery broken" apart from "nothing to mine", exit codes | #21                                                                         |
+| A3   | Core: no plan flip at startup; every drops-goal option of decision 28                                          | #25                                                                         |
+| A4   | README tutorial, Dockerfile, compose, systemd unit                                                             | #23                                                                         |
+| A5   | Secret guard: gitleaks (pinned), lefthook pre-commit, token check, CI step                                     | #20                                                                         |
+| A6   | Skip rewards already received (`gameEventDrops`); stop on credit the plan can't use (the 2 h Witchspire waste) | branch `fix/already-received-rewards`, open: seed 150534                    |
 
 ### Wave B — a twin we can trust (built, in review)
 
-| Step | What                                                                                                                                                  | State                                               |
-| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| B1   | Wire-level HLS and PubSub in the twin (`twin-wire-hls-pubsub`)                                                                                        | review done: 2 P1s (token, claim truth), fixes owed  |
-| B2   | Classed request budgets with an event the core sees (`feat/classed-request-budgets`)                                                                  | review done: P1 (refusals unreachable), fixes owed   |
-| B3   | Calibration from the 2026-10-30 recordings (`calibrate-twin-timings`)                                                                                 | review done, fixes committed (2169cc9), merge after A6 |
-| B4   | Conformance: replay a recording's answers and frames through the twin and report disagreements                                                        | after B1+B3                                          |
+| Step | What                                                                                           | State                                                  |
+| ---- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| B1   | Wire-level HLS and PubSub in the twin (`twin-wire-hls-pubsub`)                                 | review done: 2 P1s (token, claim truth), fixes owed    |
+| B2   | Classed request budgets with an event the core sees (`feat/classed-request-budgets`)           | review done: P1 (refusals unreachable), fixes owed     |
+| B3   | Calibration from the 2026-10-30 recordings (`calibrate-twin-timings`)                          | review done, fixes committed (2169cc9), merge after A6 |
+| B4   | Conformance: replay a recording's answers and frames through the twin and report disagreements | after B1+B3                                            |
 
 ### Wave C — the agent harness
 
-| Step | What                                                                                                                                                      | Builds on  |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| Step | What                                                                                                                                                        | Builds on  |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
 | C1   | `verify-miner` skill (decision 13, research 06): launch (sim, shadow), status, evidence (trace digest, recordings, status JSON), cleanup, and a feature map | A2, B4     |
-| C2   | A simulated week with a heap bound (research 03 §2); bring RSS toward the ≤ 90 MB target (the live run sat at 126–131 MB)                                 | B1         |
-| C3   | `config.json` reloads while the miner runs (decision 28)                                                                                                  | A3         |
-| C4   | Scheduled `doctor` on the homelab, catching hash and header changes (research 02 §7)                                                                       | A2, A4, D1 |
+| C2   | A simulated week with a heap bound (research 03 §2); bring RSS toward the ≤ 90 MB target (the live run sat at 126–131 MB)                                   | B1         |
+| C3   | `config.json` reloads while the miner runs (decision 28)                                                                                                    | A3         |
+| C4   | Scheduled `doctor` on the homelab, catching hash and header changes (research 02 §7)                                                                        | A2, A4, D1 |
 
 ### Wave D — live, one at a time (supervisor only)
 
@@ -66,11 +66,11 @@ Each wave starts when what it builds on is merged. Inside a wave the steps run i
 
 ### Wave E — milestone 4 and users
 
-| Step | What                                                                                                 | Builds on |
-| ---- | ---------------------------------------------------------------------------------------------------- | --------- |
-| E1   | Points goals, bonus chest, streaks, raids (decision 28), built against the twin calibrated from D3  | C1, D3    |
+| Step | What                                                                                                          | Builds on |
+| ---- | ------------------------------------------------------------------------------------------------------------- | --------- |
+| E1   | Points goals, bonus chest, streaks, raids (decision 28), built against the twin calibrated from D3            | C1, D3    |
 | E2   | Export a redacted recording for a bug report, and replay it (research 04 §3; strict replay only, critique §5) | B4        |
-| E3   | `design.md`: the short final design, with what was dropped and why (research 01)                     | E1        |
+| E3   | `design.md`: the short final design, with what was dropped and why (research 01)                              | E1        |
 
 Favourites and a second stream wait for experiments E2/E3 of research 05 (decision 28).
 

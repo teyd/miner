@@ -17,7 +17,8 @@ describe("shadowOverTwin", () => {
     "writes the files of a shadow run: state, status, recordings and logs, without the token",
     () =>
       Effect.gen(function* () {
-        const result = yield* shadowOverTwin(scenarioOfSeed(3), config, 30);
+        // Seed 9 is `pnpm verify`'s: its recording repeats a part, so a reference must resolve.
+        const result = yield* shadowOverTwin(scenarioOfSeed(9), config, 30);
         assert.isUndefined(result.stopped);
         const names = [...result.files.keys()];
         assert.include(names, "state.shadow.json");
@@ -31,17 +32,37 @@ describe("shadowOverTwin", () => {
         }
         const recordings = names.filter((n) => n.startsWith("recordings/"));
         assert.isAtLeast(recordings.length, 1);
+        let refs = 0;
         for (const name of recordings) {
-          const expanded = expandRecording(
-            parseRecording(text(nodeGzip.gunzip(result.files.get(name)!))),
-          );
+          const entries = parseRecording(text(nodeGzip.gunzip(result.files.get(name)!)));
+          for (const entry of entries) {
+            const n = (entry as { refs?: unknown }).refs;
+            if (typeof n === "number") refs += n;
+          }
+          const expanded = expandRecording(entries);
           assert.isAbove(expanded.entries.length, 0);
           assert.deepStrictEqual(expanded.missing, []);
         }
+        assert.isAbove(refs, 0, "no reference exercised");
         for (const [name, bytes] of result.files) {
           const plain = name.endsWith(".gz") ? nodeGzip.gunzip(bytes) : bytes;
           assert.notInclude(text(plain), TWIN_TOKEN, name);
         }
+      }),
+    60_000,
+  );
+
+  it.effect(
+    "parks on a revoked token: seed 16's, revoked at minute 1 (the skill's Login and park evidence)",
+    () =>
+      Effect.gen(function* () {
+        const scenario = scenarioOfSeed(16);
+        assert.deepInclude(scenario.faults, { kind: "revoke-token", atMinute: 1 });
+        const result = yield* shadowOverTwin(scenario, config, 10);
+        assert.isUndefined(result.stopped);
+        const read = parseStatus(text(result.files.get("status.json")));
+        assert.strictEqual(read._tag, "Read");
+        if (read._tag === "Read") assert.strictEqual(read.status.auth, "needs-login");
       }),
     60_000,
   );

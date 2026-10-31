@@ -3,7 +3,9 @@
 // The whole verify-miner suite, cheaply, without Twitch: the gate (`pnpm check`), the bundle,
 // a seed sweep, a shadow run over the twin, its status and its recordings. Prints PASS/FAIL per
 // step with the evidence, and exits 1 unless every step passed. Evidence stays in one scratch
-// directory, printed at the end (cleanup.mjs removes it).
+// directory, printed at the end (cleanup.mjs removes it). The shadow run's recordings must hold
+// at least one `{"$same": …}` reference, so the recordings step proves they resolve: the default
+// seed 9 writes its first one within 20 virtual minutes (seeds 3 and 7 write none by then).
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -13,9 +15,14 @@ const { values } = args("verify", {
   "skip-check": { type: "boolean", default: false },
   seed: { type: "string", default: "1" },
   seeds: { type: "string", default: "20" },
-  "shadow-seed": { type: "string", default: "3" },
+  "shadow-seed": { type: "string", default: "9" },
   minutes: { type: "string", default: "60" },
 });
+// Every argument is checked before the scratch directory exists, so a usage error leaves none.
+const seed = String(int("verify", "seed", values.seed));
+const seeds = String(int("verify", "seeds", values.seeds));
+const shadowSeed = String(int("verify", "shadow-seed", values["shadow-seed"]));
+const minutes = String(int("verify", "minutes", values.minutes));
 const evidence = scratch("run");
 const data = join(evidence, "data");
 const script = (name, ...rest) => [process.execPath, join(root, "scripts/verify", name), ...rest];
@@ -30,15 +37,7 @@ const steps = [
   {
     name: "sim",
     needs: "build",
-    argv: script(
-      "sim.mjs",
-      "--seed",
-      String(int("verify", "seed", values.seed)),
-      "--seeds",
-      String(int("verify", "seeds", values.seeds)),
-      "--out",
-      evidence,
-    ),
+    argv: script("sim.mjs", "--seed", seed, "--seeds", seeds, "--out", evidence),
   },
   {
     name: "shadow",
@@ -46,9 +45,9 @@ const steps = [
     argv: script(
       "shadow.mjs",
       "--seed",
-      String(int("verify", "shadow-seed", values["shadow-seed"])),
+      shadowSeed,
       "--minutes",
-      String(int("verify", "minutes", values.minutes)),
+      minutes,
       "--dir",
       data,
       "--out",
@@ -63,7 +62,7 @@ const steps = [
   {
     name: "recordings",
     needs: "shadow",
-    argv: script("recordings.mjs", data, "--secret", TWIN_TOKEN),
+    argv: script("recordings.mjs", data, "--secret", TWIN_TOKEN, "--min-refs", "1"),
   },
 ];
 
@@ -114,10 +113,14 @@ for (const s of steps) {
 }
 
 const failed = [...results.values()].filter((v) => v === "FAIL").length;
-const head = shell("git rev-parse --short HEAD").stdout.trim();
+const rev = shell("git rev-parse --short HEAD");
+const head = rev.status === 0 ? rev.stdout.trim() : "";
+const porcelain = shell("git status --porcelain");
 const dirty =
-  shell("git status --porcelain").stdout.trim() === "" ? "" : " with uncommitted changes";
-console.log(`\nverify-miner at ${head}${dirty}`);
+  porcelain.status === 0 && porcelain.stdout.trim() !== "" ? " with uncommitted changes" : "";
+console.log(
+  head === "" ? "\nverify-miner outside a git checkout" : `\nverify-miner at ${head}${dirty}`,
+);
 for (const row of rows) console.log(row);
 console.log(`evidence: ${evidence} (step logs, sim.json, capsules, data/)`);
 console.log(failed === 0 ? "PASS: every step passed" : `FAIL: ${failed} step(s) failed`);

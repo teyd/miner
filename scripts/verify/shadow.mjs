@@ -11,7 +11,7 @@ import { args, fail, int, json, miner, pass, scratch } from "./lib.mjs";
 
 const step = "shadow";
 const { values } = args(step, {
-  seed: { type: "string", default: "3" },
+  seed: { type: "string", default: "9" },
   trace: { type: "string" },
   minutes: { type: "string", default: "60" },
   config: { type: "string" },

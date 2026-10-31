@@ -23,7 +23,9 @@ pnpm verify --skip-check # the same without `pnpm check`, ~25 s, while iterating
 It ends with a table, one row per step, and `PASS: every step passed` or `FAIL: n step(s)
 failed`, and names the evidence directory (`$TMPDIR/miner-verify-run-*`: a log per step,
 `sim.json`, capsules, `data/`). Options: `--seed N --seeds M` for the sweep, `--shadow-seed N
---minutes M` for the shadow run. Paste the table into the PR body.
+--minutes M` for the shadow run (seed 9 by default: its recording repeats a part within 20
+virtual minutes, so the recordings step proves `{"$same": …}` references resolve, and fails if
+the run wrote none). A usage error leaves no scratch directory. Paste the table into the PR body.
 
 Done on this repo is still `pnpm check`, `pnpm build` and `node dist/bin.mjs sim --seeds 300`
 (or what the task names). `pnpm verify` is the cheap loop, not a replacement for a wide sweep.
@@ -36,7 +38,7 @@ Done on this repo is still `pnpm check`, `pnpm build` and `node dist/bin.mjs sim
 node scripts/verify/build.mjs                     # pnpm build, then the bundle must start
 node scripts/verify/sim.mjs --seed 1 --seeds 100  # miner sim --json; sim.json + capsules in --out
 node scripts/verify/sim.mjs --trace capsule.json  # replay one capsule
-node scripts/verify/shadow.mjs --seed 3           # run --shadow over seed 3's twin
+node scripts/verify/shadow.mjs --seed 9           # run --shadow over seed 9's twin
 ```
 
 - `sim.mjs` saves `sim.json` (per-seed trace digests, the sweep digest, how many seeds watched,
@@ -81,13 +83,16 @@ heartbeat for 90 s), 2 needs login, 3 discovery broken.
 | State                          | `DATA_DIR/state.shadow.json`                                | `jq`                                                         |
 
 ```sh
-node scripts/verify/recordings.mjs DATA_DIR --secret twin-token
+node scripts/verify/recordings.mjs DATA_DIR --secret twin-token --min-refs 1
 ```
 
 Every recording must expand through `miner journal cat`: a `{"$same": …}` that points at nothing
-fails. With `--secret`, no file under `DATA_DIR` may hold the value, gzip inflated (the twin's
-token is `twin-token`; `pnpm verify` checks it). It prints counts per kind (`answer`, `frame`,
-`intent`).
+fails. It prints counts per kind (`answer`, `frame`, `intent`) and how many references resolved,
+or `no references exercised`; `--min-refs N` fails fewer than N (`pnpm verify` passes 1). With
+`--secret`, no file under `DATA_DIR` may hold the value, in its raw bytes or with every gzip
+member inflated on its own (a member torn by a crash gives the text it holds); a gzip file that
+can't be inflated fails, since it can't be shown clean (the twin's token is `twin-token`;
+`pnpm verify` checks it).
 
 - **The sweep digest** hashes every seed's trace digest. A refactor that should change no
   behaviour keeps it: note it before (`sim.mjs` prints it), then `sim.mjs --expect-digest HEX`
@@ -103,15 +108,19 @@ token is `twin-token`; `pnpm verify` checks it). It prints counts per kind (`ans
 ```sh
 node scripts/verify/cleanup.mjs --dry-run   # what it would do
 node scripts/verify/cleanup.mjs             # remove this checkout's $TMPDIR/miner-verify-* directories
-node scripts/verify/cleanup.mjs --kill      # also SIGTERM miners running on those directories
+node scripts/verify/cleanup.mjs --kill      # also stop this checkout's miners on them first
 node scripts/verify/cleanup.mjs --worktrees # also `git worktree prune` stale entries
 ```
 
 It deletes only `$TMPDIR/miner-verify-*` directories that this checkout made (their `.owner`
-file names it, so another worktree's evidence survives; `--all` takes every checkout's), and signals only miner processes (under `--kill`) whose
-`DATA_DIR` (or `sim --shadow` directory) is one of them; every other miner, such as the
-supervisor's live one, is listed and left alone. It lists worktrees but removes none: a task's
-worktree goes after its merge, by whoever made it (AGENTS.md, Shipping). Never delete a data
+file names it, so another worktree's evidence survives; `--all` takes every checkout's). Under
+`--kill` it sends SIGTERM only to miner processes whose `DATA_DIR` (or `sim --shadow` directory)
+is one of this checkout's, even with `--all`, and only if the pid is still the process it listed
+and runs as you; it waits for the clean stop (15 s at most, `MINER_VERIFY_KILL_WAIT_MS`) before
+it removes the directory, and fails, keeping the directory, if the miner is still there. Every
+other miner, such as the supervisor's live one, is listed and left alone, and so is its
+directory. It lists worktrees but removes none (`--worktrees` prunes stale entries and fails if
+the prune fails): a task's worktree goes after its merge, by whoever made it (AGENTS.md, Shipping). Never delete a data
 directory you did not make, and never `/home/teyd/projects/miner/data`.
 
 ## Feature map: which evidence proves which area
@@ -119,19 +128,19 @@ directory you did not make, and never `/home/teyd/projects/miner/data`.
 Violations are the simulator's invariants (`src/twin/invariants.ts`); a sweep that passes means
 none fired on any seed. Name the ones your change touches in the PR.
 
-| Area                                      | Proves it                                                                                                                                                                | Look at                                                                                                                           |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| Discovery (catalog, inventory, directory) | Sweep passes `Idle`, `Unproductive`, `RefusalDropped`; shadow `status.json` `catalog.status: "ok"` with campaigns                                                        | `status.mjs`; `answer` lines for `ViewerDropsDashboard`, `Inventory`, `DirectoryPage_Game` in the recording                       |
-| Watching and credit (HLS)                 | `watched` count in `sim.json`; `TwoWatches`, `WatchMisread`, `CdnIdentity`, `IdleButWatching`                                                                            | `sim.json`; a shadow run's `Watch` intent and `watch` in `status.json` (a shadow run never earns minutes: its ticks are not sent) |
-| Switching and plan (decision 28)          | `WrongPick`, `WatchFlip`, `AvoidedTooLong`, `AvoidedUnfairly`, `WatchedClaimed`                                                                                          | Run `shadow.mjs --config` with the priorities in question and read `watch` in `status.json` and the `Watch` intents               |
-| Claims                                    | `claimed` count in `sim.json`; `ClaimedTwice`, `ClaimedEarly`, `ClaimLate`, `ClaimMisread`, `MutationRetried`                                                            | Capsules; `Claim` intents in a shadow recording (never sent)                                                                      |
-| Request budgets                           | `refused` counts in `sim.json` (each kind still reached); `OverBudget`, `TooManyInFlight`, `RefusalDropped`, `BusyWake`                                                  | `sim.json`; `Throttled` events in a capsule's `tail`                                                                              |
-| PubSub                                    | `SocketBudget`, `SocketChurn`, `SubscribeChurn`, `NotListening`, `ReconnectIgnored`                                                                                      | `frame` lines in the recording; `pubsub` in `status.json`                                                                         |
-| Login and park (decision 11)              | `ParkedButPolling`, `WrongToken`; seeds with a revoked-token fault                                                                                                       | A capsule with that fault as `shadow.mjs --trace`: `auth: "needs-login"` in `status.json`                                         |
-| Status (decision 15)                      | `src/status/*.test.ts`, `src/runtime/status.test.ts`; `status.mjs` on a shadow run                                                                                       | `status.json`, `miner status --json`                                                                                              |
-| Recordings and redaction                  | `recordings.mjs --secret twin-token`; `TokenLeak`, `Orphan`                                                                                                              | `journal cat`; the recorder's tests in `src/twitch/journal.test.ts` and `redact.test.ts`                                          |
-| Crash and state                           | `StateLost` (crash faults in the sweep), `Nondeterministic` (each seed runs twice)                                                                                       | Sweep digest; `state.shadow.json`                                                                                                 |
-| Config                                    | `pnpm check` (schema test); `node dist/bin.mjs config validate` with a scratch `DATA_DIR`; `shadow.mjs --config` refuses an invalid file (exit 1, with the JSON pointer) | `schema/config.v1.json` committed after `pnpm schema`                                                                             |
+| Area                                      | Proves it                                                                                                                                                                | Look at                                                                                                                                                      |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Discovery (catalog, inventory, directory) | Sweep passes `Idle`, `Unproductive`, `RefusalDropped`; shadow `status.json` `catalog.status: "ok"` with campaigns                                                        | `status.mjs`; `answer` lines for `ViewerDropsDashboard`, `Inventory`, `DirectoryPage_Game` in the recording                                                  |
+| Watching and credit (HLS)                 | `watched` count in `sim.json`; `TwoWatches`, `WatchMisread`, `CdnIdentity`, `IdleButWatching`                                                                            | `sim.json`; a shadow run's `Watch` intent and `watch` in `status.json` (a shadow run never earns minutes: its ticks are not sent)                            |
+| Switching and plan (decision 28)          | `WrongPick`, `WatchFlip`, `AvoidedTooLong`, `AvoidedUnfairly`, `WatchedClaimed`                                                                                          | Run `shadow.mjs --config` with the priorities in question and read `watch` in `status.json` and the `Watch` intents                                          |
+| Claims                                    | `claimed` count in `sim.json`; `ClaimedTwice`, `ClaimedEarly`, `ClaimLate`, `ClaimMisread`, `MutationRetried`                                                            | `claimed` and `refused.Claim` in `sim.json`; a failed seed's capsule. A shadow run never shows a `Claim`: its ticks are not sent, so no drop completes in it |
+| Request budgets                           | `refused` counts in `sim.json` (each kind still reached); `OverBudget`, `TooManyInFlight`, `RefusalDropped`, `BusyWake`                                                  | `sim.json`; `Throttled` events in a capsule's `tail`                                                                                                         |
+| PubSub                                    | `SocketBudget`, `SocketChurn`, `SubscribeChurn`, `NotListening`, `ReconnectIgnored`                                                                                      | `frame` lines in the recording; `pubsub` in `status.json`                                                                                                    |
+| Login and park (decision 11)              | `ParkedButPolling`, `WrongToken`; seeds with a revoked-token fault                                                                                                       | `shadow.mjs --seed 16` (token revoked at minute 1): `auth: "needs-login"` in `status.json`, which `status.mjs` fails                                         |
+| Status (decision 15)                      | `src/status/*.test.ts`, `src/runtime/status.test.ts`; `status.mjs` on a shadow run                                                                                       | `status.json`, `miner status --json`                                                                                                                         |
+| Recordings and redaction                  | `recordings.mjs --secret twin-token`; `TokenLeak`, `Orphan`                                                                                                              | `journal cat`; the recorder's tests in `src/twitch/journal.test.ts` and `redact.test.ts`                                                                     |
+| Crash and state                           | `StateLost` (crash faults in the sweep), `Nondeterministic` (each seed runs twice)                                                                                       | Sweep digest; `state.shadow.json`                                                                                                                            |
+| Config                                    | `pnpm check` (schema test); `node dist/bin.mjs config validate` with a scratch `DATA_DIR`; `shadow.mjs --config` refuses an invalid file (exit 1, with the JSON pointer) | `schema/config.v1.json` committed after `pnpm schema`                                                                                                        |
 
 Things the twin cannot prove: whether Twitch still answers as recorded (hashes, headers;
 research 02), and whether real progress moves. Those need the supervisor's live runs (wave D).

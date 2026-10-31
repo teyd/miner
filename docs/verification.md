@@ -12,19 +12,20 @@ pnpm verify
 
 runs six steps and prints PASS or FAIL for each, with the evidence:
 
-| Step         | What it runs                                    | Fails when                                                                |
-| ------------ | ----------------------------------------------- | ------------------------------------------------------------------------- |
-| `check`      | `pnpm check` (format, lint, types, tests)       | anything in the gate fails                                                |
-| `build`      | `pnpm build`, then `dist/bin.mjs --version`     | the build fails, or the bundle doesn't start                              |
-| `sim`        | `miner sim --seeds 20 --json`                   | an invariant fires on a seed: its shrunk capsule is saved, with its rerun |
-| `shadow`     | `miner sim --seed 3 --shadow DIR`               | the run stops by itself, or `DIR` is not a fresh directory                |
-| `status`     | `miner status --json` on `DIR`                  | `status.json` is missing, unreadable, or shows no clean stop (stale)      |
-| `recordings` | `miner journal cat` on every recording in `DIR` | a reference points at nothing, or a file holds the twin's token           |
+| Step         | What it runs                                    | Fails when                                                                                                                    |
+| ------------ | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `check`      | `pnpm check` (format, lint, types, tests)       | anything in the gate fails                                                                                                    |
+| `build`      | `pnpm build`, then `dist/bin.mjs --version`     | the build fails, or the bundle doesn't start                                                                                  |
+| `sim`        | `miner sim --seeds 20 --json`                   | an invariant fires on a seed: its shrunk capsule is saved, with its rerun                                                     |
+| `shadow`     | `miner sim --seed 9 --shadow DIR`               | the run stops by itself, or `DIR` is not a fresh directory                                                                    |
+| `status`     | `miner status --json` on `DIR`                  | `status.json` is missing, unreadable, or shows no clean stop (stale)                                                          |
+| `recordings` | `miner journal cat` on every recording in `DIR` | a reference points at nothing, none was exercised, or a file holds the twin's token (or can't be inflated to show it doesn't) |
 
 `--skip-check` leaves out the gate while iterating. Every step is its own script in
 [`scripts/verify/`](../scripts/verify/) (Node built-ins only), so one can be rerun alone. Their
 tests (`scripts/verify/verify.test.ts`) break each one on purpose: a failing build, a failed seed,
-a stale status file, a dangling recording reference, a leaked secret.
+a stale status file, a dangling recording reference, a recording with none, a leaked secret
+(also in a recording torn by a crash), a miner that won't stop.
 
 ## The shadow run over the twin
 

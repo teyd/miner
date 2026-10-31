@@ -1,4 +1,7 @@
-import { spawnSync } from "node:child_process";
+// The scripts are plain Node CLIs (vite.config.ts), so their test drives them the same way: with
+// processes and files, not Effect services.
+/* oxlint-disable effecttsgo/node-builtin-import */
+import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -10,7 +13,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { gunzipSync, gzipSync } from "node:zlib";
+/* oxlint-enable effecttsgo/node-builtin-import */
 import { afterAll, assert, beforeAll, describe, it } from "@effect/vitest";
 
 /**
@@ -154,9 +159,10 @@ describe("status.mjs and recordings.mjs on a shadow run over the twin", () => {
 
   beforeAll(() => {
     data = join(fresh("shadow"), "data");
-    const r = script("shadow.mjs", ["--seed", "3", "--minutes", "20", "--dir", data]);
+    // Seed 9 (pnpm verify's) writes `$same` references within 20 virtual minutes; seed 3 none.
+    const r = script("shadow.mjs", ["--seed", "9", "--minutes", "20", "--dir", data]);
     assert.strictEqual(r.status, 0, r.out);
-    assert.include(r.out, `PASS shadow: seed 3, 20 virtual minutes`);
+    assert.include(r.out, `PASS shadow: seed 9, 20 virtual minutes`);
   }, 60_000);
 
   it("refuses to write a shadow run over an existing data directory", () => {
@@ -188,12 +194,16 @@ describe("status.mjs and recordings.mjs on a shadow run over the twin", () => {
     assert.include(stopped.out, "names no clean stop");
 
     const live = copy("fresh");
+    // `miner status` judges the heartbeat against the wall clock, so the file must name it.
+    // oxlint-disable-next-line effecttsgo/global-date
     const now = Date.now();
+    // oxlint-disable-next-line effecttsgo/global-date
+    const iso = (ms: number) => new Date(ms).toISOString();
     editStatus(live, (s) => ({
       ...s,
       stoppedAt: null,
-      heartbeatAt: new Date(now).toISOString(),
-      miner: { ...(s["miner"] as object), startedAt: new Date(now - 60_000).toISOString() },
+      heartbeatAt: iso(now),
+      miner: { ...(s["miner"] as object), startedAt: iso(now - 60_000) },
     }));
     const healthy = script("status.mjs", [live]);
     assert.strictEqual(healthy.status, 0, healthy.out);
@@ -211,10 +221,85 @@ describe("status.mjs and recordings.mjs on a shadow run over the twin", () => {
     assert.include(r.out, "status file unreadable");
   });
 
-  it("reads every recording whole and finds no token", () => {
-    const r = script("recordings.mjs", [data, "--secret", "twin-token"]);
+  it("reads every recording whole, counts its references and finds no token", () => {
+    const r = script("recordings.mjs", [data, "--secret", "twin-token", "--min-refs", "1"]);
     assert.strictEqual(r.status, 0, r.out);
     assert.match(r.out, /PASS recordings: 1 recording\(s\) read whole \(\d+ answer/);
+    assert.match(r.out, /; [1-9]\d* reference\(s\) resolved; /);
+    const more = script("recordings.mjs", [data, "--min-refs", "1000"]);
+    assert.strictEqual(more.status, 1);
+    assert.match(more.out, /FAIL recordings: \d+ reference\(s\) resolved, --min-refs 1000/);
+  });
+
+  it("fails --min-refs on a recording that holds no reference", () => {
+    const dir = copy("no-refs");
+    const file = recordingOf(dir);
+    const lines = gunzipSync(readFileSync(file)).toString("utf8").split("\n").filter(Boolean);
+    const plain = lines.filter((l) => !l.includes('"refs":'));
+    assert.isBelow(plain.length, lines.length);
+    writeFileSync(file, Buffer.concat(plain.map((l) => gzipSync(`${l}\n`))));
+    const quiet = script("recordings.mjs", [dir]);
+    assert.strictEqual(quiet.status, 0, quiet.out);
+    assert.include(quiet.out, "; no references exercised.");
+    const r = script("recordings.mjs", [dir, "--min-refs", "1"]);
+    assert.strictEqual(r.status, 1);
+    assert.include(r.out, "FAIL recordings: no references exercised, --min-refs 1");
+  });
+
+  /** The file a crash leaves: a first line (holding `note`), the run's recording, cut mid-member. */
+  const tear = (name: string, note: string) => {
+    const dir = copy(name);
+    const file = recordingOf(dir);
+    const first = {
+      kind: "answer",
+      at: 0,
+      operation: "Torn",
+      body: { note: `${note} `.repeat(40) },
+    };
+    const whole = Buffer.concat([gzipSync(`${JSON.stringify(first)}\n`), readFileSync(file)]);
+    writeFileSync(file, whole.subarray(0, whole.length - 7));
+    return dir;
+  };
+
+  it("fails a recording torn by a crash that holds the secret", () => {
+    const r = script("recordings.mjs", [
+      tear("torn-leak", "OAuth twin-token"),
+      "--secret",
+      "twin-token",
+    ]);
+    assert.strictEqual(r.status, 1, r.out);
+    assert.include(r.out, "contains a --secret value");
+  });
+
+  it("passes a recording torn by a crash that holds no secret", () => {
+    const r = script("recordings.mjs", [tear("torn-clean", "nothing"), "--secret", "twin-token"]);
+    assert.strictEqual(r.status, 0, r.out);
+    assert.include(r.out, "files hold no secret");
+  });
+
+  it("fails a gzip file it can't inflate, as it can't be shown clean", () => {
+    const dir = copy("corrupt");
+    const member = gzipSync("x".repeat(64));
+    // A valid header, then deflate data that is not deflate: no plaintext to scan.
+    writeFileSync(
+      join(dir, "logs", "old.log.gz"),
+      Buffer.concat([member.subarray(0, 10), Buffer.alloc(32, 0xff)]),
+    );
+    const r = script("recordings.mjs", [dir, "--secret", "twin-token"]);
+    assert.strictEqual(r.status, 1, r.out);
+    assert.include(
+      r.out,
+      "old.log.gz can't be inflated, so it can't be shown to hold no --secret value",
+    );
+  });
+
+  it("reads relative paths", () => {
+    const r = spawnSync(process.execPath, [join(root, "scripts/verify/recordings.mjs"), "."], {
+      cwd: data,
+      encoding: "utf8",
+      env: { ...process.env, MINER_BIN: "src/bin.ts" },
+    });
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
   });
 
   it("fails a recording with a reference to a part no earlier line holds", () => {
@@ -251,7 +336,7 @@ describe("status.mjs and recordings.mjs on a shadow run over the twin", () => {
 
 describe("all.mjs", () => {
   it("passes every step and names the evidence", () => {
-    const r = script("all.mjs", ["--seeds", "1", "--minutes", "10"], {
+    const r = script("all.mjs", ["--seeds", "1", "--minutes", "20"], {
       MINER_VERIFY_CHECK: "true",
       MINER_VERIFY_BUILD: "true",
     });
@@ -263,19 +348,41 @@ describe("all.mjs", () => {
     assert.isDefined(evidence);
     assert.isTrue(existsSync(join(evidence!, "sim.json")));
     assert.isTrue(existsSync(join(evidence!, "data", "status.json")));
+    assert.match(r.out, /^PASS {2}recordings .*[1-9]\d* reference\(s\) resolved/m);
     assert.include(r.out, "PASS: every step passed");
   }, 60_000);
+
+  it("fails the recordings step when the shadow run exercises no reference", () => {
+    const r = script("all.mjs", ["--seeds", "1", "--shadow-seed", "3", "--minutes", "20"], {
+      MINER_VERIFY_CHECK: "true",
+      MINER_VERIFY_BUILD: "true",
+    });
+    assert.strictEqual(r.status, 1, r.out);
+    assert.match(r.out, /^FAIL {2}recordings .*no references exercised, --min-refs 1/m);
+  }, 60_000);
+
+  it("leaves no scratch directory behind on a usage error", () => {
+    const runs = () => readdirSync(base).filter((n) => n.startsWith("miner-verify-run-")).length;
+    const before = runs();
+    const r = script("all.mjs", ["--seeds", "many"]);
+    assert.strictEqual(r.status, 2);
+    assert.include(r.out, "--seeds takes a whole number, got many");
+    assert.strictEqual(runs(), before);
+  });
 
   it("fails the run and skips what needs a broken build", () => {
     const r = script("all.mjs", ["--seeds", "1"], {
       MINER_VERIFY_CHECK: "true",
       MINER_VERIFY_BUILD: "exit 7",
+      // Outside a git checkout, the summary says so instead of naming an empty commit.
+      GIT_DIR: join(base, "not-a-repository"),
     });
     assert.strictEqual(r.status, 1);
     assert.match(r.out, /^FAIL {2}build /m);
     assert.match(r.out, /^FAIL {2}sim .*not run: build did not pass/m);
     assert.match(r.out, /^FAIL {2}status .*not run: shadow did not pass/m);
     assert.include(r.out, "FAIL: 5 step(s) failed");
+    assert.include(r.out, "verify-miner outside a git checkout");
   });
 });
 
@@ -303,6 +410,101 @@ describe("cleanup.mjs", () => {
     const all = script("cleanup.mjs", ["--all"], env);
     assert.strictEqual(all.status, 0, all.out);
     assert.deepStrictEqual(readdirSync(tmp), ["someone-elses"]);
+  });
+
+  /**
+   * A stand-in miner (`…/dist/bin.mjs run` with DATA_DIR in `dir`) that takes `stopMs` to stop
+   * on SIGTERM and then writes `stopped` beside its binary, as a clean stop writes its files.
+   */
+  const fakeRun = async (dir: string, stopMs: number) => {
+    const home = fresh(`fake-miner-${stopMs}-${dir.length}`);
+    const bin = join(home, "dist", "bin.mjs");
+    mkdirSync(join(home, "dist"));
+    writeFileSync(
+      bin,
+      `import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => setTimeout(() => {
+  writeFileSync(${JSON.stringify(join(home, "stopped"))}, "");
+  process.exit(130);
+}, ${stopMs}));
+writeFileSync(${JSON.stringify(join(home, "ready"))}, "");
+setInterval(() => {}, 1000);
+`,
+    );
+    const child = spawn(process.execPath, [bin, "run"], {
+      env: { ...process.env, DATA_DIR: join(dir, "data") },
+      stdio: "ignore",
+    });
+    while (!existsSync(join(home, "ready"))) await delay(20);
+    return { child, bin, stopped: () => existsSync(join(home, "stopped")) };
+  };
+
+  it("stops this checkout's miner with --kill and waits for it before removing its directory", async () => {
+    const tmp = fresh("cleanup-kill");
+    const dir = join(tmp, "miner-verify-run-kill");
+    mkdirSync(join(dir, "data"), { recursive: true });
+    writeFileSync(join(dir, ".owner"), `${root}\n`);
+    const miner = await fakeRun(dir, 400);
+    try {
+      const r = script("cleanup.mjs", ["--kill"], { MINER_VERIFY_TMPDIR: tmp });
+      assert.strictEqual(r.status, 0, r.out);
+      assert.include(r.out, `stopped pid ${miner.child.pid}: miner ${miner.bin} run`);
+      // It returned only after the miner's clean stop, and then removed the directory.
+      assert.isTrue(miner.stopped());
+      assert.isFalse(existsSync(dir));
+    } finally {
+      miner.child.kill("SIGKILL");
+    }
+  });
+
+  it("fails, and keeps the directory, when the miner does not stop in time", async () => {
+    const tmp = fresh("cleanup-slow");
+    const dir = join(tmp, "miner-verify-run-slow");
+    mkdirSync(join(dir, "data"), { recursive: true });
+    writeFileSync(join(dir, ".owner"), `${root}\n`);
+    const miner = await fakeRun(dir, 5_000);
+    try {
+      const r = script("cleanup.mjs", ["--kill"], {
+        MINER_VERIFY_TMPDIR: tmp,
+        MINER_VERIFY_KILL_WAIT_MS: "300",
+      });
+      assert.strictEqual(r.status, 1, r.out);
+      assert.include(r.out, `pid ${miner.child.pid}: still running 300 ms after SIGTERM`);
+      assert.include(r.out, `left ${dir}: a miner still runs on it`);
+      assert.isTrue(existsSync(dir));
+    } finally {
+      miner.child.kill("SIGKILL");
+    }
+  });
+
+  it("never signals a miner on another checkout's directory, even with --all --kill", async () => {
+    const tmp = fresh("cleanup-other");
+    const dir = join(tmp, "miner-verify-run-other");
+    mkdirSync(join(dir, "data"), { recursive: true });
+    writeFileSync(join(dir, ".owner"), "/another/worktree\n");
+    const miner = await fakeRun(dir, 0);
+    try {
+      const r = script("cleanup.mjs", ["--all", "--kill"], { MINER_VERIFY_TMPDIR: tmp });
+      assert.strictEqual(r.status, 0, r.out);
+      assert.include(r.out, `left pid ${miner.child.pid}: miner ${miner.bin} run`);
+      assert.include(r.out, "a verify run of another checkout, never signalled");
+      assert.include(r.out, `left ${dir}: a miner still runs on it`);
+      assert.isTrue(existsSync(dir));
+      assert.isNull(miner.child.exitCode);
+      assert.isFalse(miner.stopped());
+    } finally {
+      miner.child.kill("SIGKILL");
+    }
+  });
+
+  it("fails when --worktrees can't prune", () => {
+    const env = { MINER_VERIFY_TMPDIR: fresh("cleanup-prune"), GIT_DIR: join(base, "nowhere") };
+    const r = script("cleanup.mjs", ["--worktrees"], env);
+    assert.strictEqual(r.status, 1, r.out);
+    assert.match(r.out, /FAIL cleanup: .*git worktree prune exited \d+/);
+    const listing = script("cleanup.mjs", [], env);
+    assert.strictEqual(listing.status, 0, listing.out);
+    assert.include(listing.out, "so stale worktrees are not listed");
   });
 
   it("marks the scratch directories a script makes with the checkout that made it", () => {

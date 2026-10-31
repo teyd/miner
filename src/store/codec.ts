@@ -42,9 +42,10 @@ const revive = (value: unknown): unknown => {
  * Bumped whenever `State` changes shape. A file with another version is refused rather than
  * guessed at: a misread claim intent could send a claim twice, so only a version with a
  * written migration is read. 2: `deadlines.subscribe`. 3: `discovery`, and `settings` as a list
- * of drops goals (2 migrates).
+ * of drops goals (2 migrates). 4: `awarded`, `inventoried`, `avoidCampaigns` and the watch's
+ * `wasted` (2 and 3 migrate).
  */
-export const STATE_VERSION = 3;
+export const STATE_VERSION = 4;
 
 export const encodeState = (state: State): string =>
   `{"state":${canonical(state)},"version":${STATE_VERSION}}`;
@@ -60,14 +61,33 @@ const fromVersion2 = (state: Record<string, unknown>): Record<string, unknown> =
   discovery: undefined,
 });
 
-/** Throws on text that isn't a saved state of this version, or of one it migrates (2). */
+/**
+ * Version 3 to 4. Received rewards come with the next inventory read, which a start asks for, and
+ * nothing is avoided yet. A saved watch gets no `wasted`; a start resets the watch anyway.
+ */
+const fromVersion3 = (state: Record<string, unknown>): Record<string, unknown> => ({
+  ...state,
+  awarded: new Map(),
+  inventoried: new Set(),
+  avoidCampaigns: new Set(),
+  watch:
+    Predicate.isObject(state["watch"]) && state["watch"]["_tag"] === "Watching"
+      ? { ...state["watch"], wasted: undefined }
+      : state["watch"],
+});
+
+/** Throws on text that isn't a saved state of this version, or of one it migrates (2, 3). */
 export const decodeState = (text: string): State => {
   const parsed: unknown = JSON.parse(text);
   if (!Predicate.isObject(parsed) || !("version" in parsed) || !("state" in parsed)) {
     throw new Error("not a saved miner state");
   }
-  if (parsed.version === 2 && Predicate.isObject(parsed.state)) {
-    return checked(revive(fromVersion2(parsed.state as Record<string, unknown>)));
+  if (parsed.version === 2 || parsed.version === 3) {
+    if (!Predicate.isObject(parsed.state) || Array.isArray(parsed.state)) {
+      throw new Error("not a saved miner state");
+    }
+    const state = revive(parsed.state) as Record<string, unknown>;
+    return checked(fromVersion3(parsed.version === 2 ? fromVersion2(state) : state));
   }
   if (parsed.version !== STATE_VERSION) {
     throw new Error(`state version ${String(parsed.version)}, this miner reads ${STATE_VERSION}`);
@@ -96,6 +116,10 @@ const mapOf =
   (key: Check, value: Check): Check =>
   (v) =>
     v instanceof Map && [...v].every(([k, x]) => key(k) && value(x));
+const setOf =
+  (check: Check): Check =>
+  (v) =>
+    v instanceof Set && [...v].every(check);
 /** Every key present (an `undefined` field is saved as a sentinel, so it is present too). */
 const record =
   (fields: Record<string, Check>): Check =>
@@ -133,8 +157,11 @@ const fields: { readonly [K in keyof State]-?: Check } = {
   catalog: optional(arrayOf(isObject)),
   catalogStatus: oneOf("unknown", "ok", "unavailable"),
   progress: mapOf(isString, progressOf),
+  awarded: mapOf(isString, isNumber),
+  inventoried: setOf(isString),
   channels: mapOf(isString, isObject),
   avoid: (v) => v instanceof Set,
+  avoidCampaigns: setOf(isString),
   watch: (v) => record({ _tag: oneOf("Watching", "Idle") })(v),
   claims: mapOf(isString, claimIntent),
   subscriptions: arrayOf(isString),

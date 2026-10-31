@@ -64,6 +64,15 @@ export interface Progress {
   readonly claimed: boolean;
 }
 
+/**
+ * A reward Twitch delivered to the account (`Inventory.gameEventDrops`): a benefit id and when it
+ * was last awarded. Twitch lists one entry per benefit, whatever campaign awarded it.
+ */
+export interface Award {
+  readonly benefitId: string;
+  readonly at: Millis;
+}
+
 export interface Live {
   readonly viewers: number;
   readonly dropsEnabled: boolean;

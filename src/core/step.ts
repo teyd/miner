@@ -11,14 +11,14 @@ import {
 import {
   minable,
   plan,
-  wantedOn,
+  usableOn,
   watchlist,
   type PlanInput,
   type Rank,
   type Target,
 } from "./plan.ts";
 import { Command, readKey, type ChannelRead, type Event } from "./protocol.ts";
-import { canEarn, channelCanEarn, isClaimable, wantedDrops } from "./rules.ts";
+import { channelCanEarn, isClaimable, wantedDrops, withReceived } from "./rules.ts";
 import {
   CATALOG_INTERVAL,
   CATALOG_OPENING_GAP,
@@ -89,6 +89,7 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
           watch: { _tag: "Idle", reason: "starting" },
           channels: new Map(),
           avoid: new Set(),
+          avoidCampaigns: new Set(),
           subscriptions: [],
           discovery: undefined,
           // A claim in flight when the process died may have succeeded: inventory decides, once
@@ -186,9 +187,15 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
           intent.status === "unknown" && intent.recheckAt !== undefined && now >= intent.recheckAt;
         if (p.claimed || settled) claims.delete(key);
       }
+      // Twitch lists each reward once, with its last award; keep the latest if it ever repeats.
+      const awarded = new Map<string, Millis>();
+      for (const a of event.awarded)
+        awarded.set(a.benefitId, Math.max(a.at, awarded.get(a.benefitId) ?? a.at));
       const next = {
         ...s,
         progress,
+        awarded,
+        inventoried: new Set(event.progress.map((p) => p.dropId)),
         claims,
         deadlines: { ...s.deadlines, inventory: nextInventory(claims, now) },
       };
@@ -198,8 +205,11 @@ const handle = (s: State, event: Event, now: Millis, rank: Rank): Handled => {
     case "DropProgress": {
       const updated = credit(s, event.dropId, event.minutes, now, rank);
       const drop = findDrop(s.catalog, event.dropId);
-      const complete = drop !== undefined && event.minutes >= drop.drop.requiredMinutes;
-      return [updated, complete ? [Command.ReadInventory()] : []];
+      // Once, as the drop completes: Twitch keeps sending minutes past the requirement.
+      const was = s.progress.get(event.dropId)?.minutes ?? 0;
+      const required = drop?.drop.requiredMinutes ?? Infinity;
+      const completes = was < required && event.minutes >= required;
+      return [updated, completes ? [Command.ReadInventory()] : []];
     }
 
     case "DropClaimable":
@@ -324,8 +334,22 @@ const ticked = (s: State, channelId: ChannelId, now: Millis): Handled => {
   const w = s.watch;
   if (w._tag !== "Watching" || w.channelId !== channelId) return [s, []];
   const estimatedMinutes = w.estimatedMinutes + WATCH_INTERVAL / MINUTE;
-  // Twitch never confirmed a minute on this channel for a long time: it doesn't credit us here.
+  // Twitch confirmed nothing the plan can use on this channel for a long time. If it kept
+  // crediting another drop of the watched campaign, it picks that drop for this account wherever
+  // we watch: skip the campaign. The channel keeps its clock: Twitch credits one campaign per
+  // stream, so a next target there must be credited by the next tick, or the channel goes too.
+  // Otherwise the channel doesn't credit us: skip the channel.
   if (now - w.confirmedAt >= STALL_AFTER) {
+    if (w.wasted === w.campaignId) {
+      return [
+        {
+          ...s,
+          avoidCampaigns: new Set([...s.avoidCampaigns, w.campaignId]),
+          watch: { ...w, estimatedMinutes, wasted: undefined },
+        },
+        [],
+      ];
+    }
     return [
       { ...s, avoid: new Set([...s.avoid, channelId]), watch: { ...w, estimatedMinutes } },
       [],
@@ -342,13 +366,16 @@ const ticked = (s: State, channelId: ChannelId, now: Millis): Handled => {
 };
 
 /**
- * Twitch credited minutes to `dropId`. Record them, and if we're watching, adopt that drop even
- * if we planned another: several campaigns can share a stream and Twitch picks which progresses.
+ * Twitch credited minutes to `dropId`. Record them. Only a credit the plan can use confirms the
+ * watch (`STALL_AFTER`): new minutes, within its requirement, for a drop a goal wants and that
+ * could still earn before this credit. If it is another drop than the watched one, adopt it: several
+ * campaigns can share a stream and Twitch picks which one progresses. A credit to anything else
+ * (complete, received, unwanted) is noted in `wasted` and changes nothing else.
  */
 const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Rank): State => {
   const updated = withProgress(s, dropId, (p) => ({ ...p, minutes: Math.max(p.minutes, minutes) }));
-  const w = updated.watch;
-  if (w._tag !== "Watching" || w.dropId === dropId) return confirmWatched(updated, now);
+  const w = s.watch;
+  if (w._tag !== "Watching") return updated;
   const found = findDrop(s.catalog, dropId);
   if (found === undefined) {
     // A campaign that started after the last catalog read: the channel does credit us, and the
@@ -360,24 +387,40 @@ const credit = (s: State, dropId: DropId, minutes: number, now: Millis, rank: Ra
       deadlines: { ...updated.deadlines, catalog },
     };
   }
-  // Twitch credits a campaign the settings don't ask for: no progress for us, so no adoption.
-  if (!wantedOn(planInput(updated, s.catalog ?? [], now), found.campaign, w.channelId, rank)) {
-    return updated;
-  }
-  return confirmWatched(
-    {
-      ...updated,
-      watch: { ...w, campaignId: found.campaign.id, dropId, credited: true, confirmedMinutes: -1 },
+  const input = planInput(s, s.catalog ?? [], now);
+  const before = input.progress.get(dropId)?.minutes ?? 0;
+  // Minutes past the requirement are no progress, even as the first number we hear: Twitch kept
+  // counting a received drop to 352 of 240.
+  const usable =
+    before < minutes &&
+    minutes <= found.drop.requiredMinutes &&
+    usableOn(input, found.campaign, found.drop, w.channelId, rank);
+  if (!usable) return { ...updated, watch: { ...w, wasted: found.campaign.id } };
+  return {
+    ...updated,
+    watch: {
+      ...w,
+      campaignId: found.campaign.id,
+      dropId,
+      credited: w.dropId === dropId ? w.credited : true,
+      confirmedAt: now,
+      confirmedMinutes: minutes,
+      // Twitch's number replaces our estimate, as TDM resets its extra minutes on every truth.
+      estimatedMinutes: minutes,
+      wasted: undefined,
     },
-    now,
-  );
+  };
 };
 
-/** Record confirmed progress for the watched drop whenever Twitch's number moves forward. */
+/**
+ * Record confirmed progress for the watched drop whenever Twitch's number moves forward, up to
+ * the drop's requirement: minutes beyond it earn nothing.
+ */
 const confirmWatched = (s: State, now: Millis): State => {
   const w = s.watch;
   if (w._tag !== "Watching") return s;
-  const minutes = s.progress.get(w.dropId)?.minutes ?? 0;
+  const required = findDrop(s.catalog, w.dropId)?.drop.requiredMinutes ?? Infinity;
+  const minutes = Math.min(s.progress.get(w.dropId)?.minutes ?? 0, required);
   if (minutes <= w.confirmedMinutes) return s;
   return {
     ...s,
@@ -385,18 +428,20 @@ const confirmWatched = (s: State, now: Millis): State => {
       ...w,
       confirmedAt: now,
       confirmedMinutes: minutes,
-      // Twitch's number replaces our estimate, as TDM resets its extra minutes on every truth.
       estimatedMinutes: minutes,
+      wasted: undefined,
     },
   };
 };
 
+/** What the plan sees: progress with received rewards counted as claimed (`withReceived`). */
 const planInput = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis): PlanInput => ({
   campaigns,
-  progress: s.progress,
+  progress: withReceived(campaigns, s.progress, s.awarded, s.inventoried),
   channels: s.channels,
   settings: s.settings,
   refused: s.avoid,
+  avoidedCampaigns: s.avoidCampaigns,
   now,
   watching: s.watch._tag === "Watching" ? s.watch.campaignId : undefined,
 });
@@ -427,8 +472,7 @@ const replan = (s: State, now: Millis, rank: Rank): Handled => {
     const keepDrop =
       w.dropId === target.drop.id ||
       (credited !== undefined &&
-        wantedOn(input, credited.campaign, w.channelId, rank) &&
-        canEarn(credited.drop, s.progress, now));
+        usableOn(input, credited.campaign, credited.drop, w.channelId, rank));
     if (keepDrop) return [s, []];
     return [confirmWatched({ ...s, watch: watching(s, target, w.channelId, now) }, now), []];
   }
@@ -502,6 +546,7 @@ const watching = (s: State, target: Target, channelId: ChannelId, now: Millis): 
     confirmedMinutes: minutes,
     estimatedMinutes: minutes,
     lastCurrentDropRead: keep?.lastCurrentDropRead,
+    wasted: keep?.wasted,
   };
 };
 
@@ -552,10 +597,11 @@ const follow = (s: State, now: Millis, rank: Rank): Handled => {
  * otherwise a drop opening between hourly reads waits up to an hour for its channels.
  */
 const nextOpening = (s: State, campaigns: ReadonlyArray<Campaign>, now: Millis): Millis => {
+  const progress = withReceived(campaigns, s.progress, s.awarded, s.inventoried);
   const starts = campaigns.flatMap((campaign) => {
     if (now >= campaign.endsAt) return [];
     const wanted = new Set(
-      s.settings.goals.flatMap((goal) => [...wantedDrops(goal, campaign, s.progress)]),
+      s.settings.goals.flatMap((goal) => [...wantedDrops(goal, campaign, progress)]),
     );
     return campaign.drops
       .filter((d) => wanted.has(d.id) && d.startsAt > now)

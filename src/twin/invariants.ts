@@ -21,10 +21,13 @@ import { allowedPicks, allowedWatch, canFinishOn, goalDrops, type View } from ".
 import { SIM_EPOCH, type Violation } from "./scenario.ts";
 import { TWIN_TIMEOUT, type Activity } from "./twin.ts";
 import {
+  CLAIMED_FLAG_LAG,
   channelOf,
   claimableAt,
   creditedCampaign,
+  creditedDrops,
   earnable,
+  earnedAt,
   faultWindows,
   framesDownAt,
   gameAt,
@@ -104,6 +107,10 @@ export interface Checker {
   readonly restartedAt: Millis | undefined;
   /** Channels the core avoids for a reason the twin agrees with. */
   readonly fairlyAvoided: ReadonlySet<ChannelId>;
+  /** Campaigns the core avoids for a reason the twin agrees with. */
+  readonly fairlyAvoidedCampaigns: ReadonlySet<CampaignId>;
+  /** The core's last inventory read since a restart. */
+  readonly lastInventoryAt: Millis | undefined;
   /** Channels whose last schedule change reached the core as a frame. */
   readonly heard: ReadonlySet<ChannelId>;
   /**
@@ -147,6 +154,8 @@ export const initialChecker: Checker = {
   unknownCreditAt: undefined,
   restartedAt: undefined,
   fairlyAvoided: new Set(),
+  fairlyAvoidedCampaigns: new Set(),
+  lastInventoryAt: undefined,
   heard: new Set(),
   lastWantedCredit: new Map(),
   lastObservedAt: SIM_EPOCH,
@@ -157,26 +166,37 @@ export const initialChecker: Checker = {
   lastSubscribe: undefined,
 };
 
-/** Some goal that may watch `channelId` asks for one of these credited drops. */
-const wantedCredit = (world: World, credit: Credit): boolean => {
+/**
+ * Some goal that may watch the channel asks for one of these credited drops, and the minute
+ * earned it something: the drop was short of its requirement, unclaimed, open and unlocked. A
+ * campaign the core fairly gave up on earns it nothing.
+ */
+const wantedCredit = (world: World, credit: Credit, avoided: ReadonlySet<CampaignId>): boolean => {
   const campaign = world.campaigns.find((x) => x.id === credit.campaignId);
-  if (campaign === undefined) return false;
+  if (campaign === undefined || avoided.has(campaign.id)) return false;
   return world.settings.goals.some(
     (g) =>
       !g.excludeChannels.includes(credit.channelId) &&
-      goalDrops(g, campaign, (id) => isClaimedAt(world, id, credit.at)).some((d) =>
-        credit.dropIds.includes(d.id),
+      goalDrops(g, campaign, (id) => isClaimedAt(world, id, credit.at)).some(
+        (d) => credit.dropIds.includes(d.id) && earnedAt(world, d, credit.at),
       ),
   );
 };
 
-/** Some goal that may watch `channelId` asks for a drop of the campaign that can earn now. */
-const wanted = (world: World, campaign: Campaign, channelId: ChannelId, now: Millis): boolean =>
-  world.settings.goals.some(
+/**
+ * Some goal that may watch `channelId` asks for a drop of the campaign that a minute there would
+ * credit now and that can earn: Twitch may credit only one drop (`creditsOnly`).
+ */
+const wanted = (world: World, campaign: Campaign, channelId: ChannelId, now: Millis): boolean => {
+  const credited = creditedDrops(world, campaign, now);
+  return world.settings.goals.some(
     (g) =>
       !g.excludeChannels.includes(channelId) &&
-      goalDrops(g, campaign, (id) => world.claimed.has(id)).some((d) => earnable(world, d, now)),
+      goalDrops(g, campaign, (id) => world.claimed.has(id)).some(
+        (d) => credited.includes(d) && earnable(world, d, now),
+      ),
   );
+};
 
 export interface Opportunity {
   readonly channelId: ChannelId;
@@ -192,11 +212,13 @@ export const opportunities = (
   world: World,
   now: Millis,
   avoided: ReadonlySet<ChannelId>,
+  avoidedCampaigns: ReadonlySet<CampaignId> = new Set(),
 ): ReadonlyArray<Opportunity> =>
   world.channels.flatMap((ch) => {
     if (avoided.has(ch.id)) return [];
     const campaign = creditedCampaign(world, ch.id, now);
-    if (campaign === undefined || !wanted(world, campaign, ch.id, now)) return [];
+    if (campaign === undefined || avoidedCampaigns.has(campaign.id)) return [];
+    if (!wanted(world, campaign, ch.id, now)) return [];
     const discoverable =
       campaign.allowedChannels.length > 0 || gameAt(world, ch.id, now) === campaign.game.id;
     return discoverable ? [{ channelId: ch.id, campaign }] : [];
@@ -247,6 +269,8 @@ export const checkStep = (
       watchSince: undefined,
       unknownCreditAt: undefined,
       fairlyAvoided: new Set(),
+      fairlyAvoidedCampaigns: new Set(),
+      lastInventoryAt: undefined,
       heard: new Set(),
       lastWatch: undefined,
       lastSubscribe: undefined,
@@ -329,7 +353,7 @@ export const checkStep = (
     }
     if (isRevoked(world, credit.at))
       fail("TwinBroken", `credit on ${credit.channelId} after revoke`);
-    if (wantedCredit(world, credit)) {
+    if (wantedCredit(world, credit, c.fairlyAvoidedCampaigns)) {
       lastWantedCredit.set(credit.channelId, credit.at);
     }
   }
@@ -374,6 +398,7 @@ export const checkStep = (
   c = { ...c, heard };
 
   c = checkIdle(c, o, fail);
+  checkUnproductive(c, o, fail);
   return [{ ...c, lastObservedAt: o.now }, found];
 };
 
@@ -411,6 +436,7 @@ const checkCommands = (
 
   // 4: a lost claim answer settles only through a late enough inventory read.
   if (event._tag === "InventoryRead") {
+    c = { ...c, lastInventoryAt: o.now };
     const claims = new Map(c.claims);
     for (const [key, intent] of before.claims) {
       const track = claims.get(key);
@@ -526,6 +552,44 @@ const checkCommands = (
       fail("AvoidedUnfairly", `${id} avoided, it credited at +${minutesSince(lastCredit ?? 0)}m`);
     }
   }
+  // 3b, for campaigns: the watch it gave up on earned nothing wanted for a stall's length.
+  for (const id of after.avoidCampaigns) {
+    if (before.avoidCampaigns.has(id)) continue;
+    const channelId = before.watch._tag === "Watching" ? before.watch.channelId : undefined;
+    const quietFor = STALL_AFTER - INVENTORY_INTERVAL - world.inventoryLag - 2 * MINUTE;
+    const lastCredit = channelId === undefined ? undefined : c.lastWantedCredit.get(channelId);
+    const quiet = lastCredit === undefined || o.now - lastCredit >= quietFor;
+    const disturbed = faultWindows(world).some(
+      (w) => w.from <= o.now && w.to >= o.now - STALL_AFTER,
+    );
+    if (quiet || disturbed) {
+      c = { ...c, fairlyAvoidedCampaigns: new Set([...c.fairlyAvoidedCampaigns, id]) };
+    } else {
+      fail(
+        "AvoidedUnfairly",
+        `${id} avoided, ${channelId ?? "its channel"} credited it at +${minutesSince(lastCredit ?? 0)}m`,
+      );
+    }
+  }
+
+  // 8: the core watches no drop the account already has, once an inventory read could show it,
+  // in `self.isClaimed` or, for a campaign Twitch no longer lists, in `gameEventDrops` (the live
+  // run's two hours on a received "Witchspire Logo", 2026-10-30). A minute covers the answer's
+  // latency.
+  const w = after.watch;
+  const claimedAt = w._tag === "Watching" ? world.claimed.get(w.dropId) : undefined;
+  if (
+    w._tag === "Watching" &&
+    claimedAt !== undefined &&
+    c.lastInventoryAt !== undefined &&
+    claimedAt + CLAIMED_FLAG_LAG + MINUTE <= c.lastInventoryAt
+  ) {
+    fail(
+      "WatchedClaimed",
+      `watching ${w.channelId} for ${w.dropId}, claimed at +${minutesSince(claimedAt)}m, ` +
+        `inventory read at +${minutesSince(c.lastInventoryAt)}m`,
+    );
+  }
   return c;
 };
 
@@ -558,6 +622,7 @@ const flipWithoutCause = (
   const oldChanged =
     changedBetween(world, old, from, o.now) ||
     step.after.avoid.has(old) ||
+    (last.campaignId !== undefined && step.after.avoidCampaigns.has(last.campaignId)) ||
     step.after.channels.get(old)?.live === undefined;
   const oldCampaigns = [
     last.campaignId,
@@ -589,8 +654,11 @@ const flipWithoutCause = (
 const viewOf = (o: Observation, step: StepRecord): View => ({
   catalog: step.after.catalog ?? [],
   progress: step.after.progress,
+  awarded: step.after.awarded,
+  inventoried: step.after.inventoried,
   channels: step.after.channels,
   avoid: step.after.avoid,
+  avoidCampaigns: step.after.avoidCampaigns,
   now: o.now,
 });
 
@@ -673,7 +741,12 @@ const checkIdle = (
   const restarting =
     checker.restartedAt !== undefined && o.now - checker.restartedAt < RESTART_GRACE;
   const paused = faulted || isRevoked(world, o.now) || restarting || o.state.auth === "needs-login";
-  const chances = opportunities(world, o.now, checker.fairlyAvoided);
+  const chances = opportunities(
+    world,
+    o.now,
+    checker.fairlyAvoided,
+    checker.fairlyAvoidedCampaigns,
+  );
   if (paused || chances.length === 0 || productive(world, o.now)) {
     return { ...checker, idleSince: undefined, knownSince: undefined };
   }
@@ -706,6 +779,39 @@ const checkIdle = (
     return { ...checker, idleSince: undefined, knownSince: undefined };
   }
   return { ...checker, idleSince: since, knownSince };
+};
+
+/**
+ * 9: a watch that earns nothing wanted ends within a stall. Twitch may credit the channel all the
+ * while, with drops past their requirement, received, or unwanted (`creditsOnly`): the live run
+ * of 2026-10-30 watched one channel for two hours because any credit restarted its stall clock.
+ * The clock starts at the watch, a wanted credit there, a credit the core couldn't place (it
+ * rereads the catalog), a restart, or the end of a fault. Giving up a campaign doesn't restart
+ * it: a next target on the same channel must be credited at once (`ticked` in `step.ts`).
+ */
+const checkUnproductive = (
+  c: Checker,
+  o: Observation,
+  fail: (kind: string, detail: string) => void,
+): void => {
+  const w = o.state.watch;
+  if (w._tag !== "Watching" || c.watching !== w.channelId || c.watchSince === undefined) return;
+  if (o.state.auth !== "valid" || isRevoked(o.world, o.now)) return;
+  const faults = faultWindows(o.world).filter((x) => x.from <= o.now);
+  const since = Math.max(
+    c.watchSince,
+    c.lastWantedCredit.get(w.channelId) ?? -Infinity,
+    c.unknownCreditAt ?? -Infinity,
+    c.restartedAt ?? -Infinity,
+    ...faults.map((x) => x.to),
+  );
+  if (o.now - since > STALL_AFTER + 2 * MINUTE) {
+    fail(
+      "Unproductive",
+      `${w.channelId} earned nothing wanted since +${minutesSince(since)}m ` +
+        `(core: ${canonical(w)})`,
+    );
+  }
 };
 
 const roundTrips = (text: string): boolean => {

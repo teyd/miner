@@ -1,5 +1,6 @@
 import { DateTime, Schema, SchemaGetter } from "effect";
 import type {
+  Award,
   Benefit,
   Campaign,
   CampaignId,
@@ -101,8 +102,11 @@ export const CampaignDetails = Schema.Struct({
 });
 
 /**
- * A `null` anywhere down to the campaign list fails decoding: an empty inventory is `[]`, and a
- * backend failure arrives as a `service error`, which the client retries before decoding.
+ * A `null` anywhere down to the campaign list, or for `gameEventDrops`, fails decoding: an empty
+ * inventory is `[]`, and a backend failure arrives as a `service error`, which the client
+ * retries before decoding. `gameEventDrops` lists every reward the account ever received, one
+ * entry per benefit id (132 to 139 entries on 2026-10-30), including those of campaigns
+ * `dropCampaignsInProgress` no longer lists; TDM reads it the same way (`twitch.py:1499-1502`).
  */
 export const Inventory = Schema.Struct({
   currentUser: Schema.Struct({
@@ -127,6 +131,7 @@ export const Inventory = Schema.Struct({
           ),
         }),
       ),
+      gameEventDrops: Schema.Array(Schema.Struct({ id: Schema.String, lastAwardedAt: Millis })),
     }),
   }),
 });
@@ -212,7 +217,7 @@ export const allowedLogins = (
 ): ReadonlyArray<readonly [ChannelId, string]> =>
   (c.allow?.channels ?? []).map((ch) => [ch.id as ChannelId, ch.name] as const);
 
-export const toProgress = (inventory: typeof Inventory.Type): ReadonlyArray<Progress> =>
+const toProgress = (inventory: typeof Inventory.Type): ReadonlyArray<Progress> =>
   inventory.currentUser.inventory.dropCampaignsInProgress.flatMap((c) =>
     (c.timeBasedDrops ?? []).map((d) => ({
       dropId: d.id as DropId,
@@ -224,6 +229,19 @@ export const toProgress = (inventory: typeof Inventory.Type): ReadonlyArray<Prog
       claimed: d.self?.isClaimed ?? false,
     })),
   );
+
+export interface InventoryAnswer {
+  readonly progress: ReadonlyArray<Progress>;
+  readonly awarded: ReadonlyArray<Award>;
+}
+
+export const toInventory = (inventory: typeof Inventory.Type): InventoryAnswer => ({
+  progress: toProgress(inventory),
+  awarded: inventory.currentUser.inventory.gameEventDrops.map((b) => ({
+    benefitId: b.id,
+    at: b.lastAwardedAt,
+  })),
+});
 
 /** Directory streams are drops-enabled by construction: the query filters on `DROPS_ENABLED`. */
 export const toDirectoryChannels = (

@@ -307,7 +307,10 @@ describe("switching", () => {
     const c = campaign("c");
     const d = startedWatching([c], [channel("a")]);
     const commands = d.send(
-      Event.InventoryRead({ progress: [progress(c, "c-d1", { minutes: 60, claimed: true })] }),
+      Event.InventoryRead({
+        progress: [progress(c, "c-d1", { minutes: 60, claimed: true })],
+        awarded: [],
+      }),
     );
     assert.include(tags(commands), "StopWatching");
     assert.strictEqual(watchedChannel(d.state), "nothing-to-mine");
@@ -466,8 +469,139 @@ describe("progress", () => {
     const c = campaign("c");
     const d = startedWatching([c], [channel("a")]);
     d.send(Event.DropProgress({ dropId: did("c-d1"), minutes: 30 }));
-    d.send(Event.InventoryRead({ progress: [progress(c, "c-d1", { minutes: 25 })] }));
+    d.send(Event.InventoryRead({ progress: [progress(c, "c-d1", { minutes: 25 })], awarded: [] }));
     assert.strictEqual(d.state.progress.get(did("c-d1"))?.minutes, 30);
+  });
+});
+
+/**
+ * The 4 h live run of 2026-10-30, Witchspire: "Witchspire Logo" (60 min) and "Gold Stamp"
+ * (240 min), both badges, received the day before and listed only in `gameEventDrops`. The
+ * miner watched for the Logo while Twitch credited the Gold Stamp at 263 to 352 of 240 minutes.
+ */
+describe("rewards already received, and credit the plan can't use", () => {
+  const logo = { id: "b-logo", name: "Witchspire Logo", distribution: "BADGE" } as const;
+  const stamp = { id: "b-stamp", name: "Gold Stamp", distribution: "BADGE" } as const;
+  const witch = campaign("w", {
+    drops: [
+      drop("w-logo", { benefits: [logo] }),
+      drop("w-stamp", { requiredMinutes: 240, benefits: [stamp] }),
+    ],
+  });
+  const other = campaign("o", { game: game("game-2"), endsAt: T0 + 48 * HOUR });
+  const received = [
+    { benefitId: logo.id, at: T0 - HOUR },
+    { benefitId: stamp.id, at: T0 - HOUR },
+  ];
+  const watchedCampaign = (s: State) =>
+    s.watch._tag === "Watching" ? s.watch.campaignId : s.watch.reason;
+
+  /** Watching `a` for the Logo, `y` streaming game 2 for the other campaign. */
+  const watchingWitch = () => {
+    const d = driver();
+    d.send(Event.Started());
+    const commands = d.send(Event.TokenValid());
+    assert.include(tags(commands), "ReadInventory");
+    for (const command of reads(d.send(Event.CatalogRead({ campaigns: [witch, other] })))) {
+      const answer =
+        command._tag === "ReadDirectory" && command.gameId === "game-2"
+          ? [channel("y", { gameId: "game-2" })]
+          : [channel("a", { viewers: 500 }), channel("b")];
+      d.send(read(answer, readKey(command)));
+    }
+    return d;
+  };
+
+  it("skips a campaign whose rewards the account already has (gameEventDrops)", () => {
+    const d = watchingWitch();
+    assert.strictEqual(watchedCampaign(d.state), "w");
+    d.send(Event.InventoryRead({ progress: [], awarded: received }), T0 + MINUTE);
+    assert.strictEqual(watchedCampaign(d.state), "o");
+    assert.strictEqual(watchedChannel(d.state), "y");
+  });
+
+  it("keeps a received drop's progress as the inventory lists it (TDM reads `self` first)", () => {
+    const d = watchingWitch();
+    const listed = [progress(witch, "w-logo", { minutes: 10 })];
+    d.send(Event.InventoryRead({ progress: listed, awarded: received }), T0 + MINUTE);
+    const w = d.state.watch;
+    assert.strictEqual(w._tag === "Watching" ? w.dropId : "", "w-logo");
+  });
+
+  it("counts an award from before the drop's window as another campaign's: the drop still earns", () => {
+    const d = watchingWitch();
+    const earlier = received.map((a) => ({ ...a, at: witch.drops[0]!.startsAt - MINUTE }));
+    d.send(Event.InventoryRead({ progress: [], awarded: earlier }), T0 + MINUTE);
+    assert.strictEqual(watchedCampaign(d.state), "w");
+  });
+
+  it("skips the campaign when Twitch only credits a drop past its requirement", () => {
+    const d = watchingWitch();
+    // Every 15 minutes the estimate runs ahead and the current drop is read: the Gold Stamp.
+    for (let minute = 1; minute < 30; minute++) {
+      const at = T0 + minute * MINUTE;
+      d.send(Event.WatchTicked({ channelId: chid("a") }), at);
+      if (minute % 15 === 0) {
+        const minutes = 263 + minute;
+        d.send(Event.CurrentDropRead({ channelId: chid("a"), dropId: did("w-stamp"), minutes }));
+      }
+    }
+    const w = d.state.watch;
+    assert.strictEqual(w._tag === "Watching" ? `${w.dropId}:${w.confirmedAt}` : "", `w-logo:${T0}`);
+    assert.strictEqual(w._tag === "Watching" ? w.wasted : undefined, "w");
+    const commands = d.send(Event.WatchTicked({ channelId: chid("a") }), T0 + STALL_AFTER);
+    assert.isTrue(d.state.avoidCampaigns.has(witch.id));
+    // Twitch credits the wrong drop wherever we watch: the channel itself isn't to blame.
+    assert.isFalse(d.state.avoid.has(chid("a")));
+    assert.deepStrictEqual(
+      commands.filter((c) => c._tag === "Watch"),
+      [Command.Watch({ channelId: chid("y") })],
+    );
+    d.send(Event.Started(), T0 + STALL_AFTER + MINUTE);
+    assert.strictEqual(d.state.avoidCampaigns.size, 0);
+  });
+
+  it("doesn't take minutes past a drop's requirement as progress, from any source", () => {
+    const d = watchingWitch();
+    d.send(Event.DropProgress({ dropId: did("w-stamp"), minutes: 300 }), T0 + MINUTE);
+    const listed = [progress(witch, "w-stamp", { minutes: 301 })];
+    d.send(Event.InventoryRead({ progress: listed, awarded: [] }), T0 + 2 * MINUTE);
+    const w = d.state.watch;
+    assert.strictEqual(w._tag === "Watching" ? `${w.dropId}:${w.confirmedAt}` : "", `w-logo:${T0}`);
+  });
+
+  it("reads the inventory once as a drop completes, not for every minute past it", () => {
+    const d = watchingWitch();
+    const progressAt = (minutes: number) =>
+      tags(d.send(Event.DropProgress({ dropId: did("w-logo"), minutes }), T0 + minutes * MINUTE));
+    assert.notInclude(progressAt(59), "ReadInventory");
+    assert.include(progressAt(60), "ReadInventory");
+    assert.notInclude(progressAt(61), "ReadInventory");
+    assert.notInclude(progressAt(62), "ReadInventory");
+  });
+
+  it("follows Twitch to another drop of the campaign it can still use", () => {
+    const d = watchingWitch();
+    d.send(Event.DropProgress({ dropId: did("w-stamp"), minutes: 7 }), T0 + 7 * MINUTE);
+    const w = d.state.watch;
+    assert.strictEqual(
+      w._tag === "Watching" ? `${w.dropId}:${w.confirmedAt}:${String(w.wasted)}` : "",
+      `w-stamp:${T0 + 7 * MINUTE}:undefined`,
+    );
+  });
+
+  it("avoids the channel, not the campaign, when the channel credits another campaign", () => {
+    const d = watchingWitch();
+    for (let minute = 1; minute < 30; minute++) {
+      d.send(
+        Event.DropProgress({ dropId: did("o-d1"), minutes: 60 + minute }),
+        T0 + minute * MINUTE,
+      );
+    }
+    d.send(Event.WatchTicked({ channelId: chid("a") }), T0 + STALL_AFTER);
+    assert.isTrue(d.state.avoid.has(chid("a")));
+    assert.strictEqual(d.state.avoidCampaigns.size, 0);
+    assert.strictEqual(watchedChannel(d.state), "b");
   });
 });
 
@@ -484,7 +618,10 @@ describe("claims", () => {
     );
     assert.strictEqual(d.state.claims.get("c/c-d1")?.status, "sent");
     const complete = progress(c, "c-d1", { minutes: 60, instanceId: iid("i1") });
-    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [complete] }))), 0);
+    assert.strictEqual(
+      claims(d.send(Event.InventoryRead({ progress: [complete], awarded: [] }))),
+      0,
+    );
     d.send(Event.ClaimResult({ campaignId: c.id, dropId: did("c-d1"), outcome: "claimed" }));
     assert.isTrue(d.state.progress.get(did("c-d1"))?.claimed);
     assert.strictEqual(d.state.claims.size, 0);
@@ -499,9 +636,15 @@ describe("claims", () => {
     assert.deepStrictEqual(tags(lost), []);
     const unclaimed = progress(c, "c-d1", { minutes: 60, instanceId: iid("i1") });
     // Inventory lags a claim by seconds: an early read must not trigger a second claim.
-    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [unclaimed] }))), 0);
+    assert.strictEqual(
+      claims(d.send(Event.InventoryRead({ progress: [unclaimed], awarded: [] }))),
+      0,
+    );
     assert.include(tags(d.send(Event.Tick(), T0 + CLAIM_RECHECK)), "ReadInventory");
-    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [unclaimed] }))), 1);
+    assert.strictEqual(
+      claims(d.send(Event.InventoryRead({ progress: [unclaimed], awarded: [] }))),
+      1,
+    );
   });
 
   it("keeps a lost claim's intent when the recheck read doesn't show the drop at all", () => {
@@ -511,16 +654,22 @@ describe("claims", () => {
     d.send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }));
     d.send(Event.ClaimResult({ campaignId: c.id, dropId: did("c-d1"), outcome: "unknown" }));
     d.send(Event.Tick(), T0 + CLAIM_RECHECK);
-    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [] }))), 0);
+    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [], awarded: [] }))), 0);
     assert.strictEqual(d.state.claims.get("c/c-d1")?.status, "unknown");
     const unclaimed = progress(c, "c-d1", { minutes: 60, instanceId: iid("i1") });
-    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [unclaimed] }))), 1);
+    assert.strictEqual(
+      claims(d.send(Event.InventoryRead({ progress: [unclaimed], awarded: [] }))),
+      1,
+    );
   });
 
   it("keeps a claim in flight when a read omits its drop", () => {
     const d = startedWatching([c], [channel("a")]);
     d.send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }));
-    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [] }), T0 + HOUR)), 0);
+    assert.strictEqual(
+      claims(d.send(Event.InventoryRead({ progress: [], awarded: [] }), T0 + HOUR)),
+      0,
+    );
     assert.strictEqual(d.state.claims.get("c/c-d1")?.status, "sent");
   });
 
@@ -529,7 +678,10 @@ describe("claims", () => {
     d.send(Event.DropClaimable({ dropId: did("c-d1"), instanceId: iid("i1") }));
     d.send(Event.ClaimResult({ campaignId: c.id, dropId: did("c-d1"), outcome: "unknown" }));
     const claimed = progress(c, "c-d1", { minutes: 60, instanceId: iid("i1"), claimed: true });
-    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [claimed] }))), 0);
+    assert.strictEqual(
+      claims(d.send(Event.InventoryRead({ progress: [claimed], awarded: [] }))),
+      0,
+    );
     assert.strictEqual(d.state.claims.size, 0);
   });
 
@@ -542,10 +694,16 @@ describe("claims", () => {
     assert.strictEqual(claims(restarted.send(Event.TokenValid())), 0);
     const unclaimed = progress(c, "c-d1", { minutes: 60, instanceId: iid("i1") });
     // Inventory shows a claim seconds late: a read right after the restart proves nothing.
-    assert.strictEqual(claims(restarted.send(Event.InventoryRead({ progress: [unclaimed] }))), 0);
+    assert.strictEqual(
+      claims(restarted.send(Event.InventoryRead({ progress: [unclaimed], awarded: [] }))),
+      0,
+    );
     const late = T0 + MINUTE + CLAIM_RECHECK;
     assert.include(tags(restarted.send(Event.Tick(), late)), "ReadInventory");
-    assert.strictEqual(claims(restarted.send(Event.InventoryRead({ progress: [unclaimed] }))), 1);
+    assert.strictEqual(
+      claims(restarted.send(Event.InventoryRead({ progress: [unclaimed], awarded: [] }))),
+      1,
+    );
   });
 
   it("never sets a deadline in the past while a claim waits for its recheck", () => {
@@ -596,13 +754,13 @@ describe("claims", () => {
     const ended = campaign("e", { endsAt: T0 - HOUR });
     const d = startedWatching([c], [channel("a")]);
     const done = progress(ended, "e-d1", { minutes: 60, instanceId: iid("i2") });
-    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [done] }))), 1);
+    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [done], awarded: [] }))), 1);
     const late = progress(ended, "e-d2", {
       minutes: 60,
       instanceId: iid("i3"),
       campaignEndsAt: T0 - 25 * HOUR,
     });
-    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [late] }))), 0);
+    assert.strictEqual(claims(d.send(Event.InventoryRead({ progress: [late], awarded: [] }))), 0);
   });
 });
 

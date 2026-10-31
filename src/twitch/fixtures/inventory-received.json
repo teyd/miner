@@ -1,0 +1,189 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "currentUser": {
+          "id": "123456789",
+          "inventory": {
+            "dropCampaignsInProgress": [
+              {
+                "id": "c73c824d-9cac-4c4b-bca5-399526efa85d",
+                "detailsURL": "https://help.twitch.tv/s/article/mission-based-drops?language=en_US",
+                "accountLinkURL": "https://signin.ea.com/p/thirdparty/login?client_id=twitch_client&platformId=twitch",
+                "startAt": "2026-10-29T14:00:00Z",
+                "endAt": "2026-10-29T16:29:59.999Z",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/CAMPAIGN/5880631c-2df9-4fb4-8913-282925ce02e4.png",
+                "name": "Good Morning Madden",
+                "status": "EXPIRED",
+                "self": {
+                  "isAccountConnected": true,
+                  "__typename": "DropCampaignSelfEdge"
+                },
+                "game": {
+                  "id": "670138298",
+                  "slug": "madden-nfl-27",
+                  "name": "Madden NFL 27",
+                  "boxArtURL": "https://static-cdn.jtvnw.net/ttv-boxart/670138298_IGDB-285x380.jpg",
+                  "__typename": "Game"
+                },
+                "allow": {
+                  "channels": [
+                    {
+                      "id": "51914127",
+                      "name": "eamaddennfl",
+                      "url": "https://www.twitch.tv/eamaddennfl",
+                      "__typename": "Channel"
+                    }
+                  ],
+                  "__typename": "DropCampaignACL"
+                },
+                "eventBasedDrops": [],
+                "timeBasedDrops": [
+                  {
+                    "id": "51a1bf4f-d32e-11f1-95e5-0a58a9feac02",
+                    "name": "Madden Twitch Pack",
+                    "startAt": "2026-10-29T14:00:00Z",
+                    "endAt": "2026-10-29T16:29:59.999Z",
+                    "preconditionDrops": null,
+                    "requiredMinutesWatched": 15,
+                    "requiredSubs": 0,
+                    "benefitEdges": [
+                      {
+                        "benefit": {
+                          "id": "fa395b5e-cadd-47d9-989d-fe511aa3dbb1_CUSTOM_ID_M27-Twitch-128",
+                          "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/359a4188-ccda-4b5c-aa11-c7beb75619da.png",
+                          "name": "Madden Twitch Pack",
+                          "distributionType": "DIRECT_ENTITLEMENT",
+                          "__typename": "DropBenefit"
+                        },
+                        "entitlementLimit": 1,
+                        "claimCount": 1,
+                        "__typename": "DropBenefitEdge"
+                      }
+                    ],
+                    "self": {
+                      "hasPreconditionsMet": true,
+                      "currentMinutesWatched": 15,
+                      "currentSubs": 0,
+                      "isClaimed": true,
+                      "dropInstanceID": "123456789#c73c824d-9cac-4c4b-bca5-399526efa85d#51a1bf4f-d32e-11f1-95e5-0a58a9feac02",
+                      "__typename": "TimeBasedDropSelfEdge"
+                    },
+                    "campaign": {
+                      "id": "c73c824d-9cac-4c4b-bca5-399526efa85d",
+                      "detailsURL": "https://help.twitch.tv/s/article/mission-based-drops?language=en_US",
+                      "accountLinkURL": "https://signin.ea.com/p/thirdparty/login?client_id=twitch_client&platformId=twitch",
+                      "self": {
+                        "isAccountConnected": true,
+                        "__typename": "DropCampaignSelfEdge"
+                      },
+                      "__typename": "DropCampaign"
+                    },
+                    "__typename": "TimeBasedDrop"
+                  },
+                  {
+                    "id": "56f84d3f-d32e-11f1-8cfe-0a58a9feac02",
+                    "name": "Madden Twitch Pack",
+                    "startAt": "2026-10-29T14:00:00Z",
+                    "endAt": "2026-10-29T16:29:59.999Z",
+                    "preconditionDrops": null,
+                    "requiredMinutesWatched": 30,
+                    "requiredSubs": 0,
+                    "benefitEdges": [
+                      {
+                        "benefit": {
+                          "id": "fa395b5e-cadd-47d9-989d-fe511aa3dbb1_CUSTOM_ID_M27-Twitch-129",
+                          "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/d0721192-b1e2-43c6-9178-035879b20000.png",
+                          "name": "Madden Twitch Pack",
+                          "distributionType": "DIRECT_ENTITLEMENT",
+                          "__typename": "DropBenefit"
+                        },
+                        "entitlementLimit": 1,
+                        "claimCount": 0,
+                        "__typename": "DropBenefitEdge"
+                      }
+                    ],
+                    "self": {
+                      "hasPreconditionsMet": true,
+                      "currentMinutesWatched": 16,
+                      "currentSubs": 0,
+                      "isClaimed": false,
+                      "dropInstanceID": null,
+                      "__typename": "TimeBasedDropSelfEdge"
+                    },
+                    "campaign": {
+                      "id": "c73c824d-9cac-4c4b-bca5-399526efa85d",
+                      "detailsURL": "https://help.twitch.tv/s/article/mission-based-drops?language=en_US",
+                      "accountLinkURL": "https://signin.ea.com/p/thirdparty/login?client_id=twitch_client&platformId=twitch",
+                      "self": {
+                        "isAccountConnected": true,
+                        "__typename": "DropCampaignSelfEdge"
+                      },
+                      "__typename": "DropCampaign"
+                    },
+                    "__typename": "TimeBasedDrop"
+                  }
+                ],
+                "__typename": "DropCampaign"
+              }
+            ],
+            "gameEventDrops": [
+              {
+                "game": null,
+                "id": "3555708b-ff07-4392-a15b-bfae9356dfcf_CUSTOM_ID_v400.offers.entitlements.emblems.crm.emblem9",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/ac977917-e0db-4bcd-a9b6-b336beb603a2.png",
+                "isConnected": true,
+                "lastAwardedAt": "2026-10-30T19:49:54.072Z",
+                "name": "Sign of our City Emblem",
+                "requiredAccountLink": "https://www.bungie.net/LinkTwitch",
+                "totalCount": 1,
+                "__typename": "UserDropReward"
+              },
+              {
+                "game": null,
+                "id": "fa395b5e-cadd-47d9-989d-fe511aa3dbb1_CUSTOM_ID_M27-Twitch-128",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/359a4188-ccda-4b5c-aa11-c7beb75619da.png",
+                "isConnected": true,
+                "lastAwardedAt": "2026-10-29T15:18:27.035Z",
+                "name": "Madden Twitch Pack",
+                "requiredAccountLink": "https://signin.ea.com/p/thirdparty/login?client_id=twitch_client&platformId=twitch",
+                "totalCount": 1,
+                "__typename": "UserDropReward"
+              },
+              {
+                "game": null,
+                "id": "76c1ac68-c293-11f1-b47f-0a58a9feac02",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/48647429-bc94-403c-90e9-37350dd51857.png",
+                "isConnected": false,
+                "lastAwardedAt": "2026-10-29T16:06:03.432Z",
+                "name": "Gold Stamp",
+                "requiredAccountLink": "https://www.twitch.tv",
+                "totalCount": 1,
+                "__typename": "UserDropReward"
+              },
+              {
+                "game": null,
+                "id": "4de8e50e-c293-11f1-884f-0a58a9feac02",
+                "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/09b7c658-d09d-49a3-a11d-84e5f4be11e5.png",
+                "isConnected": false,
+                "lastAwardedAt": "2026-10-29T12:13:08.077Z",
+                "name": "Witchspire Logo",
+                "requiredAccountLink": "https://www.twitch.tv",
+                "totalCount": 1,
+                "__typename": "UserDropReward"
+              }
+            ],
+            "__typename": "Inventory"
+          },
+          "__typename": "User"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 272,
+        "requestID": "redacted-request-id",
+        "operationName": "Inventory"
+      }
+    }
+  ]
+}

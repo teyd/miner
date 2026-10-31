@@ -35,6 +35,8 @@ export interface PlanInput {
   readonly channels: ReadonlyMap<ChannelId, Channel>;
   readonly settings: Settings;
   readonly refused: ReadonlySet<ChannelId>;
+  /** Campaigns whose watch stalled on credit the plan couldn't use (`STALL_AFTER`). */
+  readonly avoidedCampaigns: ReadonlySet<CampaignId>;
   readonly now: Millis;
   /** The campaign being watched, if any: `least-slack` gives it `SLACK_HYSTERESIS`. */
   readonly watching: CampaignId | undefined;
@@ -101,7 +103,7 @@ const orderKey = (
 
 const picksOf = (input: PlanInput, goal: DropsGoal, index: number): ReadonlyArray<Pick> =>
   input.campaigns.flatMap((campaign): ReadonlyArray<Pick> => {
-    if (!isActive(campaign, input.now)) return [];
+    if (!isActive(campaign, input.now) || input.avoidedCampaigns.has(campaign.id)) return [];
     const wanted = wantedDrops(goal, campaign, input.progress);
     const drops = campaign.drops.filter(
       (d) => wanted.has(d.id) && canEarn(d, input.progress, input.now),
@@ -151,15 +153,24 @@ export const nextDrop = (input: PlanInput, pick: Pick): Drop | undefined =>
 
 const goalOf = (input: PlanInput, pick: Pick): DropsGoal => input.settings.goals[pick.goal]!;
 
-/** Whether a goal that may watch `channelId` wants what this campaign can earn now. */
-export const wantedOn = (
+/**
+ * Whether a goal that may watch `channelId` wants this drop and it can still earn: the drop is one
+ * the ranking would work on. A credit to any other drop earns the plan nothing, even in a wanted
+ * campaign: a drop complete beyond its requirement, received already, or an item the goal can't
+ * use (unlinked under `linkedOnly`).
+ */
+export const usableOn = (
   input: PlanInput,
   campaign: Campaign,
+  drop: Drop,
   channelId: ChannelId,
   rank: Rank = minable,
 ): boolean =>
   rank(input).some(
-    (p) => p.campaign.id === campaign.id && !goalOf(input, p).excludeChannels.includes(channelId),
+    (p) =>
+      p.campaign.id === campaign.id &&
+      p.drops.some((d) => d.id === drop.id) &&
+      !goalOf(input, p).excludeChannels.includes(channelId),
   );
 
 /** Live channels that can credit the campaign for its goal, most viewers first. */

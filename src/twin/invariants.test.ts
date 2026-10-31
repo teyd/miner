@@ -80,6 +80,7 @@ const watching: State = {
     confirmedMinutes: 0,
     estimatedMinutes: 0,
     lastCurrentDropRead: undefined,
+    wasted: undefined,
   },
 };
 
@@ -209,6 +210,7 @@ describe("invariant 4: mutations never retried", () => {
     observation(at(seconds), {
       step: record(
         Event.InventoryRead({
+          awarded: [],
           progress: [
             {
               dropId: d0,
@@ -371,6 +373,95 @@ describe("invariant 3: no idle time while an eligible live channel exists", () =
       channels: scenario().channels.map((ch) => ({ ...ch, refuses: true })),
     });
     assert.deepStrictEqual(kinds([{ ...avoid, world: refusing }]), []);
+  });
+});
+
+describe("invariants 8 and 9: no watch for a received drop, none that earns nothing", () => {
+  /** A 60-minute drop, a session on `ch0`, and the core told to watch it at `SIM_EPOCH`. */
+  const long = buildWorld({
+    ...scenario(),
+    campaigns: [
+      {
+        ...scenario().campaigns[0]!,
+        drops: [{ requiredMinutes: 60, after: null, benefit: "BADGE" }],
+      },
+    ],
+  });
+  const session = openSession(long, ch0, SIM_EPOCH);
+  // The core knows the campaign: a credit of one it doesn't know restarts the clock.
+  const knowing: State = {
+    ...watching,
+    catalog: long.campaigns,
+    channels: new Map([
+      [
+        ch0,
+        {
+          id: ch0,
+          login: "chan0",
+          gameId: "g0" as GameId,
+          live: { viewers: 50, dropsEnabled: true },
+        },
+      ],
+    ]),
+  };
+  const watch = (world: World) =>
+    observation(at(0), {
+      world,
+      step: record(Event.Tick(), [Command.Watch({ channelId: ch0 })], knowing, knowing),
+    });
+  const look = (world: World, minutes: number, credit?: DropId) =>
+    observation(at(minutes * 60), {
+      world,
+      state: knowing,
+      activity: {
+        ...noActivity(),
+        credits:
+          credit === undefined
+            ? []
+            : [{ at: at(minutes * 60), channelId: ch0, campaignId: c0, dropIds: [credit] }],
+      },
+    });
+  const late = (STALL_AFTER + 3 * MINUTE) / MINUTE;
+
+  it("flags a watch that earned nothing wanted for a stall's length", () => {
+    assert.include(kinds([watch(session), look(session, late)]), "Unproductive");
+    assert.deepStrictEqual(kinds([watch(session), look(session, 10, d0), look(session, late)]), []);
+  });
+
+  it("counts no credit past the requirement as earning (the 4 h live run)", () => {
+    const past: World = { ...session, minutes: new Map([[d0, [{ at: SIM_EPOCH, minutes: 70 }]]]) };
+    assert.include(
+      kinds([watch(past), look(past, 10, d0), look(past, 20, d0), look(past, late)]),
+      "Unproductive",
+    );
+  });
+
+  it("flags giving up a campaign that credited minutes ago, and allows it after a stall", () => {
+    const given: State = {
+      ...knowing,
+      avoidCampaigns: new Set([c0]),
+      watch: { _tag: "Idle", reason: "nothing-to-mine" },
+    };
+    const giveUp = (minutes: number) =>
+      observation(at(minutes * 60), {
+        world: session,
+        step: record(Event.WatchTicked({ channelId: ch0 }), [], knowing, given),
+      });
+    assert.include(kinds([watch(session), look(session, 5, d0), giveUp(6)]), "AvoidedUnfairly");
+    assert.deepStrictEqual(kinds([watch(session), giveUp(STALL_AFTER / MINUTE)]), []);
+  });
+
+  it("flags watching a drop the account has once an inventory read could show it", () => {
+    const received: World = { ...long, claimed: new Map([[d0, SIM_EPOCH - MINUTE]]) };
+    const inventory = (seconds: number) =>
+      observation(at(seconds), {
+        world: received,
+        step: record(Event.InventoryRead({ progress: [], awarded: [] }), [], watching, watching),
+      });
+    assert.include(kinds([inventory(30)]), "WatchedClaimed");
+    // A claim this read can't show yet (`CLAIMED_FLAG_LAG` and a minute of latency).
+    const fresh: World = { ...long, claimed: new Map([[d0, at(0)]]) };
+    assert.deepStrictEqual(kinds([{ ...inventory(30), world: fresh }]), []);
   });
 });
 

@@ -220,6 +220,12 @@ On a terminal, or with `LOG_FORMAT=pretty`, a healthy start looks like this (tim
   the claim still goes through with a warning, and Twitch delivers the item once you link it.
 - `progress <game>: <drop> n/m min` reports each drop whose minutes changed: the one being
   watched, and others that the same stream also counts for.
+- `runtime: skipping <channel or campaign> until restart: …` (a warning) means the miner gave up
+  on it. A channel that refuses playback, or credits nothing the miner wants for 30 minutes, is
+  skipped. So is a campaign when Twitch keeps crediting a drop of it that earns you nothing, such
+  as one you already have: Twitch counted a received reward past its requirement for two hours
+  in one live run. Rewards you already received (listed on Twitch's inventory page, even from
+  campaigns it no longer shows there) are never watched for.
 - `runtime: idle (<reason>)` means nothing is being watched right now:
 
   | Reason                | Meaning                                                                       |

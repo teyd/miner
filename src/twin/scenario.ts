@@ -70,6 +70,7 @@ const WINDOW_FAULTS = ["http-5xx", "http-429", "timeout", "service-error", "null
 const CRASH_POINTS = ["before-persist", "after-persist", "in-claim"] as const;
 const BENEFITS = ["BADGE", "EMOTE", "DIRECT_ENTITLEMENT"] as const;
 const CHANGES = ["up", "down", "game-0", "game-1", "game-2"] as const;
+const RECEIVED = ["in-window", "before-window"] as const;
 const REWARDS = ["item", "badge", "emote"] as const;
 const ORDERS = ["ending-soonest", "least-slack"] as const;
 
@@ -109,6 +110,13 @@ const DropSpec = Schema.Struct({
   window: Schema.optionalKey(
     Schema.Struct({ startMinute: int("windowStart"), durationMinutes: int("durationMinutes") }),
   ),
+  /**
+   * The account has this drop's reward already, listed in `gameEventDrops` only. `in-window`:
+   * the drop was claimed at its start, before the run (a drop opening later is left alone).
+   * `before-window`: another campaign gave the same reward a day before this drop opened, so the
+   * drop is still to earn (TDM `inventory.py:71-90`). Omitted: neither.
+   */
+  received: Schema.optionalKey(Schema.Literals(RECEIVED)),
 });
 
 const CampaignSpec = Schema.Struct({
@@ -125,6 +133,12 @@ const CampaignSpec = Schema.Struct({
   /** Channel indices. Empty: any drops-enabled channel streaming the game. */
   allowList: list(int("index"), "short"),
   drops: list(DropSpec, "drops"),
+  /**
+   * Index of the one drop a watch credits while its window is open, received, complete or not,
+   * as Twitch credited Witchspire's received "Golden Stamp" past its requirement while the
+   * campaign's other drop never moved (live run, 2026-10-30). Omitted: every earnable drop.
+   */
+  creditsOnly: Schema.optionalKey(int("game")),
 });
 
 const ChannelSpec = Schema.Struct({
@@ -344,87 +358,138 @@ const rivalArbitrary = fc.option(
   { nil: null, freq: 3 },
 );
 
+/**
+ * Rewards received before the run and Twitch crediting one drop only (`received`, `creditsOnly`)
+ * on one of the first campaigns, usually the opportunity, campaign 0. Drawn after everything
+ * else, so a seed's world is the one it was before these existed, plus the quirk; half the seeds
+ * have none.
+ */
+const quirkArbitrary = fc.option(
+  fc.record({
+    campaign: fc.integer({ min: 0, max: 3 }).map((n) => (n < 2 ? 0 : n - 1)),
+    drop: intArb("game"),
+    received: fc.constantFrom(...RECEIVED, null),
+    // One quirk in three.
+    creditsOnly: fc
+      .tuple(fc.integer({ min: 0, max: 2 }), intArb("game"))
+      .map(([k, drop]) => (k === 0 ? drop : null)),
+  }),
+  { nil: null, freq: 2 },
+);
+
+type Quirk = NonNullable<typeof quirkArbitrary extends fc.Arbitrary<infer Q> ? Q : never>;
+
+const withQuirk = (scenario: Scenario, quirk: Quirk | null): Scenario => {
+  if (quirk === null) return scenario;
+  const campaigns = scenario.campaigns.map((c, i) => {
+    if (i !== quirk.campaign % scenario.campaigns.length) return c;
+    const target = quirk.drop % c.drops.length;
+    const drops = c.drops.map((d, j) =>
+      j === target && quirk.received !== null ? { ...d, received: quirk.received } : d,
+    );
+    return quirk.creditsOnly === null
+      ? { ...c, drops }
+      : { ...c, drops, creditsOnly: quirk.creditsOnly % c.drops.length };
+  });
+  return { ...scenario, campaigns };
+};
+
 const REWARD_OF = { BADGE: "badge", EMOTE: "emote", DIRECT_ENTITLEMENT: "item" } as const;
 
 /**
  * Generates scenarios within the Schema's bounds; fast-check shrinks them towards fewer things.
  * Campaign 0 on channel 0 is always an opportunity one of the goals wants; three times in four
  * campaign 1 on channel 1 is a rival (`rivalArbitrary`). The rest is random,
- * so faults, newer campaigns, other goals and schedule changes may still stand in its way.
+ * so faults, newer campaigns, other goals and schedule changes may still stand in its way. Half
+ * the seeds add a quirk the live run found (`quirkArbitrary`).
  */
 export const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
+  .tuple(randomScenario, opportunityArbitrary, rivalArbitrary, quirkArbitrary)
+  .map(([s, o, r, q]): Scenario => withQuirk(baseScenario(s, o, r), q));
+
+/**
+ * The worlds of `scenarioArbitrary` before quirks existed: a seed's world as it was then. The
+ * regression seeds found by earlier sweeps replay on it, so they keep testing what they found.
+ */
+export const plainScenarioArbitrary: fc.Arbitrary<Scenario> = fc
   .tuple(randomScenario, opportunityArbitrary, rivalArbitrary)
-  .map(([s, o, r]): Scenario => {
-    const { game, startMinute, durationMinutes, drops, viewers, changes } = o;
-    const campaign = { game, startMinute, durationMinutes, linked: true, allowList: [], drops };
-    const live = (g: number, v: number, c: typeof changes) => ({
-      game: g,
-      viewers: v,
-      dropsEnabled: true,
-      refuses: false,
-      liveAtStart: true,
-      changes: c,
-    });
-    const rivalGame = r === null ? 0 : r.game === game ? 1 - r.game : r.game;
-    const rivalEnd =
-      r === null || r.endsNear === null ? undefined : startMinute + durationMinutes + r.endsNear;
-    const rivals =
-      r === null
-        ? []
-        : [
-            {
-              campaign: {
-                game: rivalGame,
-                startMinute: r.startMinute,
-                durationMinutes:
-                  rivalEnd === undefined
-                    ? r.durationMinutes
-                    : Math.min(BOUNDS.durationMinutes[1], Math.max(180, rivalEnd - r.startMinute)),
-                linked: r.role !== "unlinked",
-                allowList: [],
-                drops:
-                  r.role === "unlinked"
-                    ? r.drops.map((d) => ({ ...d, benefit: "DIRECT_ENTITLEMENT" as const }))
-                    : r.drops,
-              },
-              channel: live(rivalGame, r.viewers, r.changes),
-            },
-          ];
-    const fixed = 1 + rivals.length;
-    const channels = [
-      live(game, viewers, changes),
-      ...rivals.map((x) => x.channel),
-      ...s.channels.slice(0, BOUNDS.channels[1] - fixed),
-    ];
-    const n = s.settings.goals.length;
-    const forRival = (g: GoalSpec): GoalSpec => {
-      if (r === null) return g;
-      switch (r.role) {
-        case "wanted":
-          return wanting(g, rivalGame, r.drops, channels.length, 1);
-        case "excluded":
-          return g.games === null
-            ? { ...g, excludeGames: [...new Set([rivalGame, ...g.excludeGames])].slice(0, 2) }
-            : { ...g, games: g.games.filter((x) => x.game !== rivalGame) };
-        case "unlinked":
-          return { ...g, linkedOnly: true };
-      }
-    };
-    // The rival first: campaign 0's goal is bent last, so it always wants campaign 0.
-    const goals = s.settings.goals
-      .map((g, i) => (r !== null && i === (r.goal ?? o.goal) % n ? forRival(g) : g))
-      .map((g, i) => (i === o.goal % n ? wanting(g, game, drops, channels.length, 0) : g));
-    return {
-      ...s,
-      settings: { goals },
-      campaigns: [
-        campaign,
-        ...rivals.map((x) => x.campaign),
-        ...s.campaigns.slice(0, BOUNDS.campaigns[1] - fixed),
-      ],
-      channels,
-    };
+  .map(([s, o, r]): Scenario => baseScenario(s, o, r));
+
+const baseScenario = (
+  s: Scenario,
+  o: typeof opportunityArbitrary extends fc.Arbitrary<infer O> ? O : never,
+  r: typeof rivalArbitrary extends fc.Arbitrary<infer R> ? R : never,
+): Scenario => {
+  const { game, startMinute, durationMinutes, drops, viewers, changes } = o;
+  const campaign = { game, startMinute, durationMinutes, linked: true, allowList: [], drops };
+  const live = (g: number, v: number, c: typeof changes) => ({
+    game: g,
+    viewers: v,
+    dropsEnabled: true,
+    refuses: false,
+    liveAtStart: true,
+    changes: c,
   });
+  const rivalGame = r === null ? 0 : r.game === game ? 1 - r.game : r.game;
+  const rivalEnd =
+    r === null || r.endsNear === null ? undefined : startMinute + durationMinutes + r.endsNear;
+  const rivals =
+    r === null
+      ? []
+      : [
+          {
+            campaign: {
+              game: rivalGame,
+              startMinute: r.startMinute,
+              durationMinutes:
+                rivalEnd === undefined
+                  ? r.durationMinutes
+                  : Math.min(BOUNDS.durationMinutes[1], Math.max(180, rivalEnd - r.startMinute)),
+              linked: r.role !== "unlinked",
+              allowList: [],
+              drops:
+                r.role === "unlinked"
+                  ? r.drops.map((d) => ({ ...d, benefit: "DIRECT_ENTITLEMENT" as const }))
+                  : r.drops,
+            },
+            channel: live(rivalGame, r.viewers, r.changes),
+          },
+        ];
+  const fixed = 1 + rivals.length;
+  const channels = [
+    live(game, viewers, changes),
+    ...rivals.map((x) => x.channel),
+    ...s.channels.slice(0, BOUNDS.channels[1] - fixed),
+  ];
+  const n = s.settings.goals.length;
+  const forRival = (g: GoalSpec): GoalSpec => {
+    if (r === null) return g;
+    switch (r.role) {
+      case "wanted":
+        return wanting(g, rivalGame, r.drops, channels.length, 1);
+      case "excluded":
+        return g.games === null
+          ? { ...g, excludeGames: [...new Set([rivalGame, ...g.excludeGames])].slice(0, 2) }
+          : { ...g, games: g.games.filter((x) => x.game !== rivalGame) };
+      case "unlinked":
+        return { ...g, linkedOnly: true };
+    }
+  };
+  // The rival first: campaign 0's goal is bent last, so it always wants campaign 0.
+  const goals = s.settings.goals
+    .map((g, i) => (r !== null && i === (r.goal ?? o.goal) % n ? forRival(g) : g))
+    .map((g, i) => (i === o.goal % n ? wanting(g, game, drops, channels.length, 0) : g));
+  return {
+    ...s,
+    settings: { goals },
+    campaigns: [
+      campaign,
+      ...rivals.map((x) => x.campaign),
+      ...s.campaigns.slice(0, BOUNDS.campaigns[1] - fixed),
+    ],
+    channels,
+  };
+};
 
 /**
  * Bends a goal just enough to want the first drop of a linked campaign of `game` on channel

@@ -34,7 +34,11 @@ export const MAX_UNCONFIRMED_MINUTES = 15;
 export const CURRENT_DROP_RECHECK: Millis = 5 * MINUTE;
 /** Inventory lags a claim by seconds, so a lost claim answer is checked this much later. */
 export const CLAIM_RECHECK: Millis = MINUTE;
-/** No credit at all for this long means the channel doesn't credit us: move on. */
+/**
+ * No credit the plan can use for this long means the watch earns nothing: move on. A credit to a
+ * drop already complete, received, or not wanted doesn't count; the live run of 2026-10-30 spent
+ * two hours on a channel where Twitch kept crediting a received drop past its requirement.
+ */
 export const STALL_AFTER: Millis = 30 * MINUTE;
 /** Upper bound on followed channels (TDM fits 199 in 8 sockets of 50 topics). */
 export const WATCHLIST_LIMIT = 100;
@@ -90,6 +94,12 @@ export interface Watching {
   /** Our own count: confirmed minutes plus watch ticks since. */
   readonly estimatedMinutes: number;
   readonly lastCurrentDropRead: Millis | undefined;
+  /**
+   * The campaign of the last credit since `confirmedAt` that the plan couldn't use. When it is the
+   * watched campaign, a stall means Twitch credits the wrong drop of it, on any channel: the
+   * campaign is avoided, not just the channel.
+   */
+  readonly wasted: CampaignId | undefined;
 }
 
 export type Idle =
@@ -139,9 +149,15 @@ export interface State {
   readonly catalog: ReadonlyArray<Campaign> | undefined;
   readonly catalogStatus: "unknown" | "ok" | "unavailable";
   readonly progress: ReadonlyMap<DropId, Progress>;
+  /** The last inventory's received rewards: benefit id to when it was last awarded. */
+  readonly awarded: ReadonlyMap<string, Millis>;
+  /** The drops the last inventory listed. Only drops it doesn't list are judged by `awarded`. */
+  readonly inventoried: ReadonlySet<DropId>;
   readonly channels: ReadonlyMap<ChannelId, Channel>;
   /** Channels that refused playback or never credited us, skipped until restart. */
   readonly avoid: ReadonlySet<ChannelId>;
+  /** Campaigns whose watch Twitch kept crediting with drops the plan can't use, until restart. */
+  readonly avoidCampaigns: ReadonlySet<CampaignId>;
   readonly watch: Watch;
   readonly claims: ReadonlyMap<string, ClaimIntent>;
   readonly subscriptions: ReadonlyArray<ChannelId>;
@@ -155,8 +171,11 @@ export const initial = (settings: Settings): State => ({
   catalog: undefined,
   catalogStatus: "unknown",
   progress: new Map(),
+  awarded: new Map(),
+  inventoried: new Set(),
   channels: new Map(),
   avoid: new Set(),
+  avoidCampaigns: new Set(),
   watch: { _tag: "Idle", reason: "starting" },
   claims: new Map(),
   subscriptions: [],

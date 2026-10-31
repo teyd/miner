@@ -8,7 +8,7 @@ import { canonical } from "../store/codec.ts";
 import { Store } from "../store/Store.ts";
 import { emptyMemory, execute, type Memory } from "./execute.ts";
 import { forwardFrames } from "./listen.ts";
-import { describeWatch, discoveryExpired, progressLines } from "./narrate.ts";
+import { avoidLines, describeWatch, discoveryExpired, progressLines } from "./narrate.ts";
 import { toSettings, unresolvedGames } from "./settings.ts";
 import { makeReporter } from "./status.ts";
 import { observe, startFacts } from "../status/snapshot.ts";
@@ -167,13 +167,22 @@ const channelsOf = (state: State, event: Event): Iterable<Channel> =>
  * included, and settings are mapped from the config again on every step.
  */
 const durable = (state: State): string =>
-  canonical([state.catalog, state.catalogStatus, state.progress, state.claims]);
+  canonical([
+    state.catalog,
+    state.catalogStatus,
+    state.progress,
+    state.awarded,
+    state.inventoried,
+    state.claims,
+  ]);
 
 /** The core replaces a field only when it changes it, so most steps skip `durable`. */
 const durableChanged = (before: State, after: State): boolean =>
   before.catalog !== after.catalog ||
   before.catalogStatus !== after.catalogStatus ||
   before.progress !== after.progress ||
+  before.awarded !== after.awarded ||
+  before.inventoried !== after.inventoried ||
   before.claims !== after.claims;
 
 const report = (before: State, after: State) =>
@@ -182,4 +191,5 @@ const report = (before: State, after: State) =>
     const b = describeWatch(after, after.watch);
     if (a !== b) yield* Effect.logInfo(`runtime: ${b}`);
     for (const line of progressLines(before, after)) yield* Effect.logInfo(line);
+    for (const line of avoidLines(before, after)) yield* Effect.logWarning(`runtime: ${line}`);
   });

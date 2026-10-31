@@ -1,0 +1,161 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "data": {
+        "user": {
+          "id": "123456789",
+          "dropCampaign": {
+            "id": "e1e9dc8b-f3f5-4757-b450-7de7028db47f",
+            "self": {
+              "isAccountConnected": false,
+              "__typename": "DropCampaignSelfEdge"
+            },
+            "allow": {
+              "channels": null,
+              "isEnabled": false,
+              "__typename": "DropCampaignACL"
+            },
+            "accountLinkURL": "https://www.twitch.tv",
+            "description": "Happy Halloween! Celebrate spooky season and our new update with exclusive chat badges #Witchspire",
+            "detailsURL": "https://www.twitch.tv/drops/campaigns",
+            "endAt": "2026-10-31T07:59:59.999Z",
+            "eventBasedDrops": [],
+            "game": {
+              "id": "1408630947",
+              "slug": "witchspire",
+              "displayName": "Witchspire",
+              "__typename": "Game"
+            },
+            "imageURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/CAMPAIGN/63890684-e0fb-4070-a1d4-6c7bd443efe7.png",
+            "name": "Witchspire Halloween",
+            "owner": {
+              "id": "d32de13d-937e-4196-8198-1a7f875f295a",
+              "name": "Twitch Gaming",
+              "__typename": "Organization"
+            },
+            "startAt": "2026-10-21T16:00:00Z",
+            "status": "ACTIVE",
+            "timeBasedDrops": [
+              {
+                "id": "5409c5ba-c292-11f1-9a33-0a58a9feac02",
+                "requiredSubs": 0,
+                "benefitEdges": [
+                  {
+                    "benefit": {
+                      "id": "4de8e50e-c293-11f1-884f-0a58a9feac02",
+                      "createdAt": "2026-10-07T21:08:54.828Z",
+                      "entitlementLimit": 1,
+                      "game": {
+                        "id": "1408630947",
+                        "name": "Witchspire",
+                        "__typename": "Game"
+                      },
+                      "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/09b7c658-d09d-49a3-a11d-84e5f4be11e5.png",
+                      "isIosAvailable": false,
+                      "name": "Witchspire Logo",
+                      "ownerOrganization": {
+                        "id": "d32de13d-937e-4196-8198-1a7f875f295a",
+                        "name": "Twitch Gaming",
+                        "__typename": "Organization"
+                      },
+                      "distributionType": "BADGE",
+                      "__typename": "DropBenefit"
+                    },
+                    "entitlementLimit": 1,
+                    "__typename": "DropBenefitEdge"
+                  }
+                ],
+                "endAt": "2026-10-31T07:59:59.999Z",
+                "name": "Witchspire Logo",
+                "preconditionDrops": null,
+                "requiredMinutesWatched": 60,
+                "startAt": "2026-10-21T16:00:00Z",
+                "__typename": "TimeBasedDrop"
+              },
+              {
+                "id": "5dc90510-c292-11f1-ac5f-0a58a9feac02",
+                "requiredSubs": 1,
+                "benefitEdges": [
+                  {
+                    "benefit": {
+                      "id": "24388e42-c293-11f1-ab46-0a58a9feac02",
+                      "createdAt": "2026-10-07T21:07:44.886Z",
+                      "entitlementLimit": 1,
+                      "game": {
+                        "id": "1408630947",
+                        "name": "Witchspire",
+                        "__typename": "Game"
+                      },
+                      "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/6cdaf143-d075-4bbb-8d82-0b54fab6bed1.png",
+                      "isIosAvailable": false,
+                      "name": "Witch Hat",
+                      "ownerOrganization": {
+                        "id": "d32de13d-937e-4196-8198-1a7f875f295a",
+                        "name": "Twitch Gaming",
+                        "__typename": "Organization"
+                      },
+                      "distributionType": "BADGE",
+                      "__typename": "DropBenefit"
+                    },
+                    "entitlementLimit": 1,
+                    "__typename": "DropBenefitEdge"
+                  }
+                ],
+                "endAt": "2026-10-31T07:59:59.999Z",
+                "name": "Witch Hat",
+                "preconditionDrops": null,
+                "requiredMinutesWatched": 0,
+                "startAt": "2026-10-21T16:00:00Z",
+                "__typename": "TimeBasedDrop"
+              },
+              {
+                "id": "67c68932-c292-11f1-b553-0a58a9feac02",
+                "requiredSubs": 0,
+                "benefitEdges": [
+                  {
+                    "benefit": {
+                      "id": "76c1ac68-c293-11f1-b47f-0a58a9feac02",
+                      "createdAt": "2026-10-07T21:10:03.358Z",
+                      "entitlementLimit": 1,
+                      "game": {
+                        "id": "1408630947",
+                        "name": "Witchspire",
+                        "__typename": "Game"
+                      },
+                      "imageAssetURL": "https://static-cdn.jtvnw.net/twitch-quests-assets/REWARD/48647429-bc94-403c-90e9-37350dd51857.png",
+                      "isIosAvailable": false,
+                      "name": "Gold Stamp",
+                      "ownerOrganization": {
+                        "id": "d32de13d-937e-4196-8198-1a7f875f295a",
+                        "name": "Twitch Gaming",
+                        "__typename": "Organization"
+                      },
+                      "distributionType": "BADGE",
+                      "__typename": "DropBenefit"
+                    },
+                    "entitlementLimit": 1,
+                    "__typename": "DropBenefitEdge"
+                  }
+                ],
+                "endAt": "2026-10-31T07:59:59.999Z",
+                "name": "Golden Stamp",
+                "preconditionDrops": null,
+                "requiredMinutesWatched": 240,
+                "startAt": "2026-10-21T16:00:00Z",
+                "__typename": "TimeBasedDrop"
+              }
+            ],
+            "__typename": "DropCampaign"
+          },
+          "__typename": "User"
+        }
+      },
+      "extensions": {
+        "durationMilliseconds": 53,
+        "requestID": "redacted-request-id",
+        "operationName": "DropCampaignDetails"
+      }
+    }
+  ]
+}

@@ -54,6 +54,28 @@ export const progressLines = (before: State, after: State): ReadonlyArray<string
 };
 
 /**
+ * Channels and campaigns this step gave up on, until the next start: a channel that refused
+ * playback or credited nothing the plan can use for `STALL_AFTER`, a campaign whose watch Twitch
+ * kept crediting with drops the plan can't use (received, past their requirement, unwanted).
+ */
+export const avoidLines = (before: State, after: State): ReadonlyArray<string> => {
+  const lines: Array<string> = [];
+  for (const id of after.avoid) {
+    if (before.avoid.has(id)) continue;
+    lines.push(
+      `skipping ${channelName(after, id)} until restart: it refused playback or never credited what the plan wants`,
+    );
+  }
+  for (const id of after.avoidCampaigns) {
+    if (before.avoidCampaigns.has(id)) continue;
+    const campaign = after.catalog?.find((c) => c.id === id);
+    const name = campaign === undefined ? id : `${campaign.game.name}: ${campaign.name}`;
+    lines.push(`skipping ${name} until restart: Twitch credited only drops the plan can't use`);
+  }
+  return lines;
+};
+
+/**
  * Discovery gave up on reads that never answered nor failed (`discoverySettle` ran out): planning
  * goes on without their channels. It should never happen, since every read answers or fails, so
  * it is worth a warning.

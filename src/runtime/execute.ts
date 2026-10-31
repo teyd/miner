@@ -79,7 +79,7 @@ export const execute = (
 
       case "ReadInventory":
         return yield* twitch.inventory.pipe(
-          Effect.map((progress) => [Event.InventoryRead({ progress })]),
+          Effect.map(({ progress, awarded }) => [Event.InventoryRead({ progress, awarded })]),
           Effect.catch((e) => Effect.succeed(onReadError(e))),
         );
 

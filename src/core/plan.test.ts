@@ -15,7 +15,14 @@ import {
   settings,
   T0,
 } from "./fixtures.ts";
-import { compareNumbers, minable, plan, SLACK_HYSTERESIS, type PlanInput } from "./plan.ts";
+import {
+  compareNumbers,
+  minable,
+  plan,
+  SLACK_HYSTERESIS,
+  usableOn,
+  type PlanInput,
+} from "./plan.ts";
 
 const input = (
   campaigns: ReadonlyArray<Campaign>,
@@ -27,6 +34,7 @@ const input = (
   channels: new Map(channels.map((ch) => [ch.id, ch])),
   settings: settings(),
   refused: new Set(),
+  avoidedCampaigns: new Set(),
   now: T0,
   watching: undefined,
   ...overrides,
@@ -265,5 +273,44 @@ describe("feasibility and actionable drops", () => {
     }
     assert.strictEqual(compareNumbers(Infinity, Infinity), 0);
     assert.strictEqual(compareNumbers(1, Infinity), -1);
+  });
+});
+
+describe("credit the plan can use", () => {
+  const a = campaign("a", {
+    drops: [
+      drop("a1", { benefits: [badge] }),
+      drop("a2", { requiredMinutes: 240, benefits: [badge] }),
+      drop("a3", { benefits: [emote] }),
+    ],
+  });
+  const badges = settings({ rewards: ["badge"] });
+
+  it("is a wanted drop that can still earn, for a goal that may watch the channel", () => {
+    const i = input([a], [channel("x")], { settings: badges });
+    const usable = (id: string, over: Partial<PlanInput> = {}) =>
+      usableOn(
+        { ...i, ...over },
+        a,
+        a.drops.find((d) => d.id === id)!,
+        chid("x"),
+      );
+    assert.isTrue(usable("a1"));
+    assert.isTrue(usable("a2"));
+    assert.isFalse(usable("a3"), "an emote the goal doesn't want");
+    const done = new Map([[a.drops[1]!.id, progress(a, "a2", { minutes: 240 })]]);
+    assert.isFalse(usable("a2", { progress: done }), "complete");
+    const excluded = settings({ rewards: ["badge"], excludeChannels: [chid("x")] });
+    assert.isFalse(usable("a1", { settings: excluded }));
+    assert.isFalse(usable("a1", { avoidedCampaigns: new Set([cid("a")]) }));
+  });
+
+  it("skips a campaign the core gave up on", () => {
+    const b = campaign("b", { endsAt: T0 + 48 * HOUR });
+    const i = input([a, b], [channel("x")], { avoidedCampaigns: new Set([cid("a")]) });
+    assert.deepStrictEqual(
+      minable(i).map((p) => p.campaign.id),
+      ["b"],
+    );
   });
 });

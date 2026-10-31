@@ -1,5 +1,6 @@
 import {
   CLAIM_GRACE,
+  HOUR,
   MINUTE,
   SPECIAL_GAMES,
   type Campaign,
@@ -74,7 +75,15 @@ export interface World {
     DropId,
     ReadonlyArray<{ readonly at: Millis; readonly minutes: number }>
   >;
+  /** Claims, with when they happened; those before `SIM_EPOCH` were received before the run. */
   readonly claimed: ReadonlyMap<DropId, Millis>;
+  /**
+   * Rewards the account received from campaigns outside the world, by benefit id: a benefit a
+   * world drop repeats, awarded before that drop's window (`received: "before-window"`).
+   */
+  readonly awardedElsewhere: ReadonlyMap<string, Millis>;
+  /** Campaigns whose watch credits one drop only (`creditsOnly`), by campaign. */
+  readonly creditsOnly: ReadonlyMap<CampaignId, DropId>;
   readonly revokedAt: Millis | undefined;
   readonly session: Session | undefined;
   readonly subscriptions: ReadonlySet<ChannelId>;
@@ -167,6 +176,30 @@ export const buildWorld = (scenario: Scenario): World => {
   const revokes = scenario.faults.flatMap((f) =>
     f.kind === "revoke-token" ? [at(f.atMinute)] : [],
   );
+  const claimed = new Map<DropId, Millis>();
+  const minutes = new Map<
+    DropId,
+    ReadonlyArray<{ readonly at: Millis; readonly minutes: number }>
+  >();
+  const awardedElsewhere = new Map<string, Millis>();
+  const creditsOnly = new Map<CampaignId, DropId>();
+  for (const [i, spec] of scenario.campaigns.entries()) {
+    const campaign = campaigns[i]!;
+    if (spec.creditsOnly !== undefined) {
+      creditsOnly.set(campaign.id, campaign.drops[spec.creditsOnly % campaign.drops.length]!.id);
+    }
+    for (const [j, d] of spec.drops.entries()) {
+      const drop = campaign.drops[j]!;
+      // Claimed at the drop's start, so only a drop open before the run can have been received.
+      if (d.received === "in-window" && drop.startsAt < SIM_EPOCH) {
+        claimed.set(drop.id, drop.startsAt);
+        minutes.set(drop.id, [{ at: drop.startsAt, minutes: drop.requiredMinutes }]);
+      }
+      if (d.received === "before-window") {
+        for (const b of drop.benefits) awardedElsewhere.set(b.id, drop.startsAt - 24 * HOUR);
+      }
+    }
+  }
   return {
     campaigns,
     creditsUnlinked: new Set(
@@ -178,8 +211,10 @@ export const buildWorld = (scenario: Scenario): World => {
     settings: { goals: scenario.settings.goals.map((goal) => goalOf(goal, n)) },
     inventoryLag: scenario.inventoryLagMinutes * MINUTE,
     faults: scenario.faults,
-    minutes: new Map(),
-    claimed: new Map(),
+    minutes,
+    claimed,
+    awardedElsewhere,
+    creditsOnly,
     revokedAt: revokes.length === 0 ? undefined : Math.min(...revokes),
     session: undefined,
     subscriptions: new Set(),
@@ -306,6 +341,24 @@ export const earnable = (world: World, drop: Drop, now: Millis): boolean =>
   drop.preconditions.every((id) => world.claimed.has(id));
 
 /**
+ * The drops of a campaign a credited minute goes to: every earnable one, or for a `creditsOnly`
+ * campaign that one drop while its window is open, whatever its state. Source: the live run of
+ * 2026-10-30 (research 02 §3): `DropCurrentSessionContext` showed Witchspire's "Golden Stamp" at
+ * 263, then 352 of 240 minutes, a drop received the day before, while the campaign's unreceived
+ * drops never moved. Why Twitch picks such a drop is unknown; the twin only replays that it does.
+ */
+export const creditedDrops = (
+  world: World,
+  campaign: Campaign,
+  now: Millis,
+): ReadonlyArray<Drop> => {
+  const only = world.creditsOnly.get(campaign.id);
+  const stuck = campaign.drops.find((d) => d.id === only);
+  if (stuck !== undefined && stuck.startsAt <= now && now < stuck.endsAt) return [stuck];
+  return campaign.drops.filter((d) => earnable(world, d, now));
+};
+
+/**
  * The campaign a minute on this channel credits. When several could, the newest wins (TDM #756,
  * research 02 §3: Twitch progresses one campaign per stream, which one is undocumented).
  */
@@ -317,7 +370,7 @@ export const creditedCampaign = (world: World, id: ChannelId, now: Millis): Camp
         now < c.endsAt &&
         accountEarns(world, c) &&
         channelCredits(world, c, id, now) &&
-        c.drops.some((d) => earnable(world, d, now)),
+        creditedDrops(world, c, now).length > 0,
     )
     .toSorted((a, b) => b.startsAt - a.startsAt || a.id.localeCompare(b.id))[0];
 
@@ -396,8 +449,7 @@ const creditMinute = (world: World, channelId: ChannelId, now: Millis) => {
   const minutes = new Map(world.minutes);
   const frames: Array<Frame> = [];
   const dropIds: Array<DropId> = [];
-  for (const drop of campaign.drops) {
-    if (!earnable(world, drop, now)) continue;
+  for (const drop of creditedDrops(world, campaign, now)) {
     const total = minutesAt(world, drop.id, now) + 1;
     minutes.set(drop.id, [...(minutes.get(drop.id) ?? []), { at: now, minutes: total }]);
     dropIds.push(drop.id);
@@ -405,7 +457,7 @@ const creditMinute = (world: World, channelId: ChannelId, now: Millis) => {
       at: now + 1_000,
       event: Event.DropProgress({ dropId: drop.id, minutes: total }),
     });
-    if (total >= drop.requiredMinutes) {
+    if (total >= drop.requiredMinutes && !world.claimed.has(drop.id)) {
       const instanceId = instanceOf(drop.id);
       frames.push({ at: now + 1_000, event: Event.DropClaimable({ dropId: drop.id, instanceId }) });
     }
@@ -469,18 +521,19 @@ export interface InventoryCampaign {
 }
 
 /**
- * What the Inventory read shows: campaigns with any progress, until their claim window closes.
- * Minutes lag by `inventoryLag` and the claimed flag by `CLAIMED_FLAG_LAG` (research 02 §3; the
- * lag values are inference).
+ * What the Inventory read shows: campaigns with progress or a claim, until their claim window
+ * closes. A drop received before the run doesn't list its campaign: Twitch left Witchspire out
+ * of `dropCampaignsInProgress` the day after its drops were claimed (live run, 2026-10-30), and
+ * only `gameEventDrops` named them. Minutes lag by `inventoryLag` and the claimed flag by
+ * `CLAIMED_FLAG_LAG` (research 02 §3; the lag values are inference).
  */
 export const inventoryView = (world: World, now: Millis): ReadonlyArray<InventoryCampaign> => {
   const seen = now - world.inventoryLag;
+  const receivedBefore = (d: Drop) => (world.claimed.get(d.id) ?? Infinity) < SIM_EPOCH;
+  const shows = (d: Drop) =>
+    !receivedBefore(d) && (minutesAt(world, d.id, seen) > 0 || world.claimed.has(d.id));
   return world.campaigns
-    .filter(
-      (c) =>
-        now < c.endsAt + CLAIM_GRACE &&
-        c.drops.some((d) => minutesAt(world, d.id, seen) > 0 || world.claimed.has(d.id)),
-    )
+    .filter((c) => now < c.endsAt + CLAIM_GRACE && c.drops.some(shows))
     .map((campaign) => ({
       campaign,
       drops: campaign.drops.map((d) => {
@@ -495,6 +548,39 @@ export const inventoryView = (world: World, now: Millis): ReadonlyArray<Inventor
     }));
 };
 
+/**
+ * `gameEventDrops`: every reward received, one entry per benefit with its last award, claims
+ * showing after `CLAIMED_FLAG_LAG` like the claimed flag. Shape: the live Inventory of 2026-10-30.
+ */
+export const awardsAt = (
+  world: World,
+  now: Millis,
+): ReadonlyArray<{ readonly benefitId: string; readonly at: Millis }> => {
+  const last = new Map(world.awardedElsewhere);
+  for (const campaign of world.campaigns) {
+    for (const drop of campaign.drops) {
+      const at = world.claimed.get(drop.id);
+      if (at === undefined || at > now - CLAIMED_FLAG_LAG) continue;
+      for (const b of drop.benefits) last.set(b.id, Math.max(at, last.get(b.id) ?? at));
+    }
+  }
+  return [...last]
+    .map(([benefitId, at]) => ({ benefitId, at }))
+    .toSorted((a, b) => a.benefitId.localeCompare(b.benefitId));
+};
+
+/**
+ * Whether a credited minute was one the settings could use: the drop earned at that moment
+ * (window open, unclaimed, short of its requirement, preconditions claimed). A credit past the
+ * requirement or to a claimed drop (`creditsOnly`) earns nothing.
+ */
+export const earnedAt = (world: World, drop: Drop, at: Millis): boolean =>
+  drop.startsAt <= at &&
+  at < drop.endsAt &&
+  !isClaimedAt(world, drop.id, at) &&
+  minutesAt(world, drop.id, at - 1) < drop.requiredMinutes &&
+  drop.preconditions.every((id) => isClaimedAt(world, id, at));
+
 /** Source: TDM `twitch.py:996-1010`; the answer's shape is unverified, as `wire.ts` says. */
 export const currentDropView = (
   world: World,
@@ -503,9 +589,10 @@ export const currentDropView = (
 ): { readonly dropId: DropId; readonly minutes: number } | undefined => {
   if (world.session?.channelId !== channelId) return undefined;
   const campaign = creditedCampaign(world, channelId, now);
-  const drop = campaign?.drops
-    .filter((d) => earnable(world, d, now))
-    .toSorted((a, b) => a.id.localeCompare(b.id))[0];
+  const drop =
+    campaign === undefined
+      ? undefined
+      : creditedDrops(world, campaign, now).toSorted((a, b) => a.id.localeCompare(b.id))[0];
   return drop === undefined
     ? undefined
     : { dropId: drop.id, minutes: minutesAt(world, drop.id, now) };

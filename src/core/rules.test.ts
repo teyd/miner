@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { HOUR, MINUTE } from "./model.ts";
+import { HOUR, MINUTE, type DropId, type Millis } from "./model.ts";
 import {
   badge,
   campaign,
@@ -18,10 +18,12 @@ import {
   channelCanEarn,
   isClaimable,
   isEligible,
+  isReceived,
   remainingMinutes,
   rewardOf,
   slackOf,
   wantedDrops,
+  withReceived,
 } from "./rules.ts";
 
 describe("isEligible", () => {
@@ -171,5 +173,54 @@ describe("channelCanEarn", () => {
     assert.isFalse(channelCanEarn(c, channel("a"), [channel("a").id], none));
     assert.isFalse(channelCanEarn(c, channel("a"), s, new Set([channel("a").id])));
     assert.isFalse(channelCanEarn(c, channel("a", "offline"), s, none));
+  });
+});
+
+describe("isReceived and withReceived (TDM `inventory.py:71-90`)", () => {
+  const logo = { id: "b-logo", name: "Logo", distribution: "BADGE" } as const;
+  const hat = { id: "b-hat", name: "Hat", distribution: "BADGE" } as const;
+  const d = drop("w-d1", { benefits: [logo, hat] });
+  const awarded = (entries: ReadonlyArray<readonly [string, Millis]>) => new Map(entries);
+
+  it("needs an award inside the drop's window for every listed reward of it", () => {
+    assert.isFalse(isReceived(d, awarded([])));
+    assert.isTrue(isReceived(d, awarded([["b-logo", T0]])));
+    assert.isTrue(isReceived(d, awarded([["b-logo", d.startsAt]])));
+    assert.isFalse(isReceived(d, awarded([["b-logo", d.endsAt]])));
+    // A reward repeats across campaigns (Mobile Drop 203 and 204, one benefit id, run of
+    // 2026-10-30): one awarded before this window came from the other campaign.
+    assert.isFalse(isReceived(d, awarded([["b-logo", d.startsAt - 1]])));
+    assert.isFalse(
+      isReceived(
+        d,
+        awarded([
+          ["b-logo", T0],
+          ["b-hat", d.startsAt - HOUR],
+        ]),
+      ),
+    );
+    assert.isTrue(
+      isReceived(
+        d,
+        awarded([
+          ["b-logo", T0],
+          ["b-hat", T0 + HOUR],
+        ]),
+      ),
+    );
+  });
+
+  it("marks received drops claimed at their requirement, unless the inventory lists them", () => {
+    const c = campaign("w", { drops: [d, drop("w-d2", { benefits: [badge] })] });
+    const listed = new Map([[d.id, progress(c, "w-d1", { minutes: 3 })]]);
+    const got = awarded([["b-logo", T0]]);
+    const none = new Set<DropId>();
+    assert.deepStrictEqual(withReceived([c], new Map(), got, none).get(d.id), {
+      ...progress(c, "w-d1", { minutes: 60 }),
+      claimed: true,
+    });
+    assert.isFalse(withReceived([c], new Map(), got, none).has(c.drops[1]!.id));
+    assert.strictEqual(withReceived([c], listed, got, new Set([d.id])), listed);
+    assert.strictEqual(withReceived([c], listed, new Map(), none), listed);
   });
 });

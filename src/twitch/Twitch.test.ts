@@ -2,16 +2,21 @@ import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit, Fiber, Layer, Random } from "effect";
 import { TestClock } from "effect/testing";
 import campaignDetails from "./fixtures/campaign-details.json" with { type: "json" };
+import receivedDetails from "./fixtures/campaign-details-received.json" with { type: "json" };
 import campaigns from "./fixtures/campaigns.json" with { type: "json" };
 import gameDirectory from "./fixtures/game-directory.json" with { type: "json" };
 import inventoryServiceError from "./fixtures/inventory-service-error.json" with { type: "json" };
 import inventory from "./fixtures/inventory.json" with { type: "json" };
+import inventoryReceived from "./fixtures/inventory-received.json" with { type: "json" };
 import streamOffline from "./fixtures/stream-info-offline.json" with { type: "json" };
 import streamInfo from "./fixtures/stream-info.json" with { type: "json" };
 import invalidToken from "./fixtures/validate-invalid-token.json" with { type: "json" };
 import valid from "./fixtures/validate-valid.json" with { type: "json" };
 import wrongClient from "./fixtures/validate-wrong-client.json" with { type: "json" };
 import { chid, game } from "../core/fixtures.ts";
+import { DEFAULT_GOAL } from "../core/model.ts";
+import { minable } from "../core/plan.ts";
+import { withReceived } from "../core/rules.ts";
 import { stubTwitch, type Answer, type Hang } from "./stub.ts";
 import { READ_BATCH, READ_GAP, READ_WORST_CASE } from "../core/state.ts";
 import { GQL_BATCH_LIMIT } from "./identity.ts";
@@ -109,7 +114,7 @@ describe("inventory", () => {
   it.effect("reads progress, instance ids and claims, ended campaigns included", () =>
     Effect.gen(function* () {
       const { program } = run({ Inventory: [inventory] }, (t) => t.inventory);
-      const progress = yield* program;
+      const { progress } = yield* program;
       assert.strictEqual(progress.length, 8);
       assert.deepStrictEqual(
         progress.map((p) => p.minutes),
@@ -129,7 +134,7 @@ describe("inventory", () => {
       );
       const fiber = yield* Effect.forkChild(program);
       yield* TestClock.adjust("2 seconds");
-      const progress = yield* Fiber.join(fiber);
+      const { progress } = yield* Fiber.join(fiber);
       assert.strictEqual(progress.length, 8);
       assert.strictEqual(stub.calls["Inventory"], 2);
     }),
@@ -152,7 +157,7 @@ describe("inventory", () => {
       yield* TestClock.adjust(REQUEST_TIMEOUT - 1);
       assert.strictEqual(stub.calls["Inventory"], 1);
       yield* TestClock.adjust(1 + 2_000);
-      assert.strictEqual((yield* Fiber.join(fiber)).length, 8);
+      assert.strictEqual((yield* Fiber.join(fiber)).progress.length, 8);
       assert.strictEqual(stub.calls["Inventory"], 2);
     }),
   );
@@ -245,10 +250,10 @@ describe("failure classes", () => {
         timeBasedDrops: [{ id: "d", self: null }],
       };
       const answer = gqlAnswer({
-        currentUser: { inventory: { dropCampaignsInProgress: [campaign] } },
+        currentUser: { inventory: { dropCampaignsInProgress: [campaign], gameEventDrops: [] } },
       });
       const { program } = run({ Inventory: [answer] }, (t) => t.inventory);
-      const [progress] = yield* program;
+      const [progress] = (yield* program).progress;
       assert.strictEqual(progress?.minutes, 0);
       assert.isFalse(progress?.claimed);
     }),
@@ -260,7 +265,7 @@ describe("failure classes", () => {
       const { program, stub } = run({ Inventory: [cancelled, inventory] }, (t) => t.inventory);
       const fiber = yield* Effect.forkChild(program);
       yield* TestClock.adjust("2 seconds");
-      assert.strictEqual((yield* Fiber.join(fiber)).length, 8);
+      assert.strictEqual((yield* Fiber.join(fiber)).progress.length, 8);
       assert.strictEqual(stub.calls["Inventory"], 2);
     }),
   );
@@ -369,6 +374,89 @@ describe("deviceIdOf", () => {
         const id = yield* deviceIdOf.pipe(Random.withSeed(seed));
         assert.match(id, /^[0-9a-f]{32}$/);
       }
+    }),
+  );
+});
+
+/**
+ * The live run of 2026-10-30 (fixtures derived from its recording, identities replaced): the
+ * Witchspire campaign is missing from `dropCampaignsInProgress`, and `gameEventDrops` lists its
+ * Logo and Gold Stamp as awarded on 2026-10-29. The miner spent two hours watching for the Logo.
+ */
+describe("rewards already received", () => {
+  const witchspire = "e1e9dc8b-f3f5-4757-b450-7de7028db47f";
+  const dashboard = gqlAnswer({
+    currentUser: {
+      dropCampaigns: [
+        {
+          id: witchspire,
+          name: "Witchspire Halloween",
+          status: "ACTIVE",
+          game: { id: "1408630947", displayName: "Witchspire" },
+        },
+      ],
+    },
+  });
+
+  it.effect("reads every received reward, and the core finds nothing left to earn", () =>
+    Effect.gen(function* () {
+      const { program } = run(
+        {
+          ViewerDropsDashboard: [dashboard],
+          DropCampaignDetails: [receivedDetails],
+          Inventory: [inventoryReceived],
+        },
+        (t) => Effect.all([t.catalog(account), t.inventory]),
+      );
+      const [catalog, answer] = yield* program;
+      assert.lengthOf(answer.awarded, 4);
+      const logo = answer.awarded.find(
+        (a) => a.benefitId === "4de8e50e-c293-11f1-884f-0a58a9feac02",
+      );
+      assert.strictEqual(logo?.at, Date.parse("2026-10-29T12:13:08.077Z"));
+      // Madden is listed with `self`, Witchspire isn't listed at all.
+      assert.deepStrictEqual(
+        [...new Set(answer.progress.map((p) => p.campaignId))],
+        ["c73c824d-9cac-4c4b-bca5-399526efa85d"],
+      );
+
+      const awarded = new Map(answer.awarded.map((a) => [a.benefitId, a.at]));
+      const listed = new Set(answer.progress.map((p) => p.dropId));
+      const shown = new Map(answer.progress.map((p) => [p.dropId, p]));
+      const progress = withReceived(catalog.campaigns, shown, awarded, listed);
+      const witch = catalog.campaigns[0]!;
+      const claimed = witch.drops.map((d) => `${d.name}:${progress.get(d.id)?.claimed ?? false}`);
+      assert.deepStrictEqual(claimed, [
+        "Witchspire Logo:true",
+        "Witch Hat:false",
+        "Golden Stamp:true",
+      ]);
+      // Received, or a 0-minute drop that watching can't earn: no campaign to work on.
+      const now = Date.parse("2026-10-30T17:42:40Z");
+      const plan = (p: typeof progress) =>
+        minable({
+          campaigns: catalog.campaigns,
+          progress: p,
+          channels: new Map(),
+          settings: { goals: [DEFAULT_GOAL] },
+          refused: new Set(),
+          avoidedCampaigns: new Set(),
+          now,
+          watching: undefined,
+        }).map((pick) => pick.drops.map((d) => d.name));
+      assert.deepStrictEqual(plan(progress), []);
+      // What the miner believed before it read `gameEventDrops`.
+      assert.deepStrictEqual(plan(shown), [["Witchspire Logo", "Golden Stamp"]]);
+    }),
+  );
+
+  it.effect("treats a missing reward list as drift, not as nothing received", () =>
+    Effect.gen(function* () {
+      const nulled = gqlAnswer({
+        currentUser: { inventory: { dropCampaignsInProgress: [], gameEventDrops: null } },
+      });
+      const { program } = run({ Inventory: [nulled] }, (t) => t.inventory);
+      assert.deepStrictEqual(errorTag(yield* Effect.exit(program)), ["TwitchDrift"]);
     }),
   );
 });

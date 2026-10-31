@@ -1,8 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
-import { campaign, channel, chid, did, drop, progress, settings } from "../core/fixtures.ts";
+import { campaign, channel, chid, cid, did, drop, progress, settings } from "../core/fixtures.ts";
 import { initial, type State } from "../core/state.ts";
 import { Event } from "../core/protocol.ts";
-import { describeWatch, discoveryExpired, progressLines } from "./narrate.ts";
+import { avoidLines, describeWatch, discoveryExpired, progressLines } from "./narrate.ts";
 
 const c = campaign("c1", { drops: [drop("c1-d1", { name: "Hoodie", requiredMinutes: 15 })] });
 const base: State = {
@@ -27,6 +27,20 @@ const watching = {
 } as unknown as State["watch"];
 
 describe("narrate", () => {
+  it("says which channel or campaign it gives up, by name", () => {
+    const after: State = {
+      ...base,
+      avoid: new Set([chid("ch1")]),
+      avoidCampaigns: new Set([c.id, cid("gone")]),
+    };
+    assert.deepStrictEqual(avoidLines(base, after), [
+      "skipping oilrats until restart: it refused playback or never credited what the plan wants",
+      "skipping Game game-1: Campaign c1 until restart: Twitch credited only drops the plan can't use",
+      "skipping gone until restart: Twitch credited only drops the plan can't use",
+    ]);
+    assert.deepStrictEqual(avoidLines(after, after), []);
+  });
+
   it("names the channel, game and drop, with progress of the total", () => {
     assert.strictEqual(
       describeWatch(withMinutes(base, 6), watching),

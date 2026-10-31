@@ -1,6 +1,6 @@
 import { Config, Context, Effect, Layer, Random, Redacted, Schedule } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
-import type { Campaign, Channel, ChannelId, DropId, Progress } from "../core/model.ts";
+import type { Campaign, Channel, ChannelId, DropId } from "../core/model.ts";
 import { AuthRejected, TwitchDrift, type TwitchError } from "./errors.ts";
 import { decode, makeGql, single, type Decodable } from "./gql.ts";
 
@@ -26,7 +26,8 @@ import {
   toCampaign,
   toChannel,
   toDirectoryChannels,
-  toProgress,
+  toInventory,
+  type InventoryAnswer,
 } from "./wire.ts";
 
 export interface Account {
@@ -50,7 +51,8 @@ export class Twitch extends Context.Service<
      * `TwitchDrift`: discovery is broken, which is not the same as nothing to mine.
      */
     readonly catalog: (account: Account) => Effect.Effect<Catalog, TwitchError>;
-    readonly inventory: Effect.Effect<ReadonlyArray<Progress>, TwitchError>;
+    /** Progress of the listed campaigns, and every reward the account received. */
+    readonly inventory: Effect.Effect<InventoryAnswer, TwitchError>;
     /** Live drops-enabled streams of a game, most viewers first. */
     readonly directory: (
       slug: string,
@@ -187,7 +189,7 @@ const make = (
     });
 
   const inventory = one(Queries.Inventory, { fetchRewardCampaigns: false }, Inventory).pipe(
-    Effect.map(toProgress),
+    Effect.map(toInventory),
   );
 
   const directory = (slug: string, limit: number) =>

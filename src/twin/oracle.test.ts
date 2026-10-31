@@ -10,8 +10,11 @@ const view = (
 ): View => ({
   catalog,
   progress: new Map(),
+  awarded: new Map(),
+  inventoried: new Set(),
   channels: new Map(channels.map((ch) => [ch.id, ch])),
   avoid: new Set(),
+  avoidCampaigns: new Set(),
   now: T0,
   ...overrides,
 });
